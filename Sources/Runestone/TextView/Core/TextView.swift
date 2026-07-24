@@ -236,6 +236,10 @@ open class TextView: UIScrollView {
         didSet {
             if contentOffset != oldValue {
                 textInputView.viewport = CGRect(origin: contentOffset, size: frame.size)
+                // Scroll-wheel updates contentOffset without going through AppKit's
+                // layout pass — force line layout for the new viewport now or the
+                // clip view reveals empty document space ("text disappears").
+                textInputView.layoutIfNeeded()
             }
         }
     }
@@ -689,6 +693,9 @@ open class TextView: UIScrollView {
         textInputView.scrollViewWidth = frame.width
         textInputView.frame = CGRect(x: 0, y: 0, width: max(contentSize.width, frame.width), height: max(contentSize.height, frame.height))
         textInputView.viewport = CGRect(origin: contentOffset, size: frame.size)
+        // UIView.layout does not walk children; explicitly layout the input view
+        // so viewport-driven line fragments exist for the current offset.
+        textInputView.layoutIfNeeded()
         bringSubviewToFront(textInputView.gutterContainerView)
         if let scrollPocketView {
             bringSubviewToFront(scrollPocketView)

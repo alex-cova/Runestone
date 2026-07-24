@@ -471,9 +471,12 @@ final class TextInputView: UIView, UITextInput {
         set {
             if newValue != layoutManager.viewport {
                 layoutManager.viewport = newValue
-                // Parent TextView assigns viewport from layoutSubviews; only dirty
-                // LayoutManager, never the UIView tree (avoids nested setNeedsLayout).
                 layoutManager.setNeedsLayout()
+                // Must dirty the view: UIView.layout does not recurse into children,
+                // and scroll updates contentOffset → viewport without a parent layout
+                // pass. Without this, layoutLinesInViewport never runs and scrolled
+                // regions stay blank.
+                setNeedsLayout()
             }
         }
     }
