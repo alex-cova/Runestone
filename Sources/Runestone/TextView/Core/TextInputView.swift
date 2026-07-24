@@ -350,7 +350,7 @@ final class TextInputView: UIView, UITextInput {
                 layoutManager.isLineWrappingEnabled = newValue
                 invalidateLines()
                 layoutManager.setNeedsLayout()
-                layoutManager.layoutIfNeeded()
+                setNeedsLayout()
             }
         }
     }
@@ -360,7 +360,7 @@ final class TextInputView: UIView, UITextInput {
                 invalidateLines()
                 contentSizeService.invalidateContentSize()
                 layoutManager.setNeedsLayout()
-                layoutManager.layoutIfNeeded()
+                setNeedsLayout()
             }
         }
     }
@@ -432,7 +432,7 @@ final class TextInputView: UIView, UITextInput {
             if newValue != highlightService.highlightedRanges {
                 highlightService.highlightedRanges = newValue
                 layoutManager.setNeedsLayout()
-                layoutManager.layoutIfNeeded()
+                setNeedsLayout()
             }
         }
     }
@@ -457,7 +457,7 @@ final class TextInputView: UIView, UITextInput {
                 gutterWidthService.invalidateLineNumberWidth()
                 invalidateLines()
                 layoutManager.setNeedsLayout()
-                layoutManager.layoutIfNeeded()
+                setNeedsLayout()
                 if !preserveUndoStackWhenSettingString {
                     undoManager?.removeAllActions()
                 }
@@ -482,8 +482,15 @@ final class TextInputView: UIView, UITextInput {
             if scrollViewWidth != oldValue {
                 contentSizeService.scrollViewWidth = scrollViewWidth
                 layoutManager.scrollViewWidth = scrollViewWidth
+                // Assigned from TextView.layoutSubviews — defer line invalidation so we
+                // do not rebuild fragments mid-pass.
                 if isLineWrappingEnabled {
-                    invalidateLines()
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        self.invalidateLines()
+                        self.layoutManager.setNeedsLayout()
+                        self.setNeedsLayout()
+                    }
                 }
             }
         }
@@ -882,7 +889,7 @@ final class TextInputView: UIView, UITextInput {
             if let self = self, finished {
                 self.invalidateLines()
                 self.layoutManager.setNeedsLayout()
-                self.layoutManager.layoutIfNeeded()
+                self.setNeedsLayout()
             }
             completion?(finished)
         }
@@ -1036,7 +1043,7 @@ private extension TextInputView {
     private func performFullLayout() {
         invalidateLines()
         layoutManager.setNeedsLayout()
-        layoutManager.layoutIfNeeded()
+        setNeedsLayout()
     }
 
     private func invalidateLines() {
@@ -1153,11 +1160,11 @@ extension TextInputView {
         imeMarkedRange = nil
         if LineEnding(symbol: text) != nil {
             indentController.insertLineBreak(in: replacementRange, using: lineEndings)
-            layoutIfNeeded()
+            setNeedsLayout()
             delegate?.textInputViewDidChangeSelection(self)
         } else {
             replaceText(in: replacementRange, with: preparedText)
-            layoutIfNeeded()
+            setNeedsLayout()
             delegate?.textInputViewDidChangeSelection(self)
         }
     }
@@ -1380,7 +1387,7 @@ extension TextInputView {
             gutterWidthService.invalidateLineNumberWidth()
         }
         layoutManager.setNeedsLayout()
-        layoutManager.layoutIfNeeded()
+        setNeedsLayout()
     }
 
     private func shouldChangeText(in range: NSRange, replacementText text: String) -> Bool {

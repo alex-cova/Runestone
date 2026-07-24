@@ -51,9 +51,10 @@ final class LayoutManager {
                     lineController.estimatedLineFragmentHeight = theme.font.totalLineHeight
                     lineController.invalidateSyntaxHighlighting()
                 }
+                // Dirty only — never layoutIfNeeded here. Theme is assigned from
+                // setState during SwiftUI updateNSView; sync layout aborts AppKit.
                 setNeedsLayout()
                 setNeedsLayoutLineSelection()
-                layoutIfNeeded()
             }
         }
     }
@@ -76,7 +77,6 @@ final class LayoutManager {
         didSet {
             if lineSelectionDisplayType != oldValue {
                 setNeedsLayoutLineSelection()
-                layoutLineSelectionIfNeeded()
                 updateShownViews()
             }
         }
@@ -180,15 +180,11 @@ final class LayoutManager {
     }
 
     func redisplayVisibleLines() {
-        // Ensure we have the correct set of visible lines.
+        // Dirty only — callers (and TextInputView.layoutSubviews) perform layout.
         setNeedsLayout()
-        layoutIfNeeded()
-        // Force a preparation of the lines synchronously.
         redisplayLines(withIDs: visibleLineIDs)
         setNeedsDisplayOnLines()
-        // Then force a relayout of the lines.
         setNeedsLayout()
-        layoutIfNeeded()
     }
 
     func redisplayLines(withIDs lineIDs: Set<DocumentLineNodeID>) {

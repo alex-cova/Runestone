@@ -28,7 +28,10 @@ open class TextView: UIScrollView {
         }
         set {
             textInputView.string = newValue as NSString
-            contentSize = preferredContentSize
+            // Never mutate contentSize synchronously — Hextech assigns text from
+            // updateNSView; scrolling document frame mid-pass aborts AppKit.
+            hasPendingContentSizeUpdate = true
+            setNeedsLayout()
         }
     }
     /// A Boolean value that indicates whether the text view is editable.
@@ -686,8 +689,8 @@ open class TextView: UIScrollView {
     override open func safeAreaInsetsDidChange() {
         super.safeAreaInsetsDidChange()
         textInputView.scrollViewSafeAreaInsets = safeAreaInsets
-        contentSize = preferredContentSize
-        layoutIfNeeded()
+        hasPendingContentSizeUpdate = true
+        setNeedsLayout()
     }
 
     /// Asks UIKit to make this object the first responder in its window.
@@ -729,7 +732,8 @@ open class TextView: UIScrollView {
     /// - Parameter addUndoAction: Whether the state change can be undone. Defaults to false.
     public func setState(_ state: TextViewState, addUndoAction: Bool = false) {
         textInputView.setState(state, addUndoAction: addUndoAction)
-        contentSize = preferredContentSize
+        hasPendingContentSizeUpdate = true
+        setNeedsLayout()
     }
 
     /// Returns the row and column at the specified location in the text.
@@ -1216,15 +1220,17 @@ private extension TextView {
             let isScrolling = isDragging || isDecelerating
             if !isBouncingHorizontally || isCriticalUpdate || !isScrolling {
                 hasPendingContentSizeUpdate = false
-                let preferred = preferredContentSize
-                let oldContentOffset = contentOffset
-                if contentSize != preferred {
-                    contentSize = preferred
-                    contentOffset = oldContentOffset
-                }
-                // Never setNeedsLayout from inside layoutSubviews — bounce to next turn.
+                // Defer contentSize/contentOffset mutation out of layoutSubviews —
+                // mutating scroll metrics mid-pass trips Update Constraints in Window.
                 DispatchQueue.main.async { [weak self] in
-                    self?.setNeedsLayout()
+                    guard let self else { return }
+                    let preferred = self.preferredContentSize
+                    let oldContentOffset = self.contentOffset
+                    if self.contentSize != preferred {
+                        self.contentSize = preferred
+                        self.contentOffset = oldContentOffset
+                    }
+                    self.setNeedsLayout()
                 }
             }
         }
@@ -1304,10 +1310,8 @@ extension TextView: TextInputViewDelegate {
         if textInputView.selection == nil {
             textInputView.selection = NSRange(location: 0, length: 0)
         }
-        // Ensure selection is laid out without animation.
-        UIView.performWithoutAnimation {
-            textInputView.layoutIfNeeded()
-        }
+        // Ensure selection is marked dirty without forcing a nested AppKit layout pass.
+        textInputView.setNeedsLayout()
         installEditableInteraction()
     }
 
@@ -1345,7 +1349,7 @@ extension TextView: TextInputViewDelegate {
     func textInputViewDidInvalidateContentSize(_ view: TextInputView) {
         if contentSize != view.contentSize {
             hasPendingContentSizeUpdate = true
-            handleContentSizeUpdateIfNeeded()
+            setNeedsLayout()
         }
     }
 
