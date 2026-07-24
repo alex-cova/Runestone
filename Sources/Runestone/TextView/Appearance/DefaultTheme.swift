@@ -88,8 +88,12 @@ public final class DefaultTheme: Runestone.Theme {
 
 private extension UIColor {
     convenience init(themeColorNamed name: String) {
-        if let color = NSColor(named: "theme_" + name, in: .module, compatibleWith: nil)?.usingColorSpace(.sRGB) {
-            self.init(red: color.redComponent, green: color.greenComponent, blue: color.blueComponent, alpha: color.alphaComponent)
+        let fullName = "theme_" + name
+        // Named catalog colors stay appearance-adaptive. Resolving through
+        // `usingColorSpace(.sRGB)` / `cgColor` baked a single appearance and
+        // could nil-out Display P3 entries into the near-black fallback.
+        if NSColor(named: fullName, in: .module, compatibleWith: nil) != nil {
+            self.init(named: fullName, bundle: .module)!
         } else {
             self.init(red: 0.12, green: 0.12, blue: 0.12, alpha: 1)
         }

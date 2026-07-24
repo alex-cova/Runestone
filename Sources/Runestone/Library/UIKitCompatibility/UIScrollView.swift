@@ -55,6 +55,24 @@ open class UIScrollView: UIView {
         }
         updateDocumentViewFrame()
     }
+
+    /// NSClipView only receives wheel events when it is hit-tested. Text input
+    /// sits above it in the document, so forward wheel deltas into contentOffset.
+    override open func scrollWheel(with event: NSEvent) {
+        let dx = event.hasPreciseScrollingDeltas ? event.scrollingDeltaX : event.deltaX * 10
+        let dy = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.deltaY * 10
+        let minOffset = minimumContentOffset
+        let maxOffset = maximumContentOffset
+        let next = CGPoint(
+            x: min(max(contentOffset.x - dx, minOffset.x), maxOffset.x),
+            y: min(max(contentOffset.y - dy, minOffset.y), maxOffset.y)
+        )
+        if next != contentOffset {
+            contentOffset = next
+        } else {
+            nextResponder?.scrollWheel(with: event)
+        }
+    }
 }
 
 private final class FlippedClipView: NSClipView { override var isFlipped: Bool { true } }

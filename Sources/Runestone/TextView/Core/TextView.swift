@@ -608,6 +608,7 @@ open class TextView: UIScrollView {
         }
     }
     private var hasPendingContentSizeUpdate = false
+    private var lastLaidOutSize: CGSize = .zero
     private var isInputAccessoryViewEnabled = false
     private let keyboardObserver = KeyboardObserver()
     private let highlightNavigationController = HighlightNavigationController()
@@ -645,7 +646,9 @@ open class TextView: UIScrollView {
     override public init(frame: CGRect) {
         textInputView = TextInputView(theme: DefaultTheme())
         super.init(frame: frame)
-        backgroundColor = .white
+        // Follow system text background so dark mode doesn't leave a white
+        // canvas beside a dark gutter (DefaultTheme reads appearance colors).
+        backgroundColor = .textBackgroundColor
         textInputView.delegate = self
         textInputView.gutterParentView = self
         addSubview(textInputView)
@@ -675,6 +678,13 @@ open class TextView: UIScrollView {
 
     override open func layoutSubviews() {
         super.layoutSubviews()
+        // SwiftUI often sizes the host after the first setState. Without
+        // re-arming contentSize, the document stays stuck at the zero-frame
+        // measurement and scrolling dies.
+        if frame.size != lastLaidOutSize {
+            lastLaidOutSize = frame.size
+            hasPendingContentSizeUpdate = true
+        }
         handleContentSizeUpdateIfNeeded()
         textInputView.scrollViewWidth = frame.width
         textInputView.frame = CGRect(x: 0, y: 0, width: max(contentSize.width, frame.width), height: max(contentSize.height, frame.height))
