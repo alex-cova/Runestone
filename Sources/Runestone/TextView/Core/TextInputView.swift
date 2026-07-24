@@ -293,7 +293,8 @@ final class TextInputView: UIView, UITextInput {
                 indentController.indentStrategy = indentStrategy
                 layoutManager.setNeedsLayout()
                 setNeedsLayout()
-                layoutIfNeeded()
+                // Do not call layoutIfNeeded() here — SwiftUI updateNSView often
+                // assigns indentStrategy mid-pass; forcing layout aborts AppKit.
             }
         }
     }
@@ -470,8 +471,9 @@ final class TextInputView: UIView, UITextInput {
         set {
             if newValue != layoutManager.viewport {
                 layoutManager.viewport = newValue
+                // Parent TextView assigns viewport from layoutSubviews; only dirty
+                // LayoutManager, never the UIView tree (avoids nested setNeedsLayout).
                 layoutManager.setNeedsLayout()
-                setNeedsLayout()
             }
         }
     }
@@ -1049,7 +1051,8 @@ private extension TextInputView {
 
     private func setupContentSizeObserver() {
         contentSizeService.$isContentSizeInvalid.filter { $0 }.sink { [weak self] _ in
-            if let self = self {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
                 self.delegate?.textInputViewDidInvalidateContentSize(self)
             }
         }.store(in: &cancellables)
@@ -1057,8 +1060,11 @@ private extension TextInputView {
 
     private func setupGutterWidthObserver() {
         gutterWidthService.didUpdateGutterWidth.sink { [weak self] in
-            if let self = self {
-                // Typeset lines again when the line number width changes since changing line number width may increase or reduce the number of line fragments in a line.
+            guard let self else { return }
+            // Gutter width is often published while layoutGutter() reads lineNumberWidth.
+            // Defer invalidation so we do not setNeedsLayout / invalidateLines mid-pass.
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
                 self.setNeedsLayout()
                 self.invalidateLines()
                 self.layoutManager.setNeedsLayout()

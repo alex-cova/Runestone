@@ -1216,10 +1216,16 @@ private extension TextView {
             let isScrolling = isDragging || isDecelerating
             if !isBouncingHorizontally || isCriticalUpdate || !isScrolling {
                 hasPendingContentSizeUpdate = false
+                let preferred = preferredContentSize
                 let oldContentOffset = contentOffset
-                contentSize = preferredContentSize
-                contentOffset = oldContentOffset
-                setNeedsLayout()
+                if contentSize != preferred {
+                    contentSize = preferred
+                    contentOffset = oldContentOffset
+                }
+                // Never setNeedsLayout from inside layoutSubviews — bounce to next turn.
+                DispatchQueue.main.async { [weak self] in
+                    self?.setNeedsLayout()
+                }
             }
         }
     }

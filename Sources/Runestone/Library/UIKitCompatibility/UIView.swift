@@ -17,19 +17,52 @@ open class UIView: NSView {
 
     override open var isFlipped: Bool { true }
 
+    /// Frame-driven UIKit port: never participate in Auto Layout measuring.
+    override open var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+    }
+
     public override init(frame frameRect: NSRect) { super.init(frame: frameRect) }
     required public init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     open func layoutSubviews() {}
-    override open func layout() { super.layout(); layoutSubviews() }
+
+    /// Frame-first layout. Calling `super.layout()` before mutating frames made AppKit
+    /// finish the subtree pass, then `layoutSubviews` dirtied it again — a known
+    /// "Update Constraints in Window" abort when hosted in SwiftUI.
+    override open func layout() {
+        layoutSubviews()
+    }
+
     open func setNeedsLayout() { needsLayout = true }
     open func layoutIfNeeded() { layoutSubtreeIfNeeded() }
     open func setNeedsDisplay() { needsDisplay = true }
-    open func bringSubviewToFront(_ view: UIView) { view.removeFromSuperview(); addSubview(view) }
-    open func sendSubviewToBack(_ view: UIView) {
-        view.removeFromSuperview()
-        if let first = subviews.first { addSubview(view, positioned: .below, relativeTo: first) } else { addSubview(view) }
+
+    /// Reorder without remove+readd (which dirties the window during layout).
+    open func bringSubviewToFront(_ view: UIView) {
+        guard view.superview === self else {
+            addSubview(view)
+            return
+        }
+        if subviews.last !== view {
+            addSubview(view, positioned: .above, relativeTo: nil)
+        }
     }
+
+    open func sendSubviewToBack(_ view: UIView) {
+        guard view.superview === self else {
+            if let first = subviews.first {
+                addSubview(view, positioned: .below, relativeTo: first)
+            } else {
+                addSubview(view)
+            }
+            return
+        }
+        if let first = subviews.first, first !== view {
+            addSubview(view, positioned: .below, relativeTo: first)
+        }
+    }
+
     open func safeAreaInsetsDidChange() {}
     open func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {}
     open func addInteraction(_ interaction: Any) {}

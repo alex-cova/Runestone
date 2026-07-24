@@ -53,9 +53,14 @@ open class UILabel: UIView {
     }
 
     override open var intrinsicContentSize: NSSize {
-        guard let font, let text else {
-            return NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
-        }
+        // Always no-metric — LineNumberView frames the label manually.
+        // Returning live text metrics feeds SwiftUI/AppKit measuring loops.
+        NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+    }
+
+    /// Measured size for frame-based layout (not Auto Layout intrinsic).
+    var measuredTextSize: NSSize {
+        guard let font, let text else { return .zero }
         let size = (text as NSString).size(withAttributes: [.font: font])
         return NSSize(width: ceil(size.width), height: ceil(size.height))
     }

@@ -44,7 +44,7 @@ final class LineNumberView: UIView, ReusableView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        let size = titleLabel.intrinsicContentSize
+        let size = titleLabel.measuredTextSize
         titleLabel.frame = CGRect(x: 0, y: 0, width: bounds.width, height: size.height)
     }
 }

@@ -2,8 +2,18 @@ import AppKit
 import Foundation
 
 open class UIScrollView: UIView {
-    open var contentSize: CGSize = .zero { didSet { updateDocumentViewFrame() } }
-    open var contentOffset: CGPoint = .zero { didSet { clipView.scroll(to: contentOffset) } }
+    open var contentSize: CGSize = .zero {
+        didSet {
+            guard contentSize != oldValue else { return }
+            updateDocumentViewFrame()
+        }
+    }
+    open var contentOffset: CGPoint = .zero {
+        didSet {
+            guard contentOffset != oldValue else { return }
+            clipView.scroll(to: contentOffset)
+        }
+    }
     open var contentInset: UIEdgeInsets = .zero
     open var adjustedContentInset: UIEdgeInsets { contentInset }
     open var isDragging = false
@@ -30,13 +40,16 @@ open class UIScrollView: UIView {
     open override func addSubview(_ view: NSView) { documentContainer.addSubview(view) }
     open func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool { true }
     private func updateDocumentViewFrame() {
-        documentContainer.frame = CGRect(origin: .zero, size: contentSize)
+        let next = CGRect(origin: .zero, size: contentSize)
+        if documentContainer.frame != next {
+            documentContainer.frame = next
+        }
         if clipView.documentView !== documentContainer {
             clipView.documentView = documentContainer
         }
     }
     override open func layout() {
-        super.layout()
+        layoutSubviews()
         if clipView.frame != bounds {
             clipView.frame = bounds
         }
