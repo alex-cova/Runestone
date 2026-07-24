@@ -39,8 +39,23 @@ open class UILabel: UIView {
     @objc open var textColor: UIColor = .label
     @objc open var font: UIFont?
     @objc open var textAlignment: NSTextAlignment = .left
+
+    public override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        // Frame-laid-out by LineNumberView; keep Auto Layout from using
+        // intrinsicContentSize as a SwiftUI/AppKit measurement input.
+        translatesAutoresizingMaskIntoConstraints = true
+    }
+
+    @available(*, unavailable)
+    required public init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
     override open var intrinsicContentSize: NSSize {
-        guard let font, let text else { return super.intrinsicContentSize }
+        guard let font, let text else {
+            return NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+        }
         let size = (text as NSString).size(withAttributes: [.font: font])
         return NSSize(width: ceil(size.width), height: ceil(size.height))
     }
