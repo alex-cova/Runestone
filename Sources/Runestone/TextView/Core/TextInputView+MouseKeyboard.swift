@@ -242,7 +242,7 @@ private extension TextInputView {
             }
             let anchor = selectionAnchor ?? activeLocation
             setSelectedRange(from: anchor, to: activeLocation)
-            delegate?.textInputViewDidChangeSelection(self)
+            // Host notify deferred via selection mutation paths / setter.
         } else {
             selectionAnchor = activeLocation
             inputDelegate?.selectionWillChange(self)

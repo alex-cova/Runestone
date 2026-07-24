@@ -1364,7 +1364,16 @@ extension TextView: TextInputViewDelegate {
     func textInputView(_ view: TextInputView, didProposeContentOffsetAdjustment contentOffsetAdjustment: CGPoint) {
         let isScrolling = isDragging || isDecelerating
         if contentOffsetAdjustment != .zero && isScrolling {
-            contentOffset = CGPoint(x: contentOffset.x + contentOffsetAdjustment.x, y: contentOffset.y + contentOffsetAdjustment.y)
+            // LayoutManager proposes this from inside layoutLinesInViewport —
+            // never mutate contentOffset synchronously mid-layout.
+            let adjustment = contentOffsetAdjustment
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.contentOffset = CGPoint(
+                    x: self.contentOffset.x + adjustment.x,
+                    y: self.contentOffset.y + adjustment.y
+                )
+            }
         }
     }
 

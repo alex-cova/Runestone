@@ -887,7 +887,7 @@ final class TextInputView: UIView, UITextInput {
         inputDelegate?.selectionWillChange(self)
         selection = NSRange(location: start, length: end - start)
         inputDelegate?.selectionDidChange(self)
-        delegate?.textInputViewDidChangeSelection(self)
+        // Host selection notify is deferred via `selection` setter.
     }
 
     func setLanguageMode(_ languageMode: LanguageMode, completion: ((Bool) -> Void)? = nil) {
@@ -1173,11 +1173,17 @@ extension TextInputView {
         if LineEnding(symbol: text) != nil {
             indentController.insertLineBreak(in: replacementRange, using: lineEndings)
             setNeedsLayout()
-            delegate?.textInputViewDidChangeSelection(self)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.delegate?.textInputViewDidChangeSelection(self)
+            }
         } else {
             replaceText(in: replacementRange, with: preparedText)
             setNeedsLayout()
-            delegate?.textInputViewDidChangeSelection(self)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.delegate?.textInputViewDidChangeSelection(self)
+            }
         }
     }
 
@@ -1235,7 +1241,10 @@ extension TextInputView {
         if isDeletingMultipleCharacters {
             timedUndoManager.endUndoGrouping()
         }
-        delegate?.textInputViewDidChangeSelection(self)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.delegate?.textInputViewDidChangeSelection(self)
+        }
     }
 
     func deleteForward() {
@@ -1280,7 +1289,10 @@ extension TextInputView {
         let preparedText = prepareTextForInsertion(text)
         if let indexedRange = range as? IndexedRange, shouldChangeText(in: indexedRange.range.nonNegativeLength, replacementText: preparedText) {
             replaceText(in: indexedRange.range.nonNegativeLength, with: preparedText)
-            delegate?.textInputViewDidChangeSelection(self)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.delegate?.textInputViewDidChangeSelection(self)
+            }
         }
     }
 
