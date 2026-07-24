@@ -1332,7 +1332,10 @@ extension TextView: TextInputViewDelegate {
 
     func textInputViewDidChange(_ view: TextInputView) {
         if isAutomaticScrollEnabled, let newRange = textInputView.selection, newRange.length == 0 {
-            scrollLocationToVisible(newRange.location)
+            let location = newRange.location
+            DispatchQueue.main.async { [weak self] in
+                self?.scrollLocationToVisible(location)
+            }
         }
         editorDelegate?.textViewDidChange(self)
     }
@@ -1341,7 +1344,12 @@ extension TextView: TextInputViewDelegate {
         UIMenuController.shared.hideMenu(from: self)
         highlightNavigationController.selectedRange = view.selection
         if isAutomaticScrollEnabled, let newRange = textInputView.selection, newRange.length == 0 {
-            scrollLocationToVisible(newRange.location)
+            // Never mutate contentOffset synchronously from selection changes —
+            // this often fires during layoutSubviews / setState from SwiftUI.
+            let location = newRange.location
+            DispatchQueue.main.async { [weak self] in
+                self?.scrollLocationToVisible(location)
+            }
         }
         editorDelegate?.textViewDidChangeSelection(self)
     }

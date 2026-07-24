@@ -505,7 +505,12 @@ final class TextInputView: UIView, UITextInput {
         set {
             if newValue != _selectedRange {
                 _selectedRange = newValue
-                delegate?.textInputViewDidChangeSelection(self)
+                // Defer host notification — callers often assign selection during
+                // setState / updateNSView / layout, and sync callbacks re-enter AppKit.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.delegate?.textInputViewDidChangeSelection(self)
+                }
             }
         }
     }
@@ -733,16 +738,23 @@ final class TextInputView: UIView, UITextInput {
         layoutManager.layoutLineSelectionIfNeeded()
         layoutPageGuideIfNeeded()
         selectionOverlayController.updateLayout()
-        // We notify the input delegate about selection changes in layoutSubviews so we have a chance of disabling notifying the input delegate during an editing operation.
-        // We will sometimes disable notifying the input delegate when the user enters Korean text.
-        // This workaround is inspired by a dialog with Alexander Blach (@lextar), developer of Textastic.
-        if notifyInputDelegateAboutSelectionChangeInLayoutSubviews {
-            inputDelegate?.selectionWillChange(self)
-            inputDelegate?.selectionDidChange(self)
-        }
-        if notifyDelegateAboutSelectionChangeInLayoutSubviews {
-            notifyDelegateAboutSelectionChangeInLayoutSubviews = false
-            delegate?.textInputViewDidChangeSelection(self)
+        // Defer selection notifications out of layout — hosts (SwiftUI) writing state
+        // from these callbacks during AppKit layout abort with Update Constraints in Window.
+        let shouldNotifyInputDelegate = notifyInputDelegateAboutSelectionChangeInLayoutSubviews
+        let shouldNotifyDelegate = notifyDelegateAboutSelectionChangeInLayoutSubviews
+        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = false
+        notifyDelegateAboutSelectionChangeInLayoutSubviews = false
+        if shouldNotifyInputDelegate || shouldNotifyDelegate {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if shouldNotifyInputDelegate {
+                    self.inputDelegate?.selectionWillChange(self)
+                    self.inputDelegate?.selectionDidChange(self)
+                }
+                if shouldNotifyDelegate {
+                    self.delegate?.textInputViewDidChangeSelection(self)
+                }
+            }
         }
     }
 
