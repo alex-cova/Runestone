@@ -17,23 +17,31 @@ open class UIScrollView: UIView {
         wantsLayer = true
         clipView.drawsBackground = false
         clipView.documentView = documentContainer
+        // Frame-based layout only. Mixing Auto Layout edges with
+        // `clipView.frame = bounds` in layout() causes an AppKit
+        // "Update Constraints in Window" feedback loop when TextView
+        // is hosted in SwiftUI's NSHostingView.
+        clipView.translatesAutoresizingMaskIntoConstraints = true
+        clipView.autoresizingMask = [.width, .height]
+        clipView.frame = bounds
         super.addSubview(clipView)
-        clipView.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            clipView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            clipView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            clipView.topAnchor.constraint(equalTo: topAnchor),
-            clipView.bottomAnchor.constraint(equalTo: bottomAnchor)
-        ])
     }
     required public init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     open override func addSubview(_ view: NSView) { documentContainer.addSubview(view) }
     open func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool { true }
     private func updateDocumentViewFrame() {
         documentContainer.frame = CGRect(origin: .zero, size: contentSize)
-        clipView.documentView = documentContainer
+        if clipView.documentView !== documentContainer {
+            clipView.documentView = documentContainer
+        }
     }
-    override open func layout() { super.layout(); clipView.frame = bounds; updateDocumentViewFrame() }
+    override open func layout() {
+        super.layout()
+        if clipView.frame != bounds {
+            clipView.frame = bounds
+        }
+        updateDocumentViewFrame()
+    }
 }
 
 private final class FlippedClipView: NSClipView { override var isFlipped: Bool { true } }
