@@ -174,6 +174,13 @@ final class LayoutManager {
         self.gutterBackgroundView.isUserInteractionEnabled = false
         self.gutterSelectionBackgroundView.isUserInteractionEnabled = false
         self.lineSelectionBackgroundView.isUserInteractionEnabled = false
+        // Property default assignment skips didSet — paint chrome colors now so the
+        // gutter never appears unstyled (or DefaultTheme near-black) on first layout.
+        gutterBackgroundView.backgroundColor = theme.gutterBackgroundColor
+        gutterBackgroundView.hairlineColor = theme.gutterHairlineColor
+        gutterBackgroundView.hairlineWidth = theme.gutterHairlineWidth
+        gutterSelectionBackgroundView.backgroundColor = theme.selectedLinesGutterBackgroundColor
+        lineSelectionBackgroundView.backgroundColor = theme.selectedLineBackgroundColor
         self.updateShownViews()
         let memoryWarningNotificationName = UIApplication.didReceiveMemoryWarningNotification
         NotificationCenter.default.addObserver(self, selector: #selector(clearMemory), name: memoryWarningNotificationName, object: nil)

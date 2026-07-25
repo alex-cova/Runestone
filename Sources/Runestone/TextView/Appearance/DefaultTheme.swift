@@ -89,13 +89,29 @@ public final class DefaultTheme: Runestone.Theme {
 private extension UIColor {
     convenience init(themeColorNamed name: String) {
         let fullName = "theme_" + name
-        // Named catalog colors stay appearance-adaptive. Resolving through
-        // `usingColorSpace(.sRGB)` / `cgColor` baked a single appearance and
-        // could nil-out Display P3 entries into the near-black fallback.
         if NSColor(named: fullName, in: .module, compatibleWith: nil) != nil {
             self.init(named: fullName, bundle: .module)!
-        } else {
-            self.init(red: 0.12, green: 0.12, blue: 0.12, alpha: 1)
+            return
+        }
+        // Catalog colors often fail to resolve when Runestone is statically
+        // linked. Never fall back to near-black for chrome — that paints the
+        // gutter as a black strip on first layout.
+        self.init(name: nil) { _ in
+            switch name {
+            case "gutter_background", "page_guide_background":
+                return .textBackgroundColor
+            case "current_line":
+                return .selectedContentBackgroundColor.withAlphaComponent(0.25)
+            case "selection", "marked_text", "search_match_found", "search_match_highlighted":
+                return .selectedContentBackgroundColor.withAlphaComponent(0.35)
+            case "foreground":
+                return .textColor
+            case "line_number", "line_number_current_line", "invisible_characters",
+                 "gutter_hairline", "page_guide_hairline":
+                return .secondaryLabelColor
+            default:
+                return .labelColor
+            }
         }
     }
 }
