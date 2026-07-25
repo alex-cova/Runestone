@@ -76,50 +76,117 @@ extension TextInputView {
     }
 
     override func keyDown(with event: NSEvent) {
-        if delegate?.textInputViewIsEditable(self) ?? true, inputContext?.handleEvent(event) == true {
-            return
-        }
         guard delegate?.textInputViewIsEditable(self) ?? true else {
             super.keyDown(with: event)
             return
         }
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if flags.contains(.command) {
-            if handleCommandKeyDown(event) {
-                return
-            }
+
+        // While composing marked text, let the input context own every key.
+        // Otherwise navigation/delete must be handled locally first:
+        // NSTextInputContext.handleEvent returns true for those keys and then
+        // calls doCommand(by:), which previously had no implementation — so
+        // arrows and Backspace were swallowed while insertText still worked.
+        if hasMarkedText(), inputContext?.handleEvent(event) == true {
+            return
         }
+
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags.contains(.command), handleCommandKeyDown(event) {
+            return
+        }
+
         switch event.keyCode {
         case 0x7B:
             moveSelectionForArrowKey(direction: .left, flags: flags)
+            return
         case 0x7C:
             moveSelectionForArrowKey(direction: .right, flags: flags)
+            return
         case 0x7D:
             moveSelectionForArrowKey(direction: .down, flags: flags)
+            return
         case 0x7E:
             moveSelectionForArrowKey(direction: .up, flags: flags)
+            return
         case 0x73:
             moveSelectionToBoundary(.line, direction: .backward, extending: flags.contains(.shift))
+            return
         case 0x77:
             moveSelectionToBoundary(.line, direction: .forward, extending: flags.contains(.shift))
+            return
         case 0x33:
             if flags.contains(.option) {
                 deleteWord(backward: true)
             } else {
                 deleteBackward()
             }
+            return
         case 0x75:
             if flags.contains(.option) {
                 deleteWord(backward: false)
             } else {
                 deleteForward()
             }
+            return
         default:
-            if let characters = event.characters, !characters.isEmpty, shouldInsert(characters: characters, flags: flags) {
-                insertText(characters)
-            } else {
-                super.keyDown(with: event)
-            }
+            break
+        }
+
+        if inputContext?.handleEvent(event) == true {
+            return
+        }
+
+        if let characters = event.characters, !characters.isEmpty, shouldInsert(characters: characters, flags: flags) {
+            insertText(characters)
+        } else {
+            super.keyDown(with: event)
+        }
+    }
+
+    override func doCommand(by selector: Selector) {
+        switch selector {
+        case #selector(deleteBackward(_:)):
+            deleteBackward()
+        case #selector(deleteForward(_:)):
+            deleteForward()
+        case #selector(moveLeft(_:)):
+            moveSelectionForArrowKey(direction: .left, flags: [])
+        case #selector(moveRight(_:)):
+            moveSelectionForArrowKey(direction: .right, flags: [])
+        case #selector(moveUp(_:)):
+            moveSelectionForArrowKey(direction: .up, flags: [])
+        case #selector(moveDown(_:)):
+            moveSelectionForArrowKey(direction: .down, flags: [])
+        case #selector(moveLeftAndModifySelection(_:)):
+            moveSelectionForArrowKey(direction: .left, flags: .shift)
+        case #selector(moveRightAndModifySelection(_:)):
+            moveSelectionForArrowKey(direction: .right, flags: .shift)
+        case #selector(moveUpAndModifySelection(_:)):
+            moveSelectionForArrowKey(direction: .up, flags: .shift)
+        case #selector(moveDownAndModifySelection(_:)):
+            moveSelectionForArrowKey(direction: .down, flags: .shift)
+        case #selector(moveWordLeft(_:)):
+            moveSelectionForArrowKey(direction: .left, flags: .option)
+        case #selector(moveWordRight(_:)):
+            moveSelectionForArrowKey(direction: .right, flags: .option)
+        case #selector(moveWordLeftAndModifySelection(_:)):
+            moveSelectionForArrowKey(direction: .left, flags: [.option, .shift])
+        case #selector(moveWordRightAndModifySelection(_:)):
+            moveSelectionForArrowKey(direction: .right, flags: [.option, .shift])
+        case #selector(moveToBeginningOfLine(_:)):
+            moveSelectionToBoundary(.line, direction: .backward, extending: false)
+        case #selector(moveToEndOfLine(_:)):
+            moveSelectionToBoundary(.line, direction: .forward, extending: false)
+        case #selector(moveToBeginningOfLineAndModifySelection(_:)):
+            moveSelectionToBoundary(.line, direction: .backward, extending: true)
+        case #selector(moveToEndOfLineAndModifySelection(_:)):
+            moveSelectionToBoundary(.line, direction: .forward, extending: true)
+        case #selector(insertNewline(_:)), #selector(insertNewlineIgnoringFieldEditor(_:)):
+            insertText("\n")
+        case #selector(insertTab(_:)):
+            insertText("\t")
+        default:
+            super.doCommand(by: selector)
         }
     }
 }
