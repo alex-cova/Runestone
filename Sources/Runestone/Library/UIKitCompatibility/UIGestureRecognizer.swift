@@ -35,16 +35,29 @@ open class QuickTapGestureRecognizer: UITapGestureRecognizer {
 open class UIPanGestureRecognizer: UIGestureRecognizer {}
 
 open class UILabel: UIView {
-    @objc open var text: String?
-    @objc open var textColor: UIColor = .label
-    @objc open var font: UIFont?
-    @objc open var textAlignment: NSTextAlignment = .left
+    @objc open var text: String? {
+        didSet { needsDisplay = true }
+    }
+    @objc open var textColor: UIColor = .label {
+        didSet { needsDisplay = true }
+    }
+    @objc open var font: UIFont? {
+        didSet { needsDisplay = true }
+    }
+    @objc open var textAlignment: NSTextAlignment = .left {
+        didSet { needsDisplay = true }
+    }
 
     public override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         // Frame-laid-out by LineNumberView; keep Auto Layout from using
         // intrinsicContentSize as a SwiftUI/AppKit measurement input.
         translatesAutoresizingMaskIntoConstraints = true
+        // Layer-backed ancestors (TextView) otherwise skip draw(_:) unless
+        // redraw is requested explicitly — without this, line numbers exist
+        // as empty views in the gutter.
+        wantsLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
     }
 
     @available(*, unavailable)
@@ -63,5 +76,31 @@ open class UILabel: UIView {
         guard let font, let text else { return .zero }
         let size = (text as NSString).size(withAttributes: [.font: font])
         return NSSize(width: ceil(size.width), height: ceil(size.height))
+    }
+
+    override open func draw(_ dirtyRect: NSRect) {
+        guard let text, let font, !text.isEmpty else { return }
+        let paragraph = NSMutableParagraphStyle()
+        switch textAlignment {
+        case .right:
+            paragraph.alignment = .right
+        case .center:
+            paragraph.alignment = .center
+        default:
+            paragraph.alignment = .left
+        }
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: textColor,
+            .paragraphStyle: paragraph
+        ]
+        let textSize = (text as NSString).size(withAttributes: attributes)
+        let drawRect = NSRect(
+            x: 0,
+            y: max((bounds.height - textSize.height) / 2, 0),
+            width: bounds.width,
+            height: textSize.height
+        )
+        (text as NSString).draw(in: drawRect, withAttributes: attributes)
     }
 }
