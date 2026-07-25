@@ -40,7 +40,16 @@ open class UIScrollView: UIView {
     open override func addSubview(_ view: NSView) { documentContainer.addSubview(view) }
     open func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool { true }
     private func updateDocumentViewFrame() {
-        let next = CGRect(origin: .zero, size: contentSize)
+        // AppKit hit-tests against the document view's frame. For short or empty
+        // documents, contentSize is only ~one line tall, so clicks in the empty
+        // editor area below that miss TextInputView and never focus. Grow the
+        // document container to at least the visible bounds; contentSize still
+        // drives scroll metrics via maximumContentOffset.
+        let size = CGSize(
+            width: max(contentSize.width, bounds.width),
+            height: max(contentSize.height, bounds.height)
+        )
+        let next = CGRect(origin: .zero, size: size)
         if documentContainer.frame != next {
             documentContainer.frame = next
         }
