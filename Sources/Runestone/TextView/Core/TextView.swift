@@ -732,6 +732,21 @@ open class TextView: UIScrollView {
         }
     }
 
+    /// Installs the underlying text input as the window's first responder.
+    ///
+    /// `becomeFirstResponder()` alone does not install first-responder status in AppKit —
+    /// only `NSWindow.makeFirstResponder(_:)` does, and this is the only way to reach the
+    /// private `textInputView` that arrow-key navigation and selection live on. Unlike
+    /// `becomeFirstResponder()`, this works for a non-editable, selectable text view too,
+    /// so read-only editors can be given keyboard focus for navigation/selection/copy.
+    @discardableResult
+    public func focusTextInput() -> Bool {
+        guard let window, isSelectable else {
+            return false
+        }
+        return window.makeFirstResponder(textInputView)
+    }
+
     /// Updates the custom input and accessory views when the object is the first responder.
     override open func reloadInputViews() {
         textInputView.reloadInputViews()

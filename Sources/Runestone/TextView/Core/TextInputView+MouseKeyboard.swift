@@ -8,13 +8,13 @@ extension TextInputView {
             return
         }
         let point = convert(event.locationInWindow, from: nil)
-        if delegate?.textInputViewIsEditable(self) ?? true {
-            if !isFirstResponder {
-                _ = becomeFirstResponder()
-            } else {
-                window?.makeFirstResponder(self)
-            }
-        } else {
+        // `becomeFirstResponder()` alone does not install first-responder status in
+        // AppKit — only `NSWindow.makeFirstResponder(_:)` does. Call it unconditionally
+        // (for both editable and read-only) rather than only when already first responder.
+        if window?.firstResponder !== self {
+            window?.makeFirstResponder(self)
+        }
+        if !(delegate?.textInputViewIsEditable(self) ?? true) {
             delegate?.textInputView(self, didRequestSelectionInteraction: true)
         }
         isMouseSelecting = true
@@ -69,17 +69,21 @@ extension TextInputView {
                 selection = NSRange(location: index, length: 0)
             }
         }
-        if delegate?.textInputViewIsEditable(self) ?? true, !isFirstResponder {
-            _ = becomeFirstResponder()
+        if delegate?.textInputViewIsEditable(self) ?? true, window?.firstResponder !== self {
+            window?.makeFirstResponder(self)
         }
         showContextMenu(with: event)
     }
 
     override func keyDown(with event: NSEvent) {
-        guard delegate?.textInputViewIsEditable(self) ?? true else {
+        // Not selectable at all (e.g. a plain label-like use) — behave exactly as before.
+        guard delegate?.textInputViewIsSelectable(self) ?? true else {
             super.keyDown(with: event)
             return
         }
+        // Read-only panes still get caret navigation, shift-selection and ⌘A/⌘C —
+        // the same as a non-editable, selectable NSTextView — but no mutation.
+        let isEditable = delegate?.textInputViewIsEditable(self) ?? true
 
         // While composing marked text, let the input context own every key.
         // Otherwise navigation/delete must be handled locally first:
@@ -114,14 +118,14 @@ extension TextInputView {
         case 0x77:
             moveSelectionToBoundary(.line, direction: .forward, extending: flags.contains(.shift))
             return
-        case 0x33:
+        case 0x33 where isEditable:
             if flags.contains(.option) {
                 deleteWord(backward: true)
             } else {
                 deleteBackward()
             }
             return
-        case 0x75:
+        case 0x75 where isEditable:
             if flags.contains(.option) {
                 deleteWord(backward: false)
             } else {
@@ -130,6 +134,12 @@ extension TextInputView {
             return
         default:
             break
+        }
+
+        // Everything below mutates or inserts text — only while editable.
+        guard isEditable else {
+            super.keyDown(with: event)
+            return
         }
 
         if inputContext?.handleEvent(event) == true {
@@ -144,10 +154,11 @@ extension TextInputView {
     }
 
     override func doCommand(by selector: Selector) {
+        let isEditable = delegate?.textInputViewIsEditable(self) ?? true
         switch selector {
-        case #selector(deleteBackward(_:)):
+        case #selector(deleteBackward(_:)) where isEditable:
             deleteBackward()
-        case #selector(deleteForward(_:)):
+        case #selector(deleteForward(_:)) where isEditable:
             deleteForward()
         case #selector(moveLeft(_:)):
             moveSelectionForArrowKey(direction: .left, flags: [])
@@ -181,9 +192,9 @@ extension TextInputView {
             moveSelectionToBoundary(.line, direction: .backward, extending: true)
         case #selector(moveToEndOfLineAndModifySelection(_:)):
             moveSelectionToBoundary(.line, direction: .forward, extending: true)
-        case #selector(insertNewline(_:)), #selector(insertNewlineIgnoringFieldEditor(_:)):
+        case #selector(insertNewline(_:)) where isEditable, #selector(insertNewlineIgnoringFieldEditor(_:)) where isEditable:
             insertText("\n")
-        case #selector(insertTab(_:)):
+        case #selector(insertTab(_:)) where isEditable:
             insertText("\t")
         default:
             super.doCommand(by: selector)
@@ -262,28 +273,50 @@ private extension TextInputView {
         }
     }
 
+    /// Anchor (fixed end) and active end (the end keyboard navigation moves) of the
+    /// current selection. Falls back to treating `location` as the anchor when
+    /// `selectionAnchor` doesn't match either bound — e.g. after a programmatic
+    /// `selectedRange` assignment from find/go-to that didn't update the anchor.
+    private var selectionEnds: (anchor: Int, active: Int)? {
+        guard let selection else {
+            return nil
+        }
+        guard selection.length > 0 else {
+            return (selection.location, selection.location)
+        }
+        if selectionAnchor == selection.upperBound {
+            return (selection.upperBound, selection.location)
+        }
+        return (selection.location, selection.upperBound)
+    }
+
     private func moveSelectionByCharacter(in direction: UITextLayoutDirection, extending: Bool) {
         guard let currentRange = selection else {
             return
         }
-        let referenceIndex: Int
         if extending {
-            switch direction {
-            case .left, .up:
-                referenceIndex = currentRange.upperBound
-            case .right, .down:
-                referenceIndex = currentRange.location
-            @unknown default:
-                referenceIndex = currentRange.location
+            guard let ends = selectionEnds else {
+                return
             }
-        } else {
-            referenceIndex = direction == .left ? currentRange.location : currentRange.upperBound
+            let referencePosition = IndexedPosition(index: ends.active)
+            guard let newPosition = position(from: referencePosition, in: direction, offset: 1) as? IndexedPosition else {
+                return
+            }
+            updateSelection(anchor: ends.anchor, activeLocation: newPosition.index, extending: true)
+            return
         }
-        let referencePosition = IndexedPosition(index: referenceIndex)
+        // A non-empty selection collapses to its near edge without moving further,
+        // matching NSTextView. Only an already-empty caret moves by one character.
+        if currentRange.length > 0 {
+            let collapseIndex = direction == .left || direction == .up ? currentRange.location : currentRange.upperBound
+            updateSelection(anchor: collapseIndex, activeLocation: collapseIndex, extending: false)
+            return
+        }
+        let referencePosition = IndexedPosition(index: currentRange.location)
         guard let newPosition = position(from: referencePosition, in: direction, offset: 1) as? IndexedPosition else {
             return
         }
-        updateSelection(activeLocation: newPosition.index, extending: extending)
+        updateSelection(anchor: newPosition.index, activeLocation: newPosition.index, extending: false)
     }
 
     private func moveSelectionToBoundary(_ granularity: UITextGranularity,
@@ -292,26 +325,31 @@ private extension TextInputView {
         guard let currentRange = selection else {
             return
         }
-        let referenceIndex = extending
-            ? (direction == .backward ? currentRange.upperBound : currentRange.location)
-            : (direction == .backward ? currentRange.location : currentRange.upperBound)
+        if extending {
+            guard let ends = selectionEnds else {
+                return
+            }
+            let position = IndexedPosition(index: ends.active)
+            guard let boundary = tokenizer.position(from: position, toBoundary: granularity, inDirection: direction) as? IndexedPosition else {
+                return
+            }
+            updateSelection(anchor: ends.anchor, activeLocation: boundary.index, extending: true)
+            return
+        }
+        let referenceIndex = direction == .backward ? currentRange.location : currentRange.upperBound
         let position = IndexedPosition(index: referenceIndex)
         guard let boundary = tokenizer.position(from: position, toBoundary: granularity, inDirection: direction) as? IndexedPosition else {
             return
         }
-        updateSelection(activeLocation: boundary.index, extending: extending)
+        updateSelection(anchor: boundary.index, activeLocation: boundary.index, extending: false)
     }
 
-    private func updateSelection(activeLocation: Int, extending: Bool) {
+    private func updateSelection(anchor: Int, activeLocation: Int, extending: Bool) {
+        selectionAnchor = anchor
         if extending {
-            if selectionAnchor == nil {
-                selectionAnchor = selection?.location ?? activeLocation
-            }
-            let anchor = selectionAnchor ?? activeLocation
             setSelectedRange(from: anchor, to: activeLocation)
             // Host notify deferred via selection mutation paths / setter.
         } else {
-            selectionAnchor = activeLocation
             inputDelegate?.selectionWillChange(self)
             selection = NSRange(location: activeLocation, length: 0)
             inputDelegate?.selectionDidChange(self)
