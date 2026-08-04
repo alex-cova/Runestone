@@ -21,7 +21,7 @@ public struct SnippetExpansionContext: Sendable {
         lineIndex: Int = 0,
         lineNumber: Int = 1,
         softTab: String = "    ",
-        date: Date = Date()
+        date: Date = .now
     ) {
         self.selectedText = selectedText
         self.currentLine = currentLine

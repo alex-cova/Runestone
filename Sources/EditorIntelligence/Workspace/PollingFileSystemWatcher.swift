@@ -28,7 +28,11 @@ public final class PollingFileSystemWatcher: FileSystemWatcher {
         task = Task {
             while !Task.isCancelled {
                 self.scan()
-                try? await Task.sleep(nanoseconds: UInt64(self.interval * 1_000_000_000))
+                if #available(macOS 13.0, iOS 16.0, *) {
+                    try? await Task.sleep(for: .seconds(self.interval))
+                } else {
+                    try? await Task.sleep(nanoseconds: UInt64(self.interval * 1_000_000_000))
+                }
             }
         }
     }
