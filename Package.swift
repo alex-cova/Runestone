@@ -10,14 +10,19 @@ let package = Package(
         .macOS(.v12)
     ],
     products: [
-        .library(name: "Runestone", targets: ["Runestone"])
+        .library(name: "Runestone", targets: ["Runestone"]),
+        .library(name: "EditorIntelligence", targets: ["EditorIntelligence"])
     ],
     dependencies: [
         .package(url: "https://github.com/tree-sitter/tree-sitter", .upToNextMinor(from: "0.20.9"))
     ],
     targets: [
+        .target(name: "EditorIntelligence", dependencies: []),
         .target(name: "Runestone", dependencies: [
+            "EditorIntelligence",
             .product(name: "TreeSitter", package: "tree-sitter")
+        ], exclude: [
+            "Documentation.docc"
         ], resources: [
             .copy("PrivacyInfo.xcprivacy"),
             .process("TextView/Appearance/Theme.xcassets")
@@ -28,6 +33,7 @@ let package = Package(
         ]),
         .testTarget(name: "RunestoneTests", dependencies: [
             "Runestone",
+            "EditorIntelligence",
             "TestTreeSitterLanguages"
         ])
     ]
