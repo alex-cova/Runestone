@@ -5,18 +5,25 @@ private var previousUnrecognizedHighlightNames: [String] = []
 #endif
 
 enum HighlightName: String {
+    case boolean
     case comment
     case constantBuiltin = "constant.builtin"
     case constantCharacter = "constant.character"
     case constructor
+    case float
     case function
     case keyword
     case number
     case `operator`
+    case parameter
     case property
     case punctuation
+    case punctuationBracket = "punctuation.bracket"
+    case punctuationDelimiter = "punctuation.delimiter"
+    case punctuationSpecial = "punctuation.special"
     case string
     case type
+    case typeBuiltin = "type.builtin"
     case variable
     case variableBuiltin = "variable.builtin"
 

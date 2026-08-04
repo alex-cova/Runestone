@@ -11,7 +11,8 @@ let package = Package(
     ],
     products: [
         .library(name: "Runestone", targets: ["Runestone"]),
-        .library(name: "EditorIntelligence", targets: ["EditorIntelligence"])
+        .library(name: "EditorIntelligence", targets: ["EditorIntelligence"]),
+        .library(name: "RunestoneGraphQLLanguage", targets: ["RunestoneGraphQLLanguage"])
     ],
     dependencies: [
         .package(url: "https://github.com/tree-sitter/tree-sitter", .upToNextMinor(from: "0.20.9"))
@@ -31,10 +32,25 @@ let package = Package(
         .target(name: "TestTreeSitterLanguages", cSettings: [
             .unsafeFlags(["-w"])
         ]),
+        .target(name: "TreeSitterGraphQL", cSettings: [
+            .headerSearchPath("src"),
+            .unsafeFlags(["-w"])
+        ]),
+        .target(
+            name: "RunestoneGraphQLLanguage",
+            dependencies: [
+                "Runestone",
+                "TreeSitterGraphQL"
+            ],
+            resources: [
+                .copy("highlights.scm")
+            ]
+        ),
         .testTarget(name: "RunestoneTests", dependencies: [
             "Runestone",
             "EditorIntelligence",
-            "TestTreeSitterLanguages"
+            "TestTreeSitterLanguages",
+            "RunestoneGraphQLLanguage"
         ])
     ]
 )
