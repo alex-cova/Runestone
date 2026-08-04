@@ -75,7 +75,7 @@ Add Runestone as a dependency in your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/simonbs/Runestone.git", branch: "main")
+    .package(url: "https://github.com/alex-cova/Runestone.git", branch: "main")
 ]
 ```
 
