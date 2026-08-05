@@ -19,9 +19,9 @@ final class TextViewSmokeTests: XCTestCase {
         let converted = theme.selectionColor.usingColorSpace(.sRGB) ?? theme.selectionColor
         converted.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
         XCTAssertEqual(alpha, 1, accuracy: 0.01)
-        XCTAssertEqual(red, 33 / 255, accuracy: 0.02)
-        XCTAssertEqual(green, 66 / 255, accuracy: 0.02)
-        XCTAssertEqual(blue, 131 / 255, accuracy: 0.02)
+        XCTAssertEqual(red, 59 / 255, accuracy: 0.02)
+        XCTAssertEqual(green, 130 / 255, accuracy: 0.02)
+        XCTAssertEqual(blue, 246 / 255, accuracy: 0.02)
     }
 
     func testApplyingThemeSetsSelectionHighlightColor() {
@@ -45,6 +45,18 @@ final class TextViewSmokeTests: XCTestCase {
         XCTAssertEqual(actualGreen, expectedGreen, accuracy: 0.01)
         XCTAssertEqual(actualBlue, expectedBlue, accuracy: 0.01)
         XCTAssertEqual(actualAlpha, expectedAlpha, accuracy: 0.01)
+    }
+
+    func testSetStateWithSelectionDoesNotCrashWhenApplyingTheme() {
+        let textView = TextView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        textView.setState(TextViewState(text: "short", theme: DefaultTheme()))
+        textView.selectedRange = NSRange(location: 0, length: 5)
+        // Longer replacement + new theme: selectionHighlightColor applies mid-setState
+        // after stringView swap but before lineManager swap — must not assert.
+        textView.selectionHighlightColor = .systemRed
+        let longer = TextViewState(text: "a much longer document body", theme: DefaultTheme())
+        textView.setState(longer)
+        XCTAssertEqual(textView.text, "a much longer document body")
     }
 
     func testTextViewStateInitializesForPlainText() {

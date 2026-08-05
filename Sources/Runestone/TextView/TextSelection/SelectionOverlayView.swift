@@ -7,7 +7,7 @@ final class SelectionOverlayView: UIView {
             setNeedsDisplay()
         }
     }
-    var highlightColor: UIColor = UIColor(srgbRed: 33 / 255, green: 66 / 255, blue: 131 / 255, alpha: 1) {
+    var highlightColor: UIColor = UIColor(srgbRed: 59 / 255, green: 130 / 255, blue: 246 / 255, alpha: 1) {
         didSet {
             setNeedsDisplay()
         }
