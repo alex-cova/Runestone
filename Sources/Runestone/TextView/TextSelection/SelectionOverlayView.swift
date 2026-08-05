@@ -7,7 +7,7 @@ final class SelectionOverlayView: UIView {
             setNeedsDisplay()
         }
     }
-    var highlightColor: UIColor = .label.withAlphaComponent(0.2) {
+    var highlightColor: UIColor = UIColor(srgbRed: 33 / 255, green: 66 / 255, blue: 131 / 255, alpha: 1) {
         didSet {
             setNeedsDisplay()
         }
@@ -24,14 +24,14 @@ final class SelectionOverlayView: UIView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard let context = NSGraphicsContext.current?.cgContext else {
+        guard NSGraphicsContext.current != nil else {
             return
         }
-        context.saveGState()
-        context.setFillColor(highlightColor.cgColor)
+        // Prefer setFill() so appearance-adaptive colors resolve against this
+        // view's drawing context rather than NSApp.effectiveAppearance via cgColor.
+        highlightColor.setFill()
         for selectionRect in selectionRects {
-            context.fill(selectionRect.rect)
+            selectionRect.rect.fill()
         }
-        context.restoreGState()
     }
 }

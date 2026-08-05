@@ -126,7 +126,7 @@ final class TextInputView: UIView, UITextInput {
             }
         }
     }
-    @objc var selectionHighlightColor: UIColor = .label.withAlphaComponent(0.2) {
+    @objc var selectionHighlightColor: UIColor = UIColor(srgbRed: 33 / 255, green: 66 / 255, blue: 131 / 255, alpha: 1) {
         didSet {
             if selectionHighlightColor != oldValue {
                 selectionOverlayController.updateColors()
@@ -991,6 +991,7 @@ private extension TextInputView {
         pageGuideController.guideView.hairlineWidth = theme.pageGuideHairlineWidth
         pageGuideController.guideView.hairlineColor = theme.pageGuideHairlineColor
         pageGuideController.guideView.backgroundColor = theme.pageGuideBackgroundColor
+        selectionHighlightColor = theme.selectionColor
         layoutManager.theme = theme
     }
 }

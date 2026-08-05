@@ -36,6 +36,12 @@ public protocol Theme: AnyObject {
     /// Corner radius of the background of marked text. Text will be marked when writing certain languages, for example Chinese and Japanese.
     /// A value of zero or less means that the background will not have rounded corners. Defaults to 0.
     var markedTextBackgroundCornerRadius: CGFloat { get }
+    /// Background color of the text selection highlight.
+    ///
+    /// Defaults to opaque `#214283`. Prefer a static sRGB color over appearance-adaptive
+    /// colors — selection is drawn via Core Graphics and dynamic colors can resolve
+    /// against the wrong appearance.
+    var selectionColor: UIColor { get }
     /// Color of text matching the capture sequence.
     ///
     /// See <doc:CreatingATheme> for more information on higlight names.
@@ -75,6 +81,11 @@ public extension Theme {
 
     var markedTextBackgroundCornerRadius: CGFloat {
         0
+    }
+
+    /// Opaque `#214283` — visible on both light and dark editor backgrounds.
+    var selectionColor: UIColor {
+        UIColor(srgbRed: 33 / 255, green: 66 / 255, blue: 131 / 255, alpha: 1)
     }
 
     func font(for highlightName: String) -> UIFont? {

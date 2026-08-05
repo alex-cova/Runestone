@@ -117,7 +117,10 @@ private extension UIColor {
                 return .textBackgroundColor
             case "current_line":
                 return .selectedContentBackgroundColor.withAlphaComponent(0.25)
-            case "selection", "marked_text", "search_match_found", "search_match_highlighted":
+            case "selection":
+                // Opaque #214283 — same static color for light and dark.
+                return UIColor(srgbRed: 33 / 255, green: 66 / 255, blue: 131 / 255, alpha: 1)
+            case "marked_text", "search_match_found", "search_match_highlighted":
                 return .selectedContentBackgroundColor.withAlphaComponent(0.35)
             case "foreground":
                 return .textColor
