@@ -10,14 +10,20 @@ let package = Package(
         .macOS(.v12)
     ],
     products: [
-        .library(name: "Runestone", targets: ["Runestone"])
+        .library(name: "Runestone", targets: ["Runestone"]),
+        .library(name: "EditorIntelligence", targets: ["EditorIntelligence"]),
+        .library(name: "RunestoneGraphQLLanguage", targets: ["RunestoneGraphQLLanguage"])
     ],
     dependencies: [
         .package(url: "https://github.com/tree-sitter/tree-sitter", .upToNextMinor(from: "0.20.9"))
     ],
     targets: [
+        .target(name: "EditorIntelligence", dependencies: []),
         .target(name: "Runestone", dependencies: [
+            "EditorIntelligence",
             .product(name: "TreeSitter", package: "tree-sitter")
+        ], exclude: [
+            "Documentation.docc"
         ], resources: [
             .copy("PrivacyInfo.xcprivacy"),
             .process("TextView/Appearance/Theme.xcassets")
@@ -26,9 +32,25 @@ let package = Package(
         .target(name: "TestTreeSitterLanguages", cSettings: [
             .unsafeFlags(["-w"])
         ]),
+        .target(name: "TreeSitterGraphQL", cSettings: [
+            .headerSearchPath("src"),
+            .unsafeFlags(["-w"])
+        ]),
+        .target(
+            name: "RunestoneGraphQLLanguage",
+            dependencies: [
+                "Runestone",
+                "TreeSitterGraphQL"
+            ],
+            resources: [
+                .copy("highlights.scm")
+            ]
+        ),
         .testTarget(name: "RunestoneTests", dependencies: [
             "Runestone",
-            "TestTreeSitterLanguages"
+            "EditorIntelligence",
+            "TestTreeSitterLanguages",
+            "RunestoneGraphQLLanguage"
         ])
     ]
 )

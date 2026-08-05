@@ -126,11 +126,13 @@ final class TextInputView: UIView, UITextInput {
             }
         }
     }
-    @objc var selectionHighlightColor: UIColor = .label.withAlphaComponent(0.2) {
+    @objc var selectionHighlightColor: UIColor = UIColor(srgbRed: 59 / 255, green: 130 / 255, blue: 246 / 255, alpha: 1) {
         didSet {
             if selectionHighlightColor != oldValue {
+                // Colors only — do not call updateLayout(). Theme is often applied
+                // mid-setState after stringView is swapped but before lineManager is,
+                // and caretRect(at:) force-unwraps a line lookup that can fail then.
                 selectionOverlayController.updateColors()
-                selectionOverlayController.updateLayout()
             }
         }
     }
@@ -991,6 +993,7 @@ private extension TextInputView {
         pageGuideController.guideView.hairlineWidth = theme.pageGuideHairlineWidth
         pageGuideController.guideView.hairlineColor = theme.pageGuideHairlineColor
         pageGuideController.guideView.backgroundColor = theme.pageGuideBackgroundColor
+        selectionHighlightColor = theme.selectionColor
         layoutManager.theme = theme
     }
 }
@@ -1441,7 +1444,11 @@ extension TextInputView {
         var preparedText = text
         let lineEndingsToReplace: [LineEnding] = [.crlf, .cr, .lf].filter { $0 != lineEndings }
         for lineEnding in lineEndingsToReplace {
-            preparedText = preparedText.replacingOccurrences(of: lineEnding.symbol, with: lineEndings.symbol)
+            if #available(macOS 13.0, iOS 16.0, *) {
+                preparedText = preparedText.replacing(lineEnding.symbol, with: lineEndings.symbol)
+            } else {
+                preparedText = preparedText.replacingOccurrences(of: lineEnding.symbol, with: lineEndings.symbol)
+            }
         }
         return preparedText
     }

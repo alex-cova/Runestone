@@ -22,12 +22,14 @@ public final class DefaultTheme: Runestone.Theme {
 
     public init() {}
 
-    // swiftlint:disable:next cyclomatic_complexity
+    // swiftlint:disable cyclomatic_complexity
     public func textColor(for highlightName: String) -> UIColor? {
         guard let highlightName = HighlightName(highlightName) else {
             return nil
         }
         switch highlightName {
+        case .boolean:
+            return UIColor(themeColorNamed: "constant_builtin")
         case .comment:
             return UIColor(themeColorNamed: "comment")
         case .constantBuiltin:
@@ -36,28 +38,41 @@ public final class DefaultTheme: Runestone.Theme {
             return UIColor(themeColorNamed: "constant_character")
         case .constructor:
             return UIColor(themeColorNamed: "constructor")
+        case .float:
+            return UIColor(themeColorNamed: "number")
         case .function:
             return UIColor(themeColorNamed: "function")
         case .keyword:
             return UIColor(themeColorNamed: "keyword")
         case .number:
             return UIColor(themeColorNamed: "number")
+        case .operator:
+            return UIColor(themeColorNamed: "operator")
+        case .parameter:
+            return UIColor(themeColorNamed: "property")
         case .property:
             return UIColor(themeColorNamed: "property")
+        case .punctuation:
+            return UIColor(themeColorNamed: "punctuation")
+        case .punctuationBracket:
+            return UIColor(themeColorNamed: "punctuation")
+        case .punctuationDelimiter:
+            return UIColor(themeColorNamed: "punctuation")
+        case .punctuationSpecial:
+            return UIColor(themeColorNamed: "punctuation")
         case .string:
             return UIColor(themeColorNamed: "string")
         case .type:
+            return UIColor(themeColorNamed: "type")
+        case .typeBuiltin:
             return UIColor(themeColorNamed: "type")
         case .variable:
             return nil
         case .variableBuiltin:
             return UIColor(themeColorNamed: "variable_builtin")
-        case .operator:
-            return UIColor(themeColorNamed: "operator")
-        case .punctuation:
-            return UIColor(themeColorNamed: "punctuation")
         }
     }
+    // swiftlint:enable cyclomatic_complexity
 
     public func fontTraits(for highlightName: String) -> FontTraits {
         guard let highlightName = HighlightName(highlightName) else {
@@ -102,7 +117,10 @@ private extension UIColor {
                 return .textBackgroundColor
             case "current_line":
                 return .selectedContentBackgroundColor.withAlphaComponent(0.25)
-            case "selection", "marked_text", "search_match_found", "search_match_highlighted":
+            case "selection":
+                // Opaque #3b82f6 — same static color for light and dark.
+                return UIColor(srgbRed: 59 / 255, green: 130 / 255, blue: 246 / 255, alpha: 1)
+            case "marked_text", "search_match_found", "search_match_highlighted":
                 return .selectedContentBackgroundColor.withAlphaComponent(0.35)
             case "foreground":
                 return .textColor

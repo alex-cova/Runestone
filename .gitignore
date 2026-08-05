@@ -1,5 +1,2 @@
-.DS_Store
-.swiftpm
 .build
-xcuserdata
 .idea

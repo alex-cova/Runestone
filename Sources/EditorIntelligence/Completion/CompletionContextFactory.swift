@@ -1,0 +1,40 @@
+import Foundation
+
+/// Build a `CompletionContext` from a document snapshot and a trigger.
+///
+/// The cursor position is read from the document, and the prefix is the contiguous run of word
+/// characters immediately before the cursor. The returned `range` is the document range that should
+/// be replaced by the chosen completion.
+public func makeCompletionContext(document: Document, trigger: RequestTrigger) -> CompletionContext {
+    let cursor = document.cursor
+    let offset = cursor.position.utf16Offset
+    let (prefix, startOffset) = extractPrefixAndStart(before: offset, in: document.text)
+    let start = TextPosition(
+        line: cursor.position.line,
+        column: max(0, cursor.position.column - prefix.count),
+        utf16Offset: startOffset
+    )
+    let range = TextRange(start: start, end: cursor.position)
+    return CompletionContext(
+        document: document,
+        cursor: cursor,
+        trigger: trigger,
+        prefix: prefix,
+        range: range
+    )
+}
+
+private func extractPrefixAndStart(before offset: Int, in text: String) -> (String, Int) {
+    let nsString = text as NSString
+    var start = offset
+    while start > 0 {
+        let charIndex = start - 1
+        let char = nsString.character(at: charIndex)
+        if let scalar = UnicodeScalar(char), CharacterSet.alphanumerics.contains(scalar) {
+            start = charIndex
+        } else {
+            break
+        }
+    }
+    return (nsString.substring(with: NSRange(location: start, length: offset - start)), start)
+}
