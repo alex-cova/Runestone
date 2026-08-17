@@ -95,9 +95,22 @@ public final class RunestoneEditorAdapter: EditorAdapter {
         }
     }
 
+    /// Builds a fresh document, re-bridging the text view's content into a new `TextSnapshot`.
+    ///
+    /// - Important: This copies the entire document (`NSMutableString` -> `String` bridging is
+    ///   eager and unavoidable for a mutable backing store). Only call this when content has
+    ///   actually changed; for selection/cursor-only updates use
+    ///   ``makeDocument(with:snapshot:)`` to reuse the previous snapshot instead.
     private func makeDocument(with textView: TextView) -> Document {
         let text = textView.text as String
         let snapshot = TextSnapshot(version: nextVersion(), text: text)
+        return makeDocument(with: textView, snapshot: snapshot)
+    }
+
+    /// Builds a document reusing an existing content snapshot, only recomputing
+    /// selection/cursor/viewport. Used for selection-only changes so they don't pay the cost of
+    /// re-bridging the full document text.
+    private func makeDocument(with textView: TextView, snapshot: TextSnapshot) -> Document {
         let selectedRange = textView.selectedRange
         let selection = makeSelection(from: selectedRange, in: textView)
         let cursor = Cursor(position: selection.range.start)
@@ -155,7 +168,14 @@ extension RunestoneEditorAdapter: TextViewDelegate {
     public func textViewDidChangeSelection(_ textView: TextView) {
         Task { @MainActor in
             guard textView === self.textView else { return }
-            let document = makeDocument(with: textView)
+            // Selection/cursor movement doesn't change document content, so reuse the existing
+            // content snapshot instead of re-bridging the entire NSMutableString into a new
+            // String. This is what makes arrow-key navigation and mouse clicks on large
+            // documents cheap: previously every selection change paid the same full-document
+            // copy as an actual edit.
+            let snapshot = currentDocument?.contentSnapshot
+                ?? TextSnapshot(version: nextVersion(), text: textView.text as String)
+            let document = makeDocument(with: textView, snapshot: snapshot)
             setLatestDocument(document)
             eventBus.send(.selectionChanged(document.id, document.selection))
             eventBus.send(.cursorMoved(document.id, document.cursor))

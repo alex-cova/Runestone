@@ -2,6 +2,13 @@ import Foundation
 import TreeSitter
 
 final class TreeSitterQueryCursor {
+    /// Caps the number of in-progress matches the cursor tracks at once. Without a cap, a
+    /// pathological query/document combination (e.g. deeply nested or highly repetitive syntax)
+    /// can make a single query take an unbounded amount of time. 256 is generous for the
+    /// highlight/injection queries this cursor is used for and matches what other tree-sitter
+    /// based editors (e.g. Helix) use.
+    static let defaultMatchLimit: UInt32 = 256
+
     private let pointer: OpaquePointer
     private let query: TreeSitterQuery
     private let node: TreeSitterNode
@@ -11,6 +18,7 @@ final class TreeSitterQueryCursor {
         self.pointer = ts_query_cursor_new()
         self.query = query
         self.node = node
+        ts_query_cursor_set_match_limit(pointer, Self.defaultMatchLimit)
     }
 
     deinit {

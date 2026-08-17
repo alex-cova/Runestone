@@ -27,11 +27,16 @@ final class ViewReuseQueue<Key: Hashable, View: UIView & ReusableView> {
     }
 
     func enqueueViews(withKeys keys: Set<Key>) {
+        // Snapshot the visible count *before* removing anything in this batch. Using the live
+        // (shrinking) `visibleViews.count` as the cap basis meant a single layout pass that
+        // dequeues many views at once (e.g. a large/fast scroll) would starve the pool partway
+        // through the batch and start deallocating views instead of reusing them.
+        let usedViewCount = visibleViews.count
         for key in keys {
             if let view = visibleViews.removeValue(forKey: key) {
                 view.prepareForReuse()
                 view.removeFromSuperview()
-                queueViewIfNeeded(view)
+                queueViewIfNeeded(view, usedViewCount: usedViewCount)
             }
         }
     }
@@ -50,11 +55,11 @@ final class ViewReuseQueue<Key: Hashable, View: UIView & ReusableView> {
         }
     }
 
-    private func queueViewIfNeeded(_ view: View) {
+    private func queueViewIfNeeded(_ view: View, usedViewCount: Int) {
         // There's no need to let the queue grow large but deciding on a good number of views to allow in the queue is difficult.
-        // We make it a function of the number of visible views. There'll rarely be any need for the queue to grow larger than
-        // the number of visible views. In fact, in most cases it can be much smaller.
-        if queuedViews.count < visibleViews.count / 4 {
+        // We cap it at the number of views that were in use just before this batch of removals: there'll rarely be any need
+        // for the queue to grow larger than that, but it also won't be starved mid-batch the way a shrinking live count would.
+        if queuedViews.count < usedViewCount {
             queuedViews.insert(view)
         }
     }

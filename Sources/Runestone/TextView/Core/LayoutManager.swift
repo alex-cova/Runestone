@@ -136,6 +136,16 @@ final class LayoutManager {
         let height = viewport.height + textContainerInset.top + textContainerInset.bottom
         return CGRect(x: x, y: y, width: width, height: height)
     }
+    /// Extra vertical space, in points, laid out above and below the visible viewport during
+    /// ``layoutLinesInViewport()``. Lines within this band get their line fragments and views
+    /// prepared before they're actually visible, so fast scrolling doesn't show a moment of
+    /// unlaid-out content at the leading edge. Set to 0 to lay out exactly the visible rect.
+    var verticalLayoutPadding: CGFloat = 350
+    /// `insetViewport` expanded by ``verticalLayoutPadding`` on the vertical axis. This is the
+    /// rect actually used to decide which lines get laid out.
+    private var paddedInsetViewport: CGRect {
+        insetViewport.insetBy(dx: 0, dy: -verticalLayoutPadding)
+    }
     private let contentSizeService: ContentSizeService
     private let gutterWidthService: GutterWidthService
     private let caretRectService: CaretRectService
@@ -367,6 +377,16 @@ extension LayoutManager {
         }
     }
 
+    /// Typesets every line from the start of the document up to `location`, guaranteeing that
+    /// every line's height reflects its real (rather than estimated) size once this returns.
+    ///
+    /// - Warning: This is O(number of lines up to `location`) because it must typeset each of
+    ///   them in turn to measure it. On a large document, jumping to a location near the end pays
+    ///   for typesetting effectively the whole document. Prefer
+    ///   ``prepareLineForDisplay(atLocation:)`` for jump-to-location navigation (e.g.
+    ///   `goToLine`/`scrollRangeToVisible`), which is O(log n) plus the cost of typesetting only
+    ///   the target line, and accepts an estimated (rather than exact) initial scroll position
+    ///   that self-corrects as the user scrolls, the same way ordinary scrolling already does.
     func layoutLines(toLocation location: Int) {
         var nextLine: DocumentLineNode? = lineManager.firstLine
         let isLocationEndOfString = location >= stringView.string.length
@@ -387,6 +407,28 @@ extension LayoutManager {
         }
     }
 
+    /// Typesets only the line containing `location`, without walking every line before it.
+    ///
+    /// The target line's Y position (`line.yPosition`) is read from the line manager's red-black
+    /// tree in O(log n) using each earlier line's currently-known height — which is exact for
+    /// lines that have already been laid out, but an estimate for ones that haven't. So a jump to
+    /// a distant, never-visited location may land at a slightly imprecise Y offset if earlier
+    /// lines wrap differently than estimated; this self-corrects the same way ordinary scrolling
+    /// already does, as those lines are eventually measured. This trade-off is what makes
+    /// jump-to-location navigation on a large document O(log n) instead of O(location).
+    func prepareLineForDisplay(atLocation location: Int) {
+        let safeLocation = min(max(location, 0), stringView.string.length)
+        guard let line = lineManager.line(containingCharacterAt: safeLocation) else {
+            return
+        }
+        let lineLocalLocation = min(safeLocation, line.location + line.data.length) - line.location
+        let lineController = lineControllerStorage.getOrCreateLineController(for: line)
+        lineController.constrainingWidth = constrainingLineWidth
+        lineController.prepareToDisplayString(toLocation: lineLocalLocation, syntaxHighlightAsynchronously: true)
+        let lineSize = CGSize(width: lineController.lineWidth, height: lineController.lineHeight)
+        contentSizeService.setSize(of: lineController.line, to: lineSize)
+    }
+
     // swiftlint:disable:next function_body_length
     private func layoutLinesInViewport() {
         // Immediately bail out from generating lines in a viewport of zero size.
@@ -395,16 +437,18 @@ extension LayoutManager {
         }
         let oldVisibleLineIDs = visibleLineIDs
         let oldVisibleLineFragmentIDs = Set(lineFragmentViewReuseQueue.visibleViews.keys)
-        // Layout lines until we have filled the viewport.
-        var nextLine = lineManager.line(containingYOffset: insetViewport.minY)
+        // Layout lines within a padded band around the viewport, so lines about to scroll into
+        // view already have their fragments and views prepared (see verticalLayoutPadding).
+        let layoutBounds = paddedInsetViewport
+        var nextLine = lineManager.line(containingYOffset: layoutBounds.minY)
         var appearedLineIDs: Set<DocumentLineNodeID> = []
         var appearedLineFragmentIDs: Set<LineFragmentID> = []
-        var maxY = insetViewport.minY
+        var maxY = layoutBounds.minY
         var contentOffsetAdjustmentY: CGFloat = 0
-        while let line = nextLine, maxY < insetViewport.maxY, constrainingLineWidth > 0 {
+        while let line = nextLine, maxY < layoutBounds.maxY, constrainingLineWidth > 0 {
             appearedLineIDs.insert(line.id)
             // Prepare to line controller to display text.
-            let lineLocalViewport = CGRect(x: 0, y: maxY, width: insetViewport.width, height: insetViewport.maxY - maxY)
+            let lineLocalViewport = CGRect(x: 0, y: maxY, width: layoutBounds.width, height: layoutBounds.maxY - maxY)
             let lineController = lineControllerStorage.getOrCreateLineController(for: line)
             let oldLineHeight = lineController.lineHeight
             lineController.constrainingWidth = constrainingLineWidth
@@ -412,7 +456,7 @@ extension LayoutManager {
             layoutLineNumberView(for: line)
             // Layout line fragments ("sublines") in the line until we have filled the viewport.
             let lineYPosition = line.yPosition
-            let lineFragmentControllers = lineController.lineFragmentControllers(in: insetViewport)
+            let lineFragmentControllers = lineController.lineFragmentControllers(in: layoutBounds)
             for lineFragmentController in lineFragmentControllers {
                 let lineFragment = lineFragmentController.lineFragment
                 var lineFragmentFrame: CGRect = .zero

@@ -1,5 +1,6 @@
 import Foundation
 // swiftlint:disable file_length type_body_length
+import AppKit
 import CoreText
 
 /// A type similiar to UITextView with features commonly found in code editors.
@@ -63,6 +64,7 @@ open class TextView: UIScrollView {
         }
         set {
             textInputView.theme = newValue
+            minimapView.applyTheme()
         }
     }
     /// The autocorrection style for the text view.
@@ -591,7 +593,27 @@ open class TextView: UIScrollView {
         textSearchingHelper.findInteraction
     }
 
+    /// Whether a miniature overview of the document is shown along the trailing edge of the
+    /// text view. Off by default.
+    public var showMinimap = false {
+        didSet {
+            if showMinimap != oldValue {
+                minimapView.isHidden = !showMinimap
+                setNeedsLayout()
+            }
+        }
+    }
+    /// Width, in points, of the minimap shown when ``showMinimap`` is true.
+    public var minimapWidth: CGFloat = 100 {
+        didSet {
+            if minimapWidth != oldValue && showMinimap {
+                setNeedsLayout()
+            }
+        }
+    }
+
     private let textInputView: TextInputView
+    private let minimapView = MinimapView(frame: .zero)
     private let tapGestureRecognizer = QuickTapGestureRecognizer()
     private var _inputAccessoryView: UIView?
     private var delegateAllowsEditingToBegin: Bool {
@@ -656,6 +678,11 @@ open class TextView: UIScrollView {
         textInputView.delegate = self
         textInputView.gutterParentView = self
         addSubview(textInputView)
+        minimapView.lineDataSource = textInputView
+        minimapView.scrollView = self
+        minimapView.isHidden = true
+        minimapView.applyTheme()
+        addFixedOverlaySubview(minimapView)
         tapGestureRecognizer.delegate = self
         tapGestureRecognizer.addTarget(self, action: #selector(handleTap(_:)))
         addGestureRecognizer(tapGestureRecognizer)
@@ -690,7 +717,11 @@ open class TextView: UIScrollView {
             hasPendingContentSizeUpdate = true
         }
         handleContentSizeUpdateIfNeeded()
-        textInputView.scrollViewWidth = frame.width
+        // Reserve room on the trailing edge for the minimap so wrapped lines stop before
+        // reaching it, matching how the gutter's width is already accounted for by
+        // constrainingLineWidth on the leading edge.
+        let reservedMinimapWidth = showMinimap ? minimapWidth : 0
+        textInputView.scrollViewWidth = frame.width - reservedMinimapWidth
         textInputView.frame = CGRect(x: 0, y: 0, width: max(contentSize.width, frame.width), height: max(contentSize.height, frame.height))
         textInputView.viewport = CGRect(origin: contentOffset, size: frame.size)
         // UIView.layout does not walk children; explicitly layout the input view
@@ -699,6 +730,20 @@ open class TextView: UIScrollView {
         bringSubviewToFront(textInputView.gutterContainerView)
         if let scrollPocketView {
             bringSubviewToFront(scrollPocketView)
+        }
+        if showMinimap {
+            minimapView.frame = CGRect(x: bounds.maxX - minimapWidth, y: 0, width: minimapWidth, height: bounds.height)
+            minimapView.setNeedsDisplayForContentChange()
+        }
+    }
+
+    /// Forwards to the base scroll handling, then keeps the minimap's viewport indicator in sync.
+    /// Scrolling changes `contentOffset` without necessarily triggering a fresh `layoutSubviews()`
+    /// pass on every tick, so the minimap can't rely on that alone to stay positioned correctly.
+    override open func scrollWheel(with event: NSEvent) {
+        super.scrollWheel(with: event)
+        if showMinimap {
+            minimapView.setNeedsDisplayForContentChange()
         }
     }
 
@@ -919,7 +964,7 @@ open class TextView: UIScrollView {
         resignFirstResponder()
         becomeFirstResponder()
         let line = textInputView.lineManager.line(atRow: lineIndex)
-        textInputView.layoutLines(toLocation: line.location)
+        textInputView.prepareLineForDisplay(atLocation: line.location)
         scrollLocationToVisible(line.location)
         layoutIfNeeded()
         switch selection {
@@ -1152,7 +1197,12 @@ extension TextView {
     /// - Parameters:
     ///   - range: The range of text to scroll into view.
     public func scrollRangeToVisible(_ range: NSRange) {
-        textInputView.layoutLines(toLocation: range.upperBound)
+        // Only typeset the lines actually needed to compute the caret rects below, instead of
+        // every line in the document up to range.upperBound.
+        textInputView.prepareLineForDisplay(atLocation: range.lowerBound)
+        if range.length > 0 {
+            textInputView.prepareLineForDisplay(atLocation: range.upperBound)
+        }
         justScrollRangeToVisible(range)
     }
 }
@@ -1368,6 +1418,9 @@ extension TextView: TextInputViewDelegate {
             DispatchQueue.main.async { [weak self] in
                 self?.scrollLocationToVisible(location)
             }
+        }
+        if showMinimap {
+            minimapView.setNeedsDisplayForContentChange()
         }
         editorDelegate?.textViewDidChange(self)
     }

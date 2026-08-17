@@ -38,6 +38,11 @@ open class UIScrollView: UIView {
     }
     required public init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     open override func addSubview(_ view: NSView) { documentContainer.addSubview(view) }
+    /// Adds a view directly to the scroll view itself, outside the scrollable document
+    /// container, so it stays fixed on screen instead of scrolling with content. `addSubview(_:)`
+    /// always routes into the scrolling document container, so this is the only way to add a
+    /// viewport-anchored overlay (e.g. a minimap) as a child of a `UIScrollView`.
+    open func addFixedOverlaySubview(_ view: NSView) { super.addSubview(view) }
     open func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool { true }
     private func updateDocumentViewFrame() {
         // AppKit hit-tests against the document view's frame. For short or empty

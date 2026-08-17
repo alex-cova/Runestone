@@ -945,6 +945,10 @@ final class TextInputView: UIView, UITextInput {
         layoutManager.layoutLines(toLocation: location)
     }
 
+    func prepareLineForDisplay(atLocation location: Int) {
+        layoutManager.prepareLineForDisplay(atLocation: location)
+    }
+
     func redisplayVisibleLines() {
         layoutManager.redisplayVisibleLines()
     }

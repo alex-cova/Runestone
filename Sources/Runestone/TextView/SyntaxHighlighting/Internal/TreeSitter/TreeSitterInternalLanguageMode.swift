@@ -71,11 +71,19 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode {
             startPoint: TreeSitterTextPoint(change.startLinePosition),
             oldEndPoint: TreeSitterTextPoint(change.oldEndLinePosition),
             newEndPoint: TreeSitterTextPoint(change.newEndLinePosition))
-        return rootLanguageLayer.apply(edit)
+        // `captures(in:)` runs on a background operation queue (see TreeSitterSyntaxHighlighter)
+        // concurrently with edits arriving here on the main thread. Both read and mutate the same
+        // TreeSitterLanguageLayer tree, so they must be mutually exclusive — otherwise this is a
+        // data race on the `tree` property itself, not just a logically-stale read.
+        return parseLock.withLock {
+            rootLanguageLayer.apply(edit)
+        }
     }
 
     func captures(in range: ByteRange) -> [TreeSitterCapture] {
-        rootLanguageLayer.captures(in: range)
+        parseLock.withLock {
+            rootLanguageLayer.captures(in: range)
+        }
     }
 
     func createLineSyntaxHighlighter() -> LineSyntaxHighlighter {

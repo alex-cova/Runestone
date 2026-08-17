@@ -290,9 +290,11 @@ private extension LineManager {
     private func setLength(of line: DocumentLineNode, to newTotalLength: Int, newLine: inout DocumentLineNode) -> LineChangeSet {
         let changeSet = LineChangeSet()
         changeSet.markLineEdited(line)
-        let range = NSRange(location: line.location, length: newTotalLength)
-        let substring = stringView.substring(in: range)
-        let newByteCount = substring?.byteCount ?? 0
+        // Byte count is a pure function of the UTF-16 length (String/NSString.byteCount is always
+        // `length * 2`), so it can be computed directly instead of materializing the line's
+        // substring just to measure it. This avoids an O(line length) allocation + copy on every
+        // edit.
+        let newByteCount = ByteCount(newTotalLength * 2)
         if newTotalLength != line.value || newTotalLength != line.data.totalLength || newByteCount != line.data.byteCount {
             line.value = newTotalLength
             line.data.totalLength = newTotalLength
@@ -304,12 +306,12 @@ private extension LineManager {
             line.data.delimiterLength = 0
         } else {
             let lastChar = getCharacter(at: Int(line.location) + newTotalLength - 1)
-            if lastChar == Symbol.carriageReturn {
+            if lastChar == Symbol.Character.carriageReturn {
                 line.data.delimiterLength = 1
-            } else if lastChar == Symbol.lineFeed {
-                if newTotalLength >= 2 && getCharacter(at: Int(line.location) + newTotalLength - 2) == Symbol.carriageReturn {
+            } else if lastChar == Symbol.Character.lineFeed {
+                if newTotalLength >= 2 && getCharacter(at: Int(line.location) + newTotalLength - 2) == Symbol.Character.carriageReturn {
                     line.data.delimiterLength = 2
-                } else if newTotalLength == 1 && line.location > 0 && getCharacter(at: Int(line.location) - 1) == Symbol.carriageReturn {
+                } else if newTotalLength == 1 && line.location > 0 && getCharacter(at: Int(line.location) - 1) == Symbol.Character.carriageReturn {
                     // We need to join this line with the previous line.
                     let previousLine = line.previous
                     changeSet.markLineRemoved(line)
@@ -331,9 +333,9 @@ private extension LineManager {
     private func insertLine(ofLength length: Int, after otherLine: DocumentLineNode) -> DocumentLineNode {
         let data = DocumentLineNodeData(lineHeight: estimatedLineHeight)
         let insertedLine = documentLineTree.insertNode(value: length, data: data, after: otherLine)
-        let range = NSRange(location: insertedLine.location, length: length)
-        let substring = stringView.substring(in: range)
-        let byteCount = substring?.byteCount ?? 0
+        // See the comment in setLength(of:to:newLine:) — byteCount is derivable from the UTF-16
+        // length alone, no need to materialize the substring.
+        let byteCount = ByteCount(length * 2)
         insertedLine.data.totalLength = length
         insertedLine.data.byteCount = byteCount
         insertedLine.data.nodeTotalByteCount = byteCount
@@ -343,9 +345,8 @@ private extension LineManager {
         return insertedLine
     }
 
-    private func getCharacter(at location: Int) -> String? {
-        let range = NSRange(location: location, length: 1)
-        return stringView.substring(in: range)
+    private func getCharacter(at location: Int) -> Character? {
+        stringView.character(at: location)
     }
 }
 

@@ -20,24 +20,7 @@ final class StringView {
             internalString = NSMutableString(string: newValue)
         }
     }
-    private var internalString: NSMutableString {
-        didSet {
-            if internalString != oldValue {
-                invalidate()
-            }
-        }
-    }
-    private var swiftString: String {
-        if let swiftString = _swiftString {
-            return swiftString
-        } else {
-            let swiftString = internalString as String
-            _swiftString = swiftString
-            return swiftString
-        }
-    }
-
-    private var _swiftString: String?
+    private var internalString: NSMutableString
 
     init(string: NSMutableString = NSMutableString()) {
         self.internalString = string
@@ -65,7 +48,6 @@ final class StringView {
 
     func replaceText(in range: NSRange, with string: String) {
         internalString.replaceCharacters(in: range, with: string)
-        invalidate()
     }
 
     func bytes(in range: ByteRange) -> StringViewBytesResult? {
@@ -79,11 +61,5 @@ final class StringView {
         } else {
             return nil
         }
-    }
-}
-
-private extension StringView {
-    private func invalidate() {
-        _swiftString = nil
     }
 }
