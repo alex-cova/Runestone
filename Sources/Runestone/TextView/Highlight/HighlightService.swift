@@ -58,7 +58,9 @@ private extension HighlightService {
                                                                         containsStart: containsStart,
                                                                         containsEnd: containsEnd,
                                                                         color: highlightedRange.color,
-                                                                        cornerRadius: highlightedRange.cornerRadius)
+                                                                        cornerRadius: highlightedRange.cornerRadius,
+                                                                        style: highlightedRange.style,
+                                                                        isInactive: highlightedRange.isInactive)
                 if let existingHighlightedRangeFragments = result[line.id] {
                     result[line.id] = existingHighlightedRangeFragments + [highlightedRangeFragment]
                 } else {
@@ -85,7 +87,9 @@ private extension HighlightService {
                                             containsStart: containsStart,
                                             containsEnd: containsEnd,
                                             color: lineHighlightedRangeFragment.color,
-                                            cornerRadius: lineHighlightedRangeFragment.cornerRadius)
+                                            cornerRadius: lineHighlightedRangeFragment.cornerRadius,
+                                            style: lineHighlightedRangeFragment.style,
+                                            isInactive: lineHighlightedRangeFragment.isInactive)
         }
     }
 }

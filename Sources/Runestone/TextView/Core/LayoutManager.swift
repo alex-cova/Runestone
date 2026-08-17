@@ -22,7 +22,13 @@ final class LayoutManager {
             }
         }
     }
-    var lineManager: LineManager
+    var lineManager: LineManager {
+        didSet {
+            if lineManager !== oldValue {
+                foldRibbonView.lineManager = lineManager
+            }
+        }
+    }
     var stringView: StringView
     var scrollViewWidth: CGFloat = 0
     var viewport: CGRect = .zero
@@ -46,6 +52,7 @@ final class LayoutManager {
                 invisibleCharacterConfiguration.textColor = theme.invisibleCharactersColor
                 gutterSelectionBackgroundView.backgroundColor = theme.selectedLinesGutterBackgroundColor
                 lineSelectionBackgroundView.backgroundColor = theme.selectedLineBackgroundColor
+                applyFoldRibbonTheme()
                 for lineController in lineControllerStorage {
                     lineController.theme = theme
                     lineController.estimatedLineFragmentHeight = theme.font.totalLineHeight
@@ -71,6 +78,19 @@ final class LayoutManager {
             if showLineNumbers != oldValue {
                 updateShownViews()
             }
+        }
+    }
+    var showFoldingRibbon = false {
+        didSet {
+            if showFoldingRibbon != oldValue {
+                updateShownViews()
+                setNeedsLayout()
+            }
+        }
+    }
+    weak var foldingController: FoldingController? {
+        didSet {
+            foldRibbonView.foldingController = foldingController
         }
     }
     var lineSelectionDisplayType: LineSelectionDisplayType = .disabled {
@@ -111,7 +131,7 @@ final class LayoutManager {
     }
 
     // MARK: - Views
-    let gutterContainerView = UIView()
+    let gutterContainerView = GutterContainerView()
     private var lineFragmentViewReuseQueue = ViewReuseQueue<LineFragmentID, LineFragmentView>()
     private var lineNumberLabelReuseQueue = ViewReuseQueue<DocumentLineNodeID, LineNumberView>()
     private var visibleLineIDs: Set<DocumentLineNodeID> = []
@@ -120,6 +140,7 @@ final class LayoutManager {
     private let lineNumbersContainerView = UIView()
     private let gutterSelectionBackgroundView = UIView()
     private let lineSelectionBackgroundView = UIView()
+    private let foldRibbonView = FoldRibbonView()
 
     // MARK: - Sizing
     private var leadingLineSpacing: CGFloat {
@@ -184,6 +205,7 @@ final class LayoutManager {
         self.gutterBackgroundView.isUserInteractionEnabled = false
         self.gutterSelectionBackgroundView.isUserInteractionEnabled = false
         self.lineSelectionBackgroundView.isUserInteractionEnabled = false
+        self.foldRibbonView.lineManager = lineManager
         // Property default assignment skips didSet — paint chrome colors now so the
         // gutter never appears unstyled (or DefaultTheme near-black) on first layout.
         gutterBackgroundView.backgroundColor = theme.gutterBackgroundColor
@@ -191,6 +213,7 @@ final class LayoutManager {
         gutterBackgroundView.hairlineWidth = theme.gutterHairlineWidth
         gutterSelectionBackgroundView.backgroundColor = theme.selectedLinesGutterBackgroundColor
         lineSelectionBackgroundView.backgroundColor = theme.selectedLineBackgroundColor
+        applyFoldRibbonTheme()
         self.updateShownViews()
         let memoryWarningNotificationName = UIApplication.didReceiveMemoryWarningNotification
         NotificationCenter.default.addObserver(self, selector: #selector(clearMemory), name: memoryWarningNotificationName, object: nil)
@@ -303,6 +326,7 @@ extension LayoutManager {
     func layoutIfNeeded() {
         if needsLayout {
             needsLayout = false
+            foldingController?.recomputeIfNeeded()
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             layoutGutter()
@@ -334,6 +358,15 @@ extension LayoutManager {
         gutterContainerView.frame = CGRect(x: viewport.minX, y: 0, width: totalGutterWidth, height: contentSize.height)
         gutterBackgroundView.frame = CGRect(x: 0, y: viewport.minY, width: totalGutterWidth, height: viewport.height)
         lineNumbersContainerView.frame = CGRect(x: 0, y: 0, width: totalGutterWidth, height: contentSize.height)
+        if showFoldingRibbon {
+            let ribbonWidth = gutterWidthService.foldingRibbonWidth
+            let ribbonFrame = CGRect(x: totalGutterWidth - ribbonWidth, y: 0, width: ribbonWidth, height: contentSize.height)
+            foldRibbonView.frame = ribbonFrame
+            foldRibbonView.textContainerInsetTop = textContainerInset.top
+            gutterContainerView.interactiveRect = ribbonFrame
+        } else {
+            gutterContainerView.interactiveRect = nil
+        }
     }
 
     private func layoutLineSelection() {
@@ -446,6 +479,16 @@ extension LayoutManager {
         var maxY = layoutBounds.minY
         var contentOffsetAdjustmentY: CGFloat = 0
         while let line = nextLine, maxY < layoutBounds.maxY, constrainingLineWidth > 0 {
+            // A folded-away line contributes zero height and no views; skip it entirely rather
+            // than typesetting it, and move on to the next row without advancing maxY. (The
+            // *starting* line for this walk already skips hidden lines for free, since
+            // `line(containingYOffset:)` can never land inside a zero-height range — but this
+            // walk advances row-by-row from there, so hidden lines in the middle of the visible
+            // range need this explicit check.)
+            if let foldingController, foldingController.isLineHidden(line.id) {
+                nextLine = line.index < lineManager.lineCount - 1 ? lineManager.line(atRow: line.index + 1) : nil
+                continue
+            }
             appearedLineIDs.insert(line.id)
             // Prepare to line controller to display text.
             let lineLocalViewport = CGRect(x: 0, y: maxY, width: layoutBounds.width, height: layoutBounds.maxY - maxY)
@@ -457,12 +500,16 @@ extension LayoutManager {
             // Layout line fragments ("sublines") in the line until we have filled the viewport.
             let lineYPosition = line.yPosition
             let lineFragmentControllers = lineController.lineFragmentControllers(in: layoutBounds)
-            for lineFragmentController in lineFragmentControllers {
+            let collapsedFold = foldingController?.collapsedFold(withHeaderLineID: line.id)
+            for (lineFragmentIndex, lineFragmentController) in lineFragmentControllers.enumerated() {
                 let lineFragment = lineFragmentController.lineFragment
                 var lineFragmentFrame: CGRect = .zero
                 appearedLineFragmentIDs.insert(lineFragment.id)
                 lineFragmentController.highlightedRangeFragments = highlightService.highlightedRangeFragments(for: lineFragment,
                                                                                                               inLineWithID: line.id)
+                lineFragmentController.foldPlaceholderText = (collapsedFold != nil && lineFragmentIndex == lineFragmentControllers.count - 1)
+                    ? "\u{22EF}"
+                    : nil
                 layoutLineFragmentView(for: lineFragmentController, lineYPosition: lineYPosition, lineFragmentFrame: &lineFragmentFrame)
                 maxY = lineFragmentFrame.maxY
             }
@@ -565,6 +612,7 @@ extension LayoutManager {
         gutterBackgroundView.removeFromSuperview()
         gutterSelectionBackgroundView.removeFromSuperview()
         lineNumbersContainerView.removeFromSuperview()
+        foldRibbonView.removeFromSuperview()
         let allLineNumberKeys = lineFragmentViewReuseQueue.visibleViews.keys
         lineFragmentViewReuseQueue.enqueueViews(withKeys: Set(allLineNumberKeys))
         // Add views to view hierarchy
@@ -574,14 +622,22 @@ extension LayoutManager {
         gutterContainerView.addSubview(gutterBackgroundView)
         gutterContainerView.addSubview(gutterSelectionBackgroundView)
         gutterContainerView.addSubview(lineNumbersContainerView)
+        gutterContainerView.addSubview(foldRibbonView)
     }
 
     private func updateShownViews() {
         let selectedLength = selectedRange?.length ?? 0
         gutterBackgroundView.isHidden = !showLineNumbers
         lineNumbersContainerView.isHidden = !showLineNumbers
+        foldRibbonView.isHidden = !showFoldingRibbon
         gutterSelectionBackgroundView.isHidden = !lineSelectionDisplayType.shouldShowLineSelection || !showLineNumbers || !isEditing
         lineSelectionBackgroundView.isHidden = !lineSelectionDisplayType.shouldShowLineSelection || !isEditing || selectedLength > 0
+    }
+
+    private func applyFoldRibbonTheme() {
+        foldRibbonView.markerColor = theme.lineNumberColor
+        foldRibbonView.collapsedMarkerColor = theme.selectedLinesGutterBackgroundColor.withAlphaComponent(1)
+        foldRibbonView.chevronColor = theme.textColor
     }
 }
 

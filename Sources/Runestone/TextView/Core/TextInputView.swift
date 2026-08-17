@@ -22,6 +22,7 @@ protocol TextInputViewDelegate: AnyObject {
     func textInputViewIsSelectable(_ view: TextInputView) -> Bool
     func textInputViewIsEditable(_ view: TextInputView) -> Bool
     func textInputView(_ view: TextInputView, didRequestSelectionInteraction enabled: Bool)
+    func textInputViewDidRequestToggleFindPanel(_ view: TextInputView, mode: FindPanelMode)
 }
 
 // swiftlint:disable:next type_body_length
@@ -42,8 +43,9 @@ final class TextInputView: UIView, UITextInput {
             //
             //    A
             // Placing the character on the second line, which is empty, and double tapping several times on the empty line to select text will cause the editor to crash. To work around this we take the non-negative value of the selected range. Last tested on August 30th, 2022.
-            let newRange = (newValue as? IndexedRange)?.range.nonNegativeLength
-            if newRange != _selectedRange {
+                let newRange = (newValue as? IndexedRange)?.range.nonNegativeLength
+                let sanitizedRange = sanitizedSelection(newRange)
+                if sanitizedRange != _selectedRange {
                 notifyDelegateAboutSelectionChangeInLayoutSubviews = true
                 // The logic for determining whether or not to notify the input delegate is based on advice provided by Alexander Blach, developer of Textastic.
                 var shouldNotifyInputDelegate = false
@@ -65,7 +67,7 @@ final class TextInputView: UIView, UITextInput {
                 if shouldNotifyInputDelegate {
                     inputDelegate?.selectionWillChange(self)
                 }
-                _selectedRange = newRange
+                _selectedRange = sanitizedRange
                 if shouldNotifyInputDelegate {
                     inputDelegate?.selectionDidChange(self)
                 }
@@ -165,6 +167,17 @@ final class TextInputView: UIView, UITextInput {
             }
         }
     }
+    var isLineFoldingEnabled = false {
+        didSet {
+            if isLineFoldingEnabled != oldValue {
+                foldingController.isEnabled = isLineFoldingEnabled
+                gutterWidthService.showFoldingRibbon = isLineFoldingEnabled
+                layoutManager.showFoldingRibbon = isLineFoldingEnabled
+                layoutManager.setNeedsLayout()
+                setNeedsLayout()
+            }
+        }
+    }
     var lineSelectionDisplayType: LineSelectionDisplayType {
         get {
             layoutManager.lineSelectionDisplayType
@@ -231,6 +244,17 @@ final class TextInputView: UIView, UITextInput {
                 layoutManager.setNeedsLayout()
                 layoutManager.setNeedsDisplayOnLines()
                 setNeedsLayout()
+            }
+        }
+    }
+    var warningCharacters: Set<Character> {
+        get {
+            invisibleCharacterConfiguration.warningCharacters
+        }
+        set {
+            if newValue != invisibleCharacterConfiguration.warningCharacters {
+                invisibleCharacterConfiguration.warningCharacters = newValue
+                layoutManager.setNeedsDisplayOnLines()
             }
         }
     }
@@ -423,21 +447,32 @@ final class TextInputView: UIView, UITextInput {
             }
         }
     }
+    var showReformattingGuideShading: Bool {
+        get {
+            pageGuideController.guideView.showReformattingGuideShading
+        }
+        set {
+            pageGuideController.guideView.showReformattingGuideShading = newValue
+            setNeedsLayout()
+        }
+    }
     private var estimatedLineHeight: CGFloat {
         theme.font.totalLineHeight * lineHeightMultiplier
     }
     var highlightedRanges: [HighlightedRange] {
         get {
-            highlightService.highlightedRanges
+            emphasisManager.userHighlightedRanges
         }
         set {
-            if newValue != highlightService.highlightedRanges {
-                highlightService.highlightedRanges = newValue
+            if newValue != emphasisManager.userHighlightedRanges {
+                emphasisManager.userHighlightedRanges = newValue
                 layoutManager.setNeedsLayout()
                 setNeedsLayout()
             }
         }
     }
+    let emphasisManager = EmphasisManager()
+    var bracketPairEmphasis: BracketPairEmphasis?
 
     // MARK: - Contents
     weak var delegate: TextInputViewDelegate?
@@ -508,8 +543,9 @@ final class TextInputView: UIView, UITextInput {
             _selectedRange
         }
         set {
-            if newValue != _selectedRange {
-                _selectedRange = newValue
+            let sanitizedRange = sanitizedSelection(newValue)
+            if sanitizedRange != _selectedRange {
+                _selectedRange = sanitizedRange
                 // Defer host notification — callers often assign selection during
                 // setState / updateNSView / layout, and sync callbacks re-enter AppKit.
                 DispatchQueue.main.async { [weak self] in
@@ -525,6 +561,13 @@ final class TextInputView: UIView, UITextInput {
                 layoutManager.selectedRange = _selectedRange
                 layoutManager.setNeedsLayoutLineSelection()
                 selectionOverlayController.selectionDidChange()
+                if let location = _selectedRange?.location {
+                    bracketMatchingController.characterPairs = characterPairs
+                    bracketMatchingController.emphasisStyle = bracketPairEmphasis
+                    bracketMatchingController.emphasizePairs(at: location)
+                } else {
+                    bracketMatchingController.clearEmphasis()
+                }
                 setNeedsLayout()
             }
         }
@@ -561,6 +604,7 @@ final class TextInputView: UIView, UITextInput {
                 indentController.stringView = stringView
                 lineMovementController.stringView = stringView
                 customTokenizer.stringView = stringView
+                foldingController.stringView = stringView
             }
         }
     }
@@ -575,6 +619,8 @@ final class TextInputView: UIView, UITextInput {
                 selectionRectService.lineManager = lineManager
                 highlightService.lineManager = lineManager
                 customTokenizer.lineManager = lineManager
+                foldingController.lineManager = lineManager
+                foldingController.setNeedsRecompute()
             }
         }
     }
@@ -618,7 +664,9 @@ final class TextInputView: UIView, UITextInput {
     private let caretRectService: CaretRectService
     private let selectionRectService: SelectionRectService
     private var selectionOverlayController: SelectionOverlayController!
+    private let bracketMatchingController: BracketMatchingController
     private let highlightService: HighlightService
+    private let foldingController: FoldingController
     private let invisibleCharacterConfiguration = InvisibleCharacterConfiguration()
     var imeMarkedRange: NSRange? {
         get {
@@ -648,6 +696,7 @@ final class TextInputView: UIView, UITextInput {
         self.theme = theme
         lineManager = LineManager(stringView: stringView)
         highlightService = HighlightService(lineManager: lineManager)
+        bracketMatchingController = BracketMatchingController(stringView: stringView)
         lineControllerFactory = LineControllerFactory(stringView: stringView,
                                                       highlightService: highlightService,
                                                       invisibleCharacterConfiguration: invisibleCharacterConfiguration)
@@ -665,6 +714,10 @@ final class TextInputView: UIView, UITextInput {
                                                     contentSizeService: contentSizeService,
                                                     gutterWidthService: gutterWidthService,
                                                     caretRectService: caretRectService)
+        foldingController = FoldingController(lineManager: lineManager,
+                                              stringView: stringView,
+                                              lineControllerStorage: lineControllerStorage,
+                                              contentSizeService: contentSizeService)
         layoutManager = LayoutManager(lineManager: lineManager,
                                       languageMode: languageMode,
                                       stringView: stringView,
@@ -684,6 +737,22 @@ final class TextInputView: UIView, UITextInput {
                                                         stringView: stringView,
                                                         lineControllerStorage: lineControllerStorage)
         super.init(frame: .zero)
+        emphasisManager.highlightService = highlightService
+        emphasisManager.onEmphasesChanged = { [weak self] in
+            guard let self else {
+                return
+            }
+            self.layoutManager.setNeedsLayout()
+            self.setNeedsLayout()
+        }
+        emphasisManager.onSelectInDocument = { [weak self] range in
+            self?.selection = range
+        }
+        bracketMatchingController.emphasisManager = emphasisManager
+        layoutManager.foldingController = foldingController
+        lineMovementController.foldingController = foldingController
+        caretRectService.foldingController = foldingController
+        customTokenizer.foldingController = foldingController
         selectionOverlayController = SelectionOverlayController(textInputView: self,
                                                                 caretRectService: caretRectService,
                                                                 selectionRectService: selectionRectService)
@@ -698,6 +767,7 @@ final class TextInputView: UIView, UITextInput {
         editMenuController.delegate = self
         setupContentSizeObserver()
         setupGutterWidthObserver()
+        setupFoldingObserver()
     }
 
     override var acceptsFirstResponder: Bool {
@@ -997,6 +1067,7 @@ private extension TextInputView {
         pageGuideController.guideView.hairlineWidth = theme.pageGuideHairlineWidth
         pageGuideController.guideView.hairlineColor = theme.pageGuideHairlineColor
         pageGuideController.guideView.backgroundColor = theme.pageGuideBackgroundColor
+        pageGuideController.guideView.shadingColor = theme.pageGuideBackgroundColor.withAlphaComponent(0.35)
         selectionHighlightColor = theme.selectionColor
         layoutManager.theme = theme
     }
@@ -1100,6 +1171,30 @@ private extension TextInputView {
                 self.delegate?.textInputViewDidChangeGutterWidth(self)
             }
         }.store(in: &cancellables)
+    }
+
+    private func setupFoldingObserver() {
+        foldingController.didChangeFolds.sink { [weak self] in
+            self?.adjustSelectionForFoldingIfNeeded()
+        }.store(in: &cancellables)
+    }
+
+    private func sanitizedSelection(_ range: NSRange?) -> NSRange? {
+        guard let range, foldingController.isEnabled else {
+            return range
+        }
+        return foldingController.adjustedSelection(range)
+    }
+
+    private func adjustSelectionForFoldingIfNeeded() {
+        guard let currentSelection = _selectedRange else {
+            return
+        }
+        let adjustedSelection = foldingController.adjustedSelection(currentSelection)
+        guard adjustedSelection != currentSelection else {
+            return
+        }
+        selection = adjustedSelection
     }
 }
 
@@ -1420,6 +1515,7 @@ extension TextInputView {
         if didAddOrRemoveLines {
             gutterWidthService.invalidateLineNumberWidth()
         }
+        foldingController.setNeedsRecompute()
         layoutManager.setNeedsLayout()
         setNeedsLayout()
     }

@@ -17,14 +17,33 @@ final class PageGuideView: UIView {
             hairlineView.backgroundColor = newValue
         }
     }
+    var shadingColor: UIColor? {
+        get {
+            shadingView.backgroundColor
+        }
+        set {
+            shadingView.backgroundColor = newValue
+        }
+    }
+
+    var showReformattingGuideShading = true {
+        didSet {
+            if showReformattingGuideShading != oldValue {
+                setNeedsDisplay()
+            }
+        }
+    }
 
     private let hairlineView = UIView()
+    private let shadingView = UIView()
 
     override init(frame: CGRect) {
         self.hairlineWidth = hairlineLength
         super.init(frame: frame)
         isUserInteractionEnabled = false
         hairlineView.isUserInteractionEnabled = false
+        shadingView.isUserInteractionEnabled = false
+        addSubview(shadingView)
         addSubview(hairlineView)
     }
 
@@ -35,5 +54,11 @@ final class PageGuideView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         hairlineView.frame = CGRect(x: 0, y: 0, width: hairlineWidth, height: bounds.height)
+        if showReformattingGuideShading {
+            shadingView.isHidden = false
+            shadingView.frame = CGRect(x: hairlineWidth, y: 0, width: max(bounds.width - hairlineWidth, 0), height: bounds.height)
+        } else {
+            shadingView.isHidden = true
+        }
     }
 }

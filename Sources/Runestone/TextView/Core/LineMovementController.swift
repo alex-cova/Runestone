@@ -5,6 +5,7 @@ final class LineMovementController {
     var lineManager: LineManager
     var stringView: StringView
     let lineControllerStorage: LineControllerStorage
+    weak var foldingController: FoldingController?
 
     init(lineManager: LineManager, stringView: StringView, lineControllerStorage: LineControllerStorage) {
         self.lineManager = lineManager
@@ -39,6 +40,25 @@ private extension LineMovementController {
         let naiveNewLocation = location + offset
         guard naiveNewLocation >= 0 && naiveNewLocation <= stringView.string.length else {
             return location
+        }
+        // Skip over an entire folded (hidden) region in one step, the same way real editors treat
+        // a collapsed fold as a single atomic unit for arrow-key movement, rather than letting the
+        // caret tunnel through its individually-hidden characters one grapheme at a time.
+        if let foldingController,
+           let hiddenLine = lineManager.line(containingCharacterAt: naiveNewLocation),
+           foldingController.isLineHidden(hiddenLine.id),
+           let fold = foldingController.collapsedFold(hidingLineID: hiddenLine.id) {
+            if offset < 0 {
+                let headerLine = lineManager.line(atRow: fold.lineRange.lowerBound)
+                return headerLine.location + headerLine.data.length
+            } else {
+                let afterRow = fold.lineRange.upperBound + 1
+                if afterRow < lineManager.lineCount {
+                    return lineManager.line(atRow: afterRow).location
+                } else {
+                    return stringView.string.length
+                }
+            }
         }
         guard naiveNewLocation > 0 && naiveNewLocation < stringView.string.length else {
             return naiveNewLocation
@@ -104,7 +124,10 @@ private extension LineMovementController {
             // We've reached the beginning of the document so we move to the first character.
             return 0
         }
-        let previousLine = lineManager.line(atRow: lineIndex - 1)
+        var previousLine = lineManager.line(atRow: lineIndex - 1)
+        while let foldingController, foldingController.isLineHidden(previousLine.id), previousLine.index > 0 {
+            previousLine = lineManager.line(atRow: previousLine.index - 1)
+        }
         let numberOfLineFragments = numberOfLineFragments(in: previousLine)
         let newLineFragmentIndex = numberOfLineFragments - 1
         return locationForMovingUpwards(lineOffset: remainingLineOffset - 1,
@@ -128,7 +151,10 @@ private extension LineMovementController {
             // We've reached the end of the document so we move to the last character.
             return line.location + line.data.totalLength
         }
-        let nextLine = lineManager.line(atRow: lineIndex + 1)
+        var nextLine = lineManager.line(atRow: lineIndex + 1)
+        while let foldingController, foldingController.isLineHidden(nextLine.id), nextLine.index < lineManager.lineCount - 1 {
+            nextLine = lineManager.line(atRow: nextLine.index + 1)
+        }
         return locationForMovingDownwards(lineOffset: remainingLineOffset - 1, fromLocation: location, inLineFragmentAt: 0, of: nextLine)
     }
 

@@ -4,6 +4,7 @@ import AppKit
 final class TextInputStringTokenizer: UITextInputStringTokenizer {
     var lineManager: LineManager
     var stringView: StringView
+    weak var foldingController: FoldingController?
     // Used to ensure we can workaround bug where multi-stage input, like when entering Korean text
     // does not work properly. If we do not treat navigation between word boundies as a special case then
     // navigating with Shift + Option + Arrow Keys followed by Shift + Arrow Keys will not work correctly.
@@ -54,8 +55,8 @@ private extension TextInputStringTokenizer {
         guard let indexedPosition = position as? IndexedPosition else {
             return false
         }
-        let location = indexedPosition.index
-        guard let line = lineManager.line(containingCharacterAt: location) else {
+        let location = adjustedLocation(forNavigation: indexedPosition.index, direction: direction)
+        guard let line = visibleLine(containingCharacterAt: location) else {
             return false
         }
         let lineLocation = line.location
@@ -83,8 +84,8 @@ private extension TextInputStringTokenizer {
         guard let indexedPosition = position as? IndexedPosition else {
             return nil
         }
-        let location = indexedPosition.index
-        guard let line = lineManager.line(containingCharacterAt: location) else {
+        let location = adjustedLocation(forNavigation: indexedPosition.index, direction: direction)
+        guard let line = visibleLine(containingCharacterAt: location) else {
             return nil
         }
         let lineController = lineControllerStorage.getOrCreateLineController(for: line)
@@ -136,6 +137,7 @@ private extension TextInputStringTokenizer {
             } else {
                 var currentIndex = location
                 while currentIndex < stringView.string.length {
+                    currentIndex = adjustedLocation(forNavigation: currentIndex, direction: direction)
                     guard let currentCharacter = stringView.character(at: currentIndex) else {
                         break
                     }
@@ -152,6 +154,7 @@ private extension TextInputStringTokenizer {
             } else {
                 var currentIndex = location - 1
                 while currentIndex > 0 {
+                    currentIndex = adjustedLocation(forNavigation: currentIndex, direction: direction)
                     guard let currentCharacter = stringView.character(at: currentIndex) else {
                         break
                     }
@@ -256,6 +259,37 @@ private extension TextInputStringTokenizer {
                 return nil
             }
         }
+    }
+}
+
+private extension TextInputStringTokenizer {
+    private func adjustedLocation(forNavigation location: Int, direction: UITextDirection) -> Int {
+        guard let foldingController else {
+            return location
+        }
+        if direction.isForward {
+            return foldingController.visibleLocationForForwardNavigation(from: location)
+        } else {
+            return foldingController.visibleLocationForBackwardNavigation(from: location)
+        }
+    }
+
+    private func visibleLine(containingCharacterAt location: Int) -> DocumentLineNode? {
+        guard location >= 0 else {
+            return nil
+        }
+        let safeLocation = min(location, max(stringView.string.length - 1, 0))
+        guard stringView.string.length > 0 else {
+            return nil
+        }
+        guard let line = lineManager.line(containingCharacterAt: safeLocation) else {
+            return nil
+        }
+        if let foldingController, foldingController.isLineHidden(line.id) {
+            return foldingController.lastVisibleLine(atOrBeforeRow: line.index)
+                ?? foldingController.firstVisibleLine(atOrAfterRow: line.index)
+        }
+        return line
     }
 }
 

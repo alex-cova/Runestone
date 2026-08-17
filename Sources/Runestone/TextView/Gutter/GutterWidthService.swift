@@ -23,14 +23,31 @@ final class GutterWidthService {
             }
         }
     }
+    var showFoldingRibbon = false {
+        didSet {
+            if showFoldingRibbon != oldValue {
+                sendGutterWidthUpdatedIfNeeded()
+            }
+        }
+    }
+    var foldingRibbonWidth: CGFloat = 9 {
+        didSet {
+            if foldingRibbonWidth != oldValue {
+                sendGutterWidthUpdatedIfNeeded()
+            }
+        }
+    }
     var gutterLeadingPadding: CGFloat = 0
     var gutterTrailingPadding: CGFloat = 0
     var gutterWidth: CGFloat {
+        var width: CGFloat = 0
         if showLineNumbers {
-            return lineNumberWidth + gutterLeadingPadding + gutterTrailingPadding
-        } else {
-            return 0
+            width += lineNumberWidth + gutterLeadingPadding + gutterTrailingPadding
         }
+        if showFoldingRibbon {
+            width += foldingRibbonWidth
+        }
+        return width
     }
     var gutterMinimumCharacterCount: Int? {
         didSet {

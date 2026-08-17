@@ -274,6 +274,35 @@ open class TextView: UIScrollView {
             textInputView.showLineNumbers = newValue
         }
     }
+    /// Whether code folding is enabled. When on, a folding ribbon is shown in the gutter (using
+    /// indentation to determine foldable regions) and collapsed regions are hidden — their lines
+    /// simply take up zero height, so scrolling and hit-testing already skip them for free — with
+    /// the header line of a collapsed region showing a "⋯" placeholder. Off by default.
+    public var isLineFoldingEnabled: Bool {
+        get {
+            textInputView.isLineFoldingEnabled
+        }
+        set {
+            textInputView.isLineFoldingEnabled = newValue
+        }
+    }
+    /// Manages grouped text emphases such as find matches, bracket pairs, and diagnostics.
+    public var emphasisManager: EmphasisManager {
+        textInputView.emphasisManager
+    }
+    /// When set, matching bracket pairs are emphasized as the caret moves.
+    public var bracketPairEmphasis: BracketPairEmphasis? {
+        get {
+            textInputView.bracketPairEmphasis
+        }
+        set {
+            textInputView.bracketPairEmphasis = newValue
+        }
+    }
+    /// Whether the built-in find panel is visible.
+    public var isFindPanelVisible: Bool {
+        findPanelController.isVisible
+    }
     /// Enable to show highlight the selected lines. The selection is only shown in the gutter when multiple lines are selected.
     public var lineSelectionDisplayType: LineSelectionDisplayType {
         get {
@@ -639,6 +668,13 @@ open class TextView: UIScrollView {
     private let keyboardObserver = KeyboardObserver()
     private let highlightNavigationController = HighlightNavigationController()
     private var textSearchingHelper = UITextSearchingHelper()
+    private lazy var findPanelController: FindPanelController = {
+        let controller = FindPanelController(target: self)
+        controller.emphasisManager = textInputView.emphasisManager
+        addFixedOverlaySubview(controller.panelView)
+        return controller
+    }()
+    private var findPanelTopInset: CGFloat = 0
     // Store a reference to instances of the private type UITextRangeAdjustmentGestureRecognizer in order to track adjustments
     // to the selected text range and scroll the text view when the handles approach the bottom.
     // The approach is based on the one described in Steve Shephard's blog post "Adventures with UITextInteraction".
@@ -683,6 +719,7 @@ open class TextView: UIScrollView {
         minimapView.isHidden = true
         minimapView.applyTheme()
         addFixedOverlaySubview(minimapView)
+        _ = findPanelController.panelView
         tapGestureRecognizer.delegate = self
         tapGestureRecognizer.addTarget(self, action: #selector(handleTap(_:)))
         addGestureRecognizer(tapGestureRecognizer)
@@ -735,6 +772,11 @@ open class TextView: UIScrollView {
             minimapView.frame = CGRect(x: bounds.maxX - minimapWidth, y: 0, width: minimapWidth, height: bounds.height)
             minimapView.setNeedsDisplayForContentChange()
         }
+        let panelHeight = findPanelController.isVisible ? findPanelController.panelHeight : 0
+        findPanelController.panelView.frame = CGRect(x: 0,
+                                                     y: bounds.height - panelHeight,
+                                                     width: bounds.width - reservedMinimapWidth,
+                                                     height: panelHeight)
     }
 
     /// Forwards to the base scroll handling, then keeps the minimap's viewport indicator in sync.
@@ -1040,6 +1082,44 @@ open class TextView: UIScrollView {
     /// - Parameter index: Index of highlighted range to select.
     public func selectHighlightedRange(at index: Int) {
         highlightNavigationController.selectRange(at: index)
+    }
+
+    /// Shows the built-in find panel.
+    public func showFindPanel(mode: FindPanelMode = .find) {
+        findPanelController.show(mode: mode)
+        setNeedsLayout()
+    }
+
+    /// Hides the built-in find panel.
+    public func hideFindPanel() {
+        findPanelController.hide()
+        setNeedsLayout()
+    }
+
+    /// Toggles the built-in find panel. Bound to ⌘F / ⌥⌘F when the editor is focused.
+    public func toggleFindPanel(mode: FindPanelMode = .find) {
+        findPanelController.toggle(mode: mode)
+        setNeedsLayout()
+    }
+
+    /// Characters drawn with a warning border even when ordinary invisible-character rendering is off.
+    public var warningCharacters: Set<Character> {
+        get {
+            textInputView.warningCharacters
+        }
+        set {
+            textInputView.warningCharacters = newValue
+        }
+    }
+
+    /// When the page guide is shown, shades the region to the right of the guide column.
+    public var showReformattingGuideShading: Bool {
+        get {
+            textInputView.showReformattingGuideShading
+        }
+        set {
+            textInputView.showReformattingGuideShading = newValue
+        }
     }
 
     /// Synchronously displays the visible lines. This can be used to immediately update the visible lines after setting the theme. Use with caution as this redisplaying the visible lines can be a costly operation.
@@ -1422,6 +1502,7 @@ extension TextView: TextInputViewDelegate {
         if showMinimap {
             minimapView.setNeedsDisplayForContentChange()
         }
+        findPanelController.refreshIfVisible()
         editorDelegate?.textViewDidChange(self)
     }
 
@@ -1513,6 +1594,10 @@ extension TextView: TextInputViewDelegate {
             textInputView.setSelectionOverlayEnabled(true)
         }
     }
+
+    func textInputViewDidRequestToggleFindPanel(_ view: TextInputView, mode: FindPanelMode) {
+        toggleFindPanel(mode: mode)
+    }
 }
 
 // MARK: - HighlightNavigationControllerDelegate
@@ -1534,6 +1619,42 @@ extension TextView: HighlightNavigationControllerDelegate {
         case .disabled:
             break
         }
+    }
+}
+
+// MARK: - FindPanelTarget
+extension TextView: FindPanelTarget {
+    var findPanelTargetView: NSView {
+        self
+    }
+
+    var findSelection: NSRange? {
+        textInputView.selection
+    }
+
+    func selectedTextForFind() -> String? {
+        guard let range = textInputView.selection, range.length > 0 else {
+            return nil
+        }
+        return textInputView.string.substring(with: range)
+    }
+
+    func setSelectedRange(_ range: NSRange) {
+        textInputView.selection = range
+    }
+
+    func findPanelWillShow(panelHeight: CGFloat) {
+        findPanelTopInset = panelHeight
+        setNeedsLayout()
+    }
+
+    func findPanelWillHide(panelHeight: CGFloat) {
+        findPanelTopInset = 0
+        setNeedsLayout()
+    }
+
+    func findPanelModeDidChange(to mode: FindPanelMode) {
+        setNeedsLayout()
     }
 }
 

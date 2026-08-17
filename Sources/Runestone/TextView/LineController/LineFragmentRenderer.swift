@@ -1,5 +1,6 @@
 import Foundation
 import CoreText
+import AppKit
 
 protocol LineFragmentRendererDelegate: AnyObject {
     func string(in lineFragmentRenderer: LineFragmentRenderer) -> String?
@@ -18,6 +19,11 @@ final class LineFragmentRenderer {
     var markedTextBackgroundColor: UIColor = .systemFill
     var markedTextBackgroundCornerRadius: CGFloat = 0
     var highlightedRangeFragments: [HighlightedRangeFragment] = []
+    /// Text drawn right after this fragment's content, used to indicate a collapsed fold whose
+    /// header line is this fragment's line. `nil` on every other line fragment.
+    var foldPlaceholderText: String?
+    var foldPlaceholderColor: UIColor = .secondaryLabelColor
+    var foldPlaceholderBackgroundColor: UIColor = .quaternaryLabelColor
 
     private var showInvisibleCharacters: Bool {
         invisibleCharacterConfiguration.showTabs
@@ -34,8 +40,9 @@ final class LineFragmentRenderer {
     func draw(to context: CGContext, inCanvasOfSize canvasSize: CGSize) {
         drawHighlightedRanges(to: context, inCanvasOfSize: canvasSize)
         drawMarkedRange(to: context)
-        drawInvisibleCharacters()
+        drawInvisibleCharacters(to: context)
         drawText(to: context)
+        drawFoldPlaceholder(to: context)
     }
 }
 
@@ -46,26 +53,73 @@ private extension LineFragmentRenderer {
         }
         context.saveGState()
         for highlightedRange in highlightedRangeFragments {
-            let startX = CTLineGetOffsetForStringIndex(lineFragment.line, highlightedRange.range.lowerBound, nil)
-            let endX: CGFloat
-            if shouldHighlightLineEnding(for: highlightedRange) {
-                endX = canvasSize.width
-            } else {
-                endX = CTLineGetOffsetForStringIndex(lineFragment.line, highlightedRange.range.upperBound, nil)
-            }
-            let rect = CGRect(x: startX, y: 0, width: endX - startX, height: lineFragment.scaledSize.height)
-            let roundedCorners = highlightedRange.roundedCorners
-            context.setFillColor(highlightedRange.color.cgColor)
-            if !roundedCorners.isEmpty && highlightedRange.cornerRadius > 0 {
-                let cornerRadii = CGSize(width: highlightedRange.cornerRadius, height: highlightedRange.cornerRadius)
-                let bezierPath = UIBezierPath(roundedRect: rect, byRoundingCorners: roundedCorners, cornerRadii: cornerRadii)
-                context.addPath(bezierPath.cgPath)
-                context.fillPath()
-            } else {
-                context.fill(rect)
+            switch highlightedRange.style {
+            case .standard:
+                drawStandardHighlight(highlightedRange, in: context, canvasSize: canvasSize)
+            case .underline:
+                drawUnderlineHighlight(highlightedRange, in: context)
+            case .outline(_, let fill):
+                drawOutlineHighlight(highlightedRange, in: context, fill: fill)
             }
         }
         context.restoreGState()
+    }
+
+    private func drawStandardHighlight(_ highlightedRange: HighlightedRangeFragment, in context: CGContext, canvasSize: CGSize) {
+        let startX = CTLineGetOffsetForStringIndex(lineFragment.line, highlightedRange.range.lowerBound, nil)
+        let endX: CGFloat
+        if shouldHighlightLineEnding(for: highlightedRange) {
+            endX = canvasSize.width
+        } else {
+            endX = CTLineGetOffsetForStringIndex(lineFragment.line, highlightedRange.range.upperBound, nil)
+        }
+        let rect = CGRect(x: startX, y: 0, width: endX - startX, height: lineFragment.scaledSize.height)
+        let roundedCorners = highlightedRange.roundedCorners
+        let fillColor = highlightedRange.isInactive ? highlightedRange.color.withAlphaComponent(0.25) : highlightedRange.color
+        context.setFillColor(fillColor.cgColor)
+        if !roundedCorners.isEmpty && highlightedRange.cornerRadius > 0 {
+            let cornerRadii = CGSize(width: highlightedRange.cornerRadius, height: highlightedRange.cornerRadius)
+            let bezierPath = UIBezierPath(roundedRect: rect, byRoundingCorners: roundedCorners, cornerRadii: cornerRadii)
+            context.addPath(bezierPath.cgPath)
+            context.fillPath()
+        } else {
+            context.fill(rect)
+        }
+    }
+
+    private func drawUnderlineHighlight(_ highlightedRange: HighlightedRangeFragment, in context: CGContext) {
+        let startX = CTLineGetOffsetForStringIndex(lineFragment.line, highlightedRange.range.lowerBound, nil)
+        let endX = CTLineGetOffsetForStringIndex(lineFragment.line, highlightedRange.range.upperBound, nil)
+        let y = lineFragment.scaledSize.height - 2
+        context.setStrokeColor(highlightedRange.color.cgColor)
+        context.setLineWidth(1.2)
+        context.setLineCap(.round)
+        context.move(to: CGPoint(x: startX, y: y))
+        context.addLine(to: CGPoint(x: endX, y: y))
+        context.strokePath()
+    }
+
+    private func drawOutlineHighlight(_ highlightedRange: HighlightedRangeFragment, in context: CGContext, fill: Bool) {
+        let startX = CTLineGetOffsetForStringIndex(lineFragment.line, highlightedRange.range.lowerBound, nil)
+        let endX = CTLineGetOffsetForStringIndex(lineFragment.line, highlightedRange.range.upperBound, nil)
+        let inset: CGFloat = 1
+        let rect = CGRect(x: startX - inset,
+                          y: inset,
+                          width: max(endX - startX + inset * 2, 2),
+                          height: lineFragment.scaledSize.height - inset * 2)
+        let path = CGPath(roundedRect: rect,
+                          cornerWidth: highlightedRange.cornerRadius,
+                          cornerHeight: highlightedRange.cornerRadius,
+                          transform: nil)
+        if fill {
+            context.setFillColor(highlightedRange.color.withAlphaComponent(0.2).cgColor)
+            context.addPath(path)
+            context.fillPath()
+        }
+        context.setStrokeColor(highlightedRange.color.cgColor)
+        context.setLineWidth(0.5)
+        context.addPath(path)
+        context.strokePath()
     }
 
     private func drawMarkedRange(to context: CGContext) {
@@ -87,9 +141,41 @@ private extension LineFragmentRenderer {
         }
     }
 
-    private func drawInvisibleCharacters() {
-        if showInvisibleCharacters, let string = delegate?.string(in: self) {
-            drawInvisibleCharacters(in: string)
+    private func drawFoldPlaceholder(to context: CGContext) {
+        guard let foldPlaceholderText else {
+            return
+        }
+        context.saveGState()
+        let attrs: [NSAttributedString.Key: Any] = [
+            .foregroundColor: foldPlaceholderColor,
+            .font: UIFont.systemFont(ofSize: 11, weight: .medium)
+        ]
+        let size = foldPlaceholderText.size(withAttributes: attrs)
+        let endOfLineX = CGFloat(CTLineGetTypographicBounds(lineFragment.line, nil, nil, nil))
+        let padding: CGFloat = 4
+        let backgroundRect = CGRect(x: endOfLineX + padding,
+                                    y: (lineFragment.scaledSize.height - size.height) / 2 - 1,
+                                    width: size.width + padding * 2,
+                                    height: size.height + 2)
+        let cornerRadius = backgroundRect.height / 2
+        let backgroundPath = CGPath(roundedRect: backgroundRect, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
+        context.setFillColor(foldPlaceholderBackgroundColor.cgColor)
+        context.addPath(backgroundPath)
+        context.fillPath()
+        let textRect = CGRect(x: backgroundRect.minX + padding,
+                              y: (lineFragment.scaledSize.height - size.height) / 2,
+                              width: size.width,
+                              height: size.height)
+        foldPlaceholderText.draw(in: textRect, withAttributes: attrs)
+        context.restoreGState()
+    }
+
+    private func drawInvisibleCharacters(to context: CGContext) {
+        guard let string = delegate?.string(in: self) else {
+            return
+        }
+        if showInvisibleCharacters || !invisibleCharacterConfiguration.warningCharacters.isEmpty {
+            drawInvisibleCharacters(in: string, context: context)
         }
     }
 
@@ -104,11 +190,14 @@ private extension LineFragmentRenderer {
         context.restoreGState()
     }
 
-    private func drawInvisibleCharacters(in string: String) {
+    private func drawInvisibleCharacters(in string: String, context: CGContext) {
         var indexInLineFragment = 0
         for substring in string {
             let indexInLine = lineFragment.visibleRange.location + indexInLineFragment
             indexInLineFragment += substring.utf16.count
+            if invisibleCharacterConfiguration.warningCharacters.contains(substring) {
+                drawWarningBorder(at: .character(indexInLine), in: context)
+            }
             if invisibleCharacterConfiguration.showSpaces && substring == Symbol.Character.space {
                 draw(invisibleCharacterConfiguration.spaceSymbol, at: .character(indexInLine))
             } else if invisibleCharacterConfiguration.showNonBreakingSpaces && substring == Symbol.Character.nonBreakingSpace {
@@ -119,13 +208,28 @@ private extension LineFragmentRenderer {
                 draw(invisibleCharacterConfiguration.lineBreakSymbol, at: .endOfLine)
             } else if invisibleCharacterConfiguration.showSoftLineBreaks && substring == Symbol.Character.lineSeparator {
                 draw(invisibleCharacterConfiguration.softLineBreakSymbol, at: .endOfLine)
+            } else if invisibleCharacterConfiguration.warningCharacters.contains(substring) {
+                draw(String(substring), at: .character(indexInLine), color: invisibleCharacterConfiguration.warningBorderColor)
             }
         }
     }
 
-    private func draw(_ symbol: String, at horizontalPosition: HorizontalPosition) {
+    private func drawWarningBorder(at horizontalPosition: HorizontalPosition, in context: CGContext) {
+        let xPosition = xPosition(for: horizontalPosition)
+        let size = CGSize(width: max(invisibleCharacterConfiguration.font.pointSize * 0.55, 6), height: invisibleCharacterConfiguration.font.pointSize)
+        let rect = CGRect(x: xPosition, y: (lineFragment.scaledSize.height - size.height) / 2, width: size.width, height: size.height)
+        let path = CGPath(roundedRect: rect, cornerWidth: 2, cornerHeight: 2, transform: nil)
+        context.saveGState()
+        context.setStrokeColor(invisibleCharacterConfiguration.warningBorderColor.cgColor)
+        context.setLineWidth(1)
+        context.addPath(path)
+        context.strokePath()
+        context.restoreGState()
+    }
+
+    private func draw(_ symbol: String, at horizontalPosition: HorizontalPosition, color: UIColor? = nil) {
         let attrs: [NSAttributedString.Key: Any] = [
-            .foregroundColor: invisibleCharacterConfiguration.textColor,
+            .foregroundColor: color ?? invisibleCharacterConfiguration.textColor,
             .font: invisibleCharacterConfiguration.font
         ]
         let size = symbol.size(withAttributes: attrs)

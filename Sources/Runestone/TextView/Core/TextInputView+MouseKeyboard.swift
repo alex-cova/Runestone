@@ -249,6 +249,11 @@ private extension TextInputView {
             selectAll(nil)
             return true
         }
+        if characters == "f" {
+            let mode: FindPanelMode = event.modifierFlags.contains(.option) ? .replace : .find
+            delegate?.textInputViewDidRequestToggleFindPanel(self, mode: mode)
+            return true
+        }
         return false
     }
 

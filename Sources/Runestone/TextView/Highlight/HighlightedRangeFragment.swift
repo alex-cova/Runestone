@@ -7,6 +7,8 @@ final class HighlightedRangeFragment: Equatable {
     let containsEnd: Bool
     let color: UIColor
     let cornerRadius: CGFloat
+    let style: HighlightStyle
+    let isInactive: Bool
     var roundedCorners: UIRectCorner {
         if containsStart && containsEnd {
             return .allCorners
@@ -19,12 +21,20 @@ final class HighlightedRangeFragment: Equatable {
         }
     }
 
-    init(range: NSRange, containsStart: Bool, containsEnd: Bool, color: UIColor, cornerRadius: CGFloat) {
+    init(range: NSRange,
+         containsStart: Bool,
+         containsEnd: Bool,
+         color: UIColor,
+         cornerRadius: CGFloat,
+         style: HighlightStyle = .standard,
+         isInactive: Bool = false) {
         self.range = range
         self.containsStart = containsStart
         self.containsEnd = containsEnd
         self.color = color
         self.cornerRadius = cornerRadius
+        self.style = style
+        self.isInactive = isInactive
     }
 }
 
@@ -35,5 +45,7 @@ extension HighlightedRangeFragment {
         && lhs.containsEnd == rhs.containsEnd
         && lhs.color == rhs.color
         && lhs.cornerRadius == rhs.cornerRadius
+        && lhs.style == rhs.style
+        && lhs.isInactive == rhs.isInactive
     }
 }

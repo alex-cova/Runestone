@@ -66,6 +66,17 @@ final class LineFragmentController {
             }
         }
     }
+    var foldPlaceholderText: String? {
+        get {
+            renderer.foldPlaceholderText
+        }
+        set {
+            if newValue != renderer.foldPlaceholderText {
+                renderer.foldPlaceholderText = newValue
+                lineFragmentView?.setNeedsDisplay()
+            }
+        }
+    }
 
     private let renderer: LineFragmentRenderer
 

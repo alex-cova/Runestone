@@ -45,6 +45,10 @@ final class InvisibleCharacterConfiguration {
             }
         }
     }
+    /// Characters that should always be surfaced with a warning border, even when their category
+    /// is not otherwise set to visible (e.g. zero-width spaces, smart quotes).
+    var warningCharacters: Set<Character> = []
+    var warningBorderColor: UIColor = .systemRed
     var lineBreakSymbolSize: CGSize {
         if let lineBreakSymbolSize = _lineBreakSymbolSize {
             return lineBreakSymbolSize
