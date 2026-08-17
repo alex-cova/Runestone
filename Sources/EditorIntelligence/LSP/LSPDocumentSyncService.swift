@@ -1,6 +1,6 @@
 import Foundation
 
-/// Batches document edits and forwards them to a language server sync handler.
+/// Batches document edits and forwards them to language-server sync handlers.
 public actor LSPDocumentSyncService {
     public struct DocumentChange: Sendable {
         public let documentID: DocumentID
@@ -17,17 +17,30 @@ public actor LSPDocumentSyncService {
     public typealias SyncHandler = @Sendable ([DocumentChange]) async -> Void
 
     private let batchIntervalNanoseconds: UInt64
+    private let handlers: LSPDocumentSyncHandlers
     private var pending: [DocumentChange] = []
     private var task: Task<Void, Never>?
-    private let onSync: SyncHandler
+
+    public init(batchInterval: TimeInterval = 0.25, handlers: LSPDocumentSyncHandlers = LSPDocumentSyncHandlers()) {
+        self.batchIntervalNanoseconds = UInt64(batchInterval * 1_000_000_000)
+        self.handlers = handlers
+    }
 
     public init(batchInterval: TimeInterval = 0.25, onSync: @escaping SyncHandler) {
         self.batchIntervalNanoseconds = UInt64(batchInterval * 1_000_000_000)
-        self.onSync = onSync
+        self.handlers = LSPDocumentSyncHandlers(onIncrementalChanges: onSync)
+    }
+
+    public func notifyOpened(_ document: Document, languageID: String, version: Int) async {
+        await handlers.onOpen(document, languageID, version)
+    }
+
+    public func notifyFullChange(_ document: Document, version: Int) async {
+        await handlers.onFullChange(document, version)
     }
 
     public func documentOpened(_ document: Document, languageID: String, version: Int = 0) async {
-        await onSync([])
+        await notifyOpened(document, languageID: languageID, version: version)
     }
 
     public func enqueueChange(documentID: DocumentID, range: LSPRange, text: String) {
@@ -37,6 +50,7 @@ public actor LSPDocumentSyncService {
 
     public func documentClosed(documentID: DocumentID) async {
         await flush()
+        await handlers.onClose(documentID)
     }
 
     private func scheduleFlush() {
@@ -54,6 +68,6 @@ public actor LSPDocumentSyncService {
         }
         let batch = pending
         pending = []
-        await onSync(batch)
+        await handlers.onIncrementalChanges(batch)
     }
 }

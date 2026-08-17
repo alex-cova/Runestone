@@ -41,4 +41,58 @@ final class WorkbenchTests: XCTestCase {
         XCTAssertEqual(adapter.openDocuments.count, 1)
         XCTAssertEqual(adapter.currentDocument?.displayName, "one")
     }
+
+    func testSplitActivePaneAddsSecondPane() {
+        let bench = EditorWorkbench()
+        let originalPaneID = bench.activePaneID
+        let newPane = bench.splitActivePane(edge: .trailing)
+        XCTAssertEqual(bench.panes.count, 2)
+        XCTAssertEqual(bench.activePaneID, newPane.id)
+        XCTAssertNotEqual(bench.activePaneID, originalPaneID)
+    }
+
+    func testClosePaneFallsBackToRemainingPane() {
+        let bench = EditorWorkbench()
+        let firstPaneID = bench.activePaneID
+        let secondPane = bench.splitActivePane(edge: .trailing)
+        bench.closePane(secondPane.id)
+        XCTAssertEqual(bench.panes.count, 1)
+        XCTAssertEqual(bench.activePaneID, firstPaneID)
+    }
+
+    func testRestorationRoundTripPreservesTabsAndSelection() throws {
+        let bench = EditorWorkbench()
+        let docA = WorkbenchDocument(displayName: "a.txt", text: "alpha")
+        let docB = WorkbenchDocument(displayName: "b.txt", text: "beta")
+        bench.openDocument(docA)
+        bench.openDocument(docB)
+        bench.activePane.selectDocument(docA.id)
+
+        let encoded = try JSONEncoder().encode(bench.makeRestorationState())
+        let decoded = try JSONDecoder().decode(EditorRestorationState.self, from: encoded)
+
+        let restored = EditorWorkbench()
+        restored.restore(from: decoded)
+        XCTAssertEqual(restored.panes.count, 1)
+        XCTAssertEqual(restored.activePane.documents.count, 2)
+        XCTAssertEqual(restored.activePane.selectedDocument?.displayName, "a.txt")
+        XCTAssertEqual(restored.activePane.documents.map(\.displayName), ["a.txt", "b.txt"])
+    }
+
+    func testRestorationPreservesSplitLayout() throws {
+        let bench = EditorWorkbench()
+        bench.openDocument(WorkbenchDocument(displayName: "left", text: "L"))
+        let rightPane = bench.splitActivePane(edge: .trailing)
+        bench.openDocument(WorkbenchDocument(displayName: "right", text: "R"), in: rightPane)
+
+        let encoded = try JSONEncoder().encode(bench.makeRestorationState())
+        let decoded = try JSONDecoder().decode(EditorRestorationState.self, from: encoded)
+
+        let restored = EditorWorkbench()
+        restored.restore(from: decoded)
+        XCTAssertEqual(restored.panes.count, 2)
+        XCTAssertEqual(restored.activePane.selectedDocument?.displayName, "right")
+        let leftPane = restored.panes.first { $0.id != restored.activePaneID }
+        XCTAssertEqual(leftPane?.selectedDocument?.displayName, "left")
+    }
 }

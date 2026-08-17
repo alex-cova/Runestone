@@ -55,4 +55,18 @@ public final class EditorTabHistory {
             offset = index
         }
     }
+
+    public func snapshotEntries() -> [UUID] {
+        entries
+    }
+
+    public func snapshotOffset() -> Int {
+        offset
+    }
+
+    public func restore(entries: [UUID], offset: Int) {
+        self.entries = entries
+        self.offset = entries.isEmpty ? 0 : min(max(0, offset), entries.count - 1)
+        suppressRecording = false
+    }
 }

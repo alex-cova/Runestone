@@ -78,17 +78,17 @@ public final class RunestoneWorkbenchEditorAdapter: EditorAdapter {
     }
 
     public func refreshCachedDocuments(emitEvents: Bool = true) {
-        let pane = workbench.activePane
-        let documents = pane.documents.map { $0.makeEIPDocument() }
+        let activePane = workbench.activePane
+        let documents = workbench.allDocuments().map { $0.makeEIPDocument() }
         lock.withLock {
             cachedOpenDocuments = documents
-            liveDocumentID = pane.selectedDocument?.documentID
+            liveDocumentID = activePane.selectedDocument?.documentID
         }
         guard emitEvents else { return }
         for document in documents {
             eventBus.send(.documentChanged(document.id, document.contentSnapshot))
         }
-        if let selected = pane.selectedDocument {
+        if let selected = activePane.selectedDocument {
             let doc = selected.makeEIPDocument()
             eventBus.send(.selectionChanged(doc.id, doc.selection))
             eventBus.send(.cursorMoved(doc.id, doc.cursor))
