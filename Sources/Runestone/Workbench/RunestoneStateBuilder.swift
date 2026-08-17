@@ -1,0 +1,96 @@
+import Foundation
+
+/// Builds a fully prepared ``TextViewState`` off the main thread. Callers must apply on the main queue.
+public enum RunestoneStateBuilder {
+    /// Carries a non-Sendable ``TextViewState`` across queues after background preparation.
+    public final class PreparedState: @unchecked Sendable {
+        public let state: TextViewState
+        public init(_ state: TextViewState) { self.state = state }
+    }
+
+    /// Weak reference box for crossing isolation boundaries with AppKit views.
+    public final class WeakBox<T: AnyObject>: @unchecked Sendable {
+        public weak var value: T?
+        public init(_ value: T?) { self.value = value }
+    }
+
+    /// Holds a non-Sendable value for one-shot main-queue delivery after background work.
+    public final class UncheckedBox<T>: @unchecked Sendable {
+        public let value: T
+        public init(_ value: T) { self.value = value }
+    }
+
+    /// Thread-safe generation counter for cancelling stale background prepares.
+    public final class GenerationGate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+
+        public init() {}
+
+        public var current: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return value
+        }
+
+        @discardableResult
+        public func bump() -> Int {
+            lock.lock()
+            defer { lock.unlock() }
+            value &+= 1
+            return value
+        }
+
+        public func matches(_ expected: Int) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return value == expected
+        }
+    }
+
+    public static func makeState(
+        text: String,
+        theme: Theme = DefaultTheme(),
+        language: TreeSitterLanguage? = nil,
+        languageProvider: TreeSitterLanguageProvider? = nil
+    ) -> PreparedState {
+        let state: TextViewState
+        if let language {
+            state = TextViewState(
+                text: text,
+                theme: theme,
+                language: language,
+                languageProvider: languageProvider
+            )
+        } else {
+            state = TextViewState(text: text, theme: theme)
+        }
+        return PreparedState(state)
+    }
+
+    /// Prepares state on a background queue, then invokes `apply` on the main queue when `isCurrent` is true.
+    public static func prepareAndApply(
+        text: String,
+        theme: Theme,
+        language: TreeSitterLanguage?,
+        languageProvider: TreeSitterLanguageProvider? = nil,
+        generation: Int,
+        isCurrent: @escaping (Int) -> Bool,
+        apply: @escaping (TextViewState) -> Void
+    ) {
+        let isCurrentBox = UncheckedBox(isCurrent)
+        let applyBox = UncheckedBox(apply)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let prepared = makeState(
+                text: text,
+                theme: theme,
+                language: language,
+                languageProvider: languageProvider
+            )
+            DispatchQueue.main.async {
+                guard isCurrentBox.value(generation) else { return }
+                applyBox.value(prepared.state)
+            }
+        }
+    }
+}

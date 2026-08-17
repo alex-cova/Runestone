@@ -42,6 +42,11 @@ let package = Package(
             .process("TextView/Appearance/Theme.xcassets")
         ]),
         .executableTarget(name: "SmokeTest", dependencies: ["Runestone"]),
+        .executableTarget(
+            name: "MacExample",
+            dependencies: ["Runestone", "TestTreeSitterLanguages"],
+            path: "Example/MacExample"
+        ),
         .target(name: "TestTreeSitterLanguages", cSettings: [
             .unsafeFlags(["-w"])
         ]),
