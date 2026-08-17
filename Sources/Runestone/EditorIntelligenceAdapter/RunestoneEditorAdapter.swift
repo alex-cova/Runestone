@@ -71,7 +71,7 @@ public final class RunestoneEditorAdapter: EditorAdapter {
             length: range.end.utf16Offset - range.start.utf16Offset
         )
         await MainActor.run {
-            textView.selectedRange = nsRange
+            textView.selectedRanges = [nsRange]
         }
     }
 
@@ -111,8 +111,7 @@ public final class RunestoneEditorAdapter: EditorAdapter {
     /// selection/cursor/viewport. Used for selection-only changes so they don't pay the cost of
     /// re-bridging the full document text.
     private func makeDocument(with textView: TextView, snapshot: TextSnapshot) -> Document {
-        let selectedRange = textView.selectedRange
-        let selection = makeSelection(from: selectedRange, in: textView)
+        let selection = makeSelection(from: textView.selectedRanges, in: textView)
         let cursor = Cursor(position: selection.range.start)
         let viewport = Viewport(
             x: Double(textView.contentOffset.x),
@@ -132,10 +131,25 @@ public final class RunestoneEditorAdapter: EditorAdapter {
         )
     }
 
-    private func makeSelection(from range: NSRange, in textView: TextView) -> Selection {
+    private func makeSelection(from ranges: [NSRange], in textView: TextView) -> Selection {
+        guard let primary = ranges.first else {
+            let position = makePosition(at: 0, in: textView)
+            let range = EditorIntelligence.TextRange(start: position, end: position)
+            return Selection(range: range)
+        }
+        let primaryRange = makeTextRange(from: primary, in: textView)
+        let additionalRanges = ranges.dropFirst().map { makeTextRange(from: $0, in: textView) }
+        return Selection(range: primaryRange, additionalRanges: additionalRanges)
+    }
+
+    private func makeTextRange(from range: NSRange, in textView: TextView) -> EditorIntelligence.TextRange {
         let start = makePosition(at: range.location, in: textView)
         let end = makePosition(at: range.location + range.length, in: textView)
-        return Selection(range: EditorIntelligence.TextRange(start: start, end: end))
+        return EditorIntelligence.TextRange(start: start, end: end)
+    }
+
+    private func makeSelection(from range: NSRange, in textView: TextView) -> Selection {
+        makeSelection(from: [range], in: textView)
     }
 
     private func makePosition(at offset: Int, in textView: TextView) -> TextPosition {

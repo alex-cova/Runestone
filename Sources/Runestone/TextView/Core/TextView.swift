@@ -193,6 +193,31 @@ open class TextView: UIScrollView {
             textInputView.selectedTextRange = IndexedRange(newValue)
         }
     }
+    /// All active selection ranges. Multiple zero-length ranges indicate multi-cursor mode.
+    public var selectedRanges: [NSRange] {
+        get {
+            textInputView.selectedRanges
+        }
+        set {
+            textInputView.selectedRanges = newValue
+        }
+    }
+    /// Whether the text view currently has multiple carets.
+    public var isMultiCursorActive: Bool {
+        textInputView.isMultiCursorActive
+    }
+    /// Collapses multiple carets down to the primary caret.
+    public func collapseMultiSelectionToPrimary() {
+        textInputView.collapseMultiSelectionToPrimary()
+    }
+    /// Adds a caret at the beginning of each line spanned by the current selection.
+    public func addSelectionsOnEachLine() {
+        textInputView.addSelectionsOnEachLine()
+    }
+    /// Selects the word at the caret, or adds the next matching occurrence to the selection (⌘D).
+    public func selectNextOccurrence() {
+        textInputView.selectNextOccurrence()
+    }
     /// The current selection range of the text view as a UITextRange.
     public var selectedTextRange: UITextRange? {
         get {
@@ -302,6 +327,15 @@ open class TextView: UIScrollView {
     /// Whether the built-in find panel is visible.
     public var isFindPanelVisible: Bool {
         findPanelController.isVisible
+    }
+    /// Diagnostic ranges rendered as squiggly underlines in the text view.
+    public var diagnostics: [TextViewDiagnostic] {
+        get {
+            textInputView.diagnostics
+        }
+        set {
+            textInputView.diagnostics = newValue
+        }
     }
     /// Enable to show highlight the selected lines. The selection is only shown in the gutter when multiple lines are selected.
     public var lineSelectionDisplayType: LineSelectionDisplayType {

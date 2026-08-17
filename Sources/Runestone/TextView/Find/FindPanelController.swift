@@ -12,6 +12,7 @@ final class FindPanelController {
     private var currentMatchIndex: Int?
     private var wrapAround = true
     private var matchCase = false
+    private var usesRegularExpression = false
 
     init(target: FindPanelTarget) {
         self.target = target
@@ -22,6 +23,17 @@ final class FindPanelController {
         panelView.onReplace = { [weak self] in self?.replaceCurrentMatch() }
         panelView.onReplaceAll = { [weak self] in self?.replaceAllMatches() }
         panelView.onClose = { [weak self] in self?.hide() }
+        panelView.onMatchCaseChanged = { [weak self] matchCase in
+            self?.matchCase = matchCase
+            self?.performFind()
+        }
+        panelView.onWrapAroundChanged = { [weak self] wrapAround in
+            self?.wrapAround = wrapAround
+        }
+        panelView.onUsesRegularExpressionChanged = { [weak self] usesRegex in
+            self?.usesRegularExpression = usesRegex
+            self?.performFind()
+        }
         panelView.onModeChanged = { [weak self] _ in
             guard let self else {
                 return
@@ -89,7 +101,9 @@ private extension FindPanelController {
             emphasisManager?.removeEmphases(for: EmphasisGroup.find)
             return
         }
-        let query = SearchQuery(text: queryText, matchMethod: .contains, isCaseSensitive: matchCase)
+        let query = SearchQuery(text: queryText,
+                                matchMethod: usesRegularExpression ? .regularExpression : .contains,
+                                isCaseSensitive: matchCase)
         matches = target.search(for: query)
         currentMatchIndex = nearestMatchIndex()
         updateMatchLabel()
@@ -206,7 +220,9 @@ private extension FindPanelController {
         guard let target, !panelView.findText.isEmpty else {
             return
         }
-        let query = SearchQuery(text: panelView.findText, matchMethod: .contains, isCaseSensitive: matchCase)
+        let query = SearchQuery(text: panelView.findText,
+                                matchMethod: usesRegularExpression ? .regularExpression : .contains,
+                                isCaseSensitive: matchCase)
         let replacements = target.search(for: query, replacingMatchesWith: panelView.replaceText)
         let batch = BatchReplaceSet(replacements: replacements.map { BatchReplaceSet.Replacement(range: $0.range, text: $0.replacementText) })
         target.replaceText(in: batch)

@@ -76,7 +76,7 @@ private extension EmphasisManager {
         switch emphasis.style {
         case .standard:
             return emphasis.inactive ? baseColor.withAlphaComponent(0.25) : baseColor
-        case .underline(let color), .outline(let color, _):
+        case .underline(let color), .squiggle(let color), .outline(let color, _):
             return color
         }
     }

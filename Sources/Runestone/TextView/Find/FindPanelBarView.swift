@@ -10,6 +10,9 @@ final class FindPanelBarView: NSView {
     var onReplaceAll: (() -> Void)?
     var onClose: (() -> Void)?
     var onModeChanged: ((FindPanelMode) -> Void)?
+    var onMatchCaseChanged: ((Bool) -> Void)?
+    var onWrapAroundChanged: ((Bool) -> Void)?
+    var onUsesRegularExpressionChanged: ((Bool) -> Void)?
 
     var mode: FindPanelMode = .find {
         didSet {
@@ -27,7 +30,22 @@ final class FindPanelBarView: NSView {
         }
     }
 
-    let findField = NSTextField()
+    var isMatchCaseEnabled: Bool {
+        get { matchCaseButton.state == .on }
+        set { matchCaseButton.state = newValue ? .on : .off }
+    }
+
+    var isWrapAroundEnabled: Bool {
+        get { wrapAroundButton.state == .on }
+        set { wrapAroundButton.state = newValue ? .on : .off }
+    }
+
+    var usesRegularExpression: Bool {
+        get { regexButton.state == .on }
+        set { regexButton.state = newValue ? .on : .off }
+    }
+
+    let findField = FindPanelTextField()
     let replaceField = NSTextField()
     private let matchLabel = NSTextField(labelWithString: "")
     private let previousButton = NSButton(title: "Previous", target: nil, action: nil)
@@ -36,6 +54,9 @@ final class FindPanelBarView: NSView {
     private let replaceAllButton = NSButton(title: "All", target: nil, action: nil)
     private let closeButton = NSButton(title: "Done", target: nil, action: nil)
     private let modeControl = NSSegmentedControl(labels: ["Find", "Replace"], trackingMode: .selectOne, target: nil, action: nil)
+    private let matchCaseButton = NSButton(checkboxWithTitle: "Case", target: nil, action: nil)
+    private let wrapAroundButton = NSButton(checkboxWithTitle: "Wrap", target: nil, action: nil)
+    private let regexButton = NSButton(checkboxWithTitle: "Regex", target: nil, action: nil)
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -43,15 +64,22 @@ final class FindPanelBarView: NSView {
         layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         configureField(findField, placeholder: "Find")
         configureField(replaceField, placeholder: "Replace")
+        findField.onReturn = { [weak self] shiftHeld in
+            if shiftHeld {
+                self?.onPrevious?()
+            } else {
+                self?.onNext?()
+            }
+        }
         matchLabel.font = .systemFont(ofSize: 11)
         matchLabel.textColor = .secondaryLabelColor
-        previousButton.bezelStyle = .rounded
-        nextButton.bezelStyle = .rounded
-        replaceButton.bezelStyle = .rounded
-        replaceAllButton.bezelStyle = .rounded
-        closeButton.bezelStyle = .rounded
+        [previousButton, nextButton, replaceButton, replaceAllButton, closeButton].forEach {
+            $0.bezelStyle = .rounded
+        }
         modeControl.selectedSegment = 0
-        [findField, replaceField, matchLabel, modeControl, previousButton, nextButton, replaceButton, replaceAllButton, closeButton].forEach(addSubview)
+        wrapAroundButton.state = .on
+        [findField, replaceField, matchLabel, modeControl, matchCaseButton, wrapAroundButton, regexButton,
+         previousButton, nextButton, replaceButton, replaceAllButton, closeButton].forEach(addSubview)
         previousButton.target = self
         previousButton.action = #selector(previousClicked)
         nextButton.target = self
@@ -64,6 +92,12 @@ final class FindPanelBarView: NSView {
         closeButton.action = #selector(closeClicked)
         modeControl.target = self
         modeControl.action = #selector(modeChanged)
+        matchCaseButton.target = self
+        matchCaseButton.action = #selector(matchCaseChanged)
+        wrapAroundButton.target = self
+        wrapAroundButton.action = #selector(wrapAroundChanged)
+        regexButton.target = self
+        regexButton.action = #selector(regexChanged)
         NotificationCenter.default.addObserver(self,
                                                selector: #selector(findFieldChanged),
                                                name: NSControl.textDidChangeNotification,
@@ -86,7 +120,7 @@ final class FindPanelBarView: NSView {
     }
 
     override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: mode == .replace ? 54 : 28)
+        NSSize(width: NSView.noIntrinsicMetric, height: mode == .replace ? 78 : 52)
     }
 
     override func layout() {
@@ -112,6 +146,10 @@ final class FindPanelBarView: NSView {
             replaceAllButton.frame = CGRect(x: replaceButton.frame.maxX + spacing, y: replaceButton.frame.maxY, width: 48, height: 24)
         }
         closeButton.frame = CGRect(x: bounds.width - 56 - padding, y: bounds.height - 24 - padding, width: 56, height: 24)
+        let optionsY = bounds.height - 22 - padding - 26
+        matchCaseButton.frame = CGRect(x: padding, y: optionsY, width: 64, height: 18)
+        wrapAroundButton.frame = CGRect(x: matchCaseButton.frame.maxX + spacing, y: optionsY, width: 64, height: 18)
+        regexButton.frame = CGRect(x: wrapAroundButton.frame.maxX + spacing, y: optionsY, width: 72, height: 18)
     }
 
     func focusFindField(selecting selection: String? = nil) {
@@ -150,11 +188,35 @@ final class FindPanelBarView: NSView {
         onModeChanged?(mode)
     }
 
+    @objc private func matchCaseChanged() {
+        onMatchCaseChanged?(matchCaseButton.state == .on)
+    }
+
+    @objc private func wrapAroundChanged() {
+        onWrapAroundChanged?(wrapAroundButton.state == .on)
+    }
+
+    @objc private func regexChanged() {
+        onUsesRegularExpressionChanged?(regexButton.state == .on)
+    }
+
     private func configureField(_ field: NSTextField, placeholder: String) {
         field.placeholderString = placeholder
         field.isBordered = true
         field.isBezeled = true
         field.bezelStyle = .roundedBezel
         field.focusRingType = .exterior
+    }
+}
+
+final class FindPanelTextField: NSTextField {
+    var onReturn: ((Bool) -> Void)?
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 36 || event.keyCode == 76 {
+            onReturn?(event.modifierFlags.contains(.shift))
+            return
+        }
+        super.keyDown(with: event)
     }
 }

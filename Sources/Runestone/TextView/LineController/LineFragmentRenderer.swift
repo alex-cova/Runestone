@@ -58,6 +58,8 @@ private extension LineFragmentRenderer {
                 drawStandardHighlight(highlightedRange, in: context, canvasSize: canvasSize)
             case .underline:
                 drawUnderlineHighlight(highlightedRange, in: context)
+            case .squiggle:
+                drawSquiggleHighlight(highlightedRange, in: context)
             case .outline(_, let fill):
                 drawOutlineHighlight(highlightedRange, in: context, fill: fill)
             }
@@ -88,14 +90,37 @@ private extension LineFragmentRenderer {
     }
 
     private func drawUnderlineHighlight(_ highlightedRange: HighlightedRangeFragment, in context: CGContext) {
+        drawLineHighlight(highlightedRange, in: context, wavy: false)
+    }
+
+    private func drawSquiggleHighlight(_ highlightedRange: HighlightedRangeFragment, in context: CGContext) {
+        drawLineHighlight(highlightedRange, in: context, wavy: true)
+    }
+
+    private func drawLineHighlight(_ highlightedRange: HighlightedRangeFragment, in context: CGContext, wavy: Bool) {
         let startX = CTLineGetOffsetForStringIndex(lineFragment.line, highlightedRange.range.lowerBound, nil)
         let endX = CTLineGetOffsetForStringIndex(lineFragment.line, highlightedRange.range.upperBound, nil)
         let y = lineFragment.scaledSize.height - 2
         context.setStrokeColor(highlightedRange.color.cgColor)
         context.setLineWidth(1.2)
         context.setLineCap(.round)
-        context.move(to: CGPoint(x: startX, y: y))
-        context.addLine(to: CGPoint(x: endX, y: y))
+        context.setLineJoin(.round)
+        if wavy {
+            let amplitude: CGFloat = 1.5
+            let wavelength: CGFloat = 4
+            var x = startX
+            context.move(to: CGPoint(x: x, y: y))
+            while x < endX {
+                let midX = min(x + wavelength / 2, endX)
+                let nextX = min(x + wavelength, endX)
+                context.addQuadCurve(to: CGPoint(x: midX, y: y + amplitude), control: CGPoint(x: (x + midX) / 2, y: y - amplitude))
+                context.addQuadCurve(to: CGPoint(x: nextX, y: y), control: CGPoint(x: (midX + nextX) / 2, y: y + amplitude))
+                x = nextX
+            }
+        } else {
+            context.move(to: CGPoint(x: startX, y: y))
+            context.addLine(to: CGPoint(x: endX, y: y))
+        }
         context.strokePath()
     }
 

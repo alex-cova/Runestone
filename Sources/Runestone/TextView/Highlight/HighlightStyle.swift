@@ -5,8 +5,10 @@ import AppKit
 public enum HighlightStyle: Equatable {
     /// Filled background highlight.
     case standard
-    /// Squiggly-style underline drawn beneath the text.
+    /// Straight underline drawn beneath the text.
     case underline(color: UIColor)
+    /// Wavy squiggle drawn beneath the text (typical for diagnostics).
+    case squiggle(color: UIColor)
     /// Rounded outline around the text, optionally filled.
     case outline(color: UIColor, fill: Bool = false)
 
@@ -14,7 +16,7 @@ public enum HighlightStyle: Equatable {
         switch self {
         case .standard:
             return 4
-        case .underline:
+        case .underline, .squiggle:
             return 0
         case .outline:
             return 2.5

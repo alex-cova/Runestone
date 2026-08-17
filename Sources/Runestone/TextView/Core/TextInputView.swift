@@ -45,7 +45,7 @@ final class TextInputView: UIView, UITextInput {
             // Placing the character on the second line, which is empty, and double tapping several times on the empty line to select text will cause the editor to crash. To work around this we take the non-negative value of the selected range. Last tested on August 30th, 2022.
                 let newRange = (newValue as? IndexedRange)?.range.nonNegativeLength
                 let sanitizedRange = sanitizedSelection(newRange)
-                if sanitizedRange != _selectedRange {
+                if sanitizedRange != _selectedRange || multiSelectionController.hasMultipleSelections {
                 notifyDelegateAboutSelectionChangeInLayoutSubviews = true
                 // The logic for determining whether or not to notify the input delegate is based on advice provided by Alexander Blach, developer of Textastic.
                 var shouldNotifyInputDelegate = false
@@ -66,6 +66,9 @@ final class TextInputView: UIView, UITextInput {
                 notifyInputDelegateAboutSelectionChangeInLayoutSubviews = !shouldNotifyInputDelegate
                 if shouldNotifyInputDelegate {
                     inputDelegate?.selectionWillChange(self)
+                }
+                if !isApplyingMultipleSelectionUpdate {
+                    multiSelectionController.setSelections(sanitizedRange.map { [$0] } ?? [])
                 }
                 _selectedRange = sanitizedRange
                 if shouldNotifyInputDelegate {
@@ -472,6 +475,14 @@ final class TextInputView: UIView, UITextInput {
         }
     }
     let emphasisManager = EmphasisManager()
+    var diagnostics: [TextViewDiagnostic] {
+        get {
+            diagnosticEmphasisController.diagnostics
+        }
+        set {
+            diagnosticEmphasisController.setDiagnostics(newValue)
+        }
+    }
     var bracketPairEmphasis: BracketPairEmphasis?
 
     // MARK: - Contents
@@ -544,7 +555,10 @@ final class TextInputView: UIView, UITextInput {
         }
         set {
             let sanitizedRange = sanitizedSelection(newValue)
-            if sanitizedRange != _selectedRange {
+            if sanitizedRange != _selectedRange || multiSelectionController.hasMultipleSelections {
+                if !isApplyingMultipleSelectionUpdate {
+                    multiSelectionController.setSelections(sanitizedRange.map { [$0] } ?? [])
+                }
                 _selectedRange = sanitizedRange
                 // Defer host notification — callers often assign selection during
                 // setState / updateNSView / layout, and sync callbacks re-enter AppKit.
@@ -555,9 +569,31 @@ final class TextInputView: UIView, UITextInput {
             }
         }
     }
+
+    var selectedRanges: [NSRange] {
+        get {
+            if multiSelectionController.selections.isEmpty {
+                return selection.map { [$0] } ?? []
+            }
+            return multiSelectionController.selections
+        }
+        set {
+            applySelectedRanges(newValue)
+        }
+    }
+
+    var isMultiCursorActive: Bool {
+        multiSelectionController.hasMultipleSelections
+    }
+
     private var _selectedRange: NSRange? {
         didSet {
             if _selectedRange != oldValue {
+                if !isApplyingMultipleSelectionUpdate,
+                   let selectedRange = _selectedRange,
+                   multiSelectionController.selections != [selectedRange] {
+                    multiSelectionController.setSelections([selectedRange])
+                }
                 layoutManager.selectedRange = _selectedRange
                 layoutManager.setNeedsLayoutLineSelection()
                 selectionOverlayController.selectionDidChange()
@@ -665,6 +701,9 @@ final class TextInputView: UIView, UITextInput {
     private let selectionRectService: SelectionRectService
     private var selectionOverlayController: SelectionOverlayController!
     private let bracketMatchingController: BracketMatchingController
+    private let diagnosticEmphasisController = DiagnosticEmphasisController()
+    private let multiSelectionController = MultiSelectionController()
+    private var isApplyingMultipleSelectionUpdate = false
     private let highlightService: HighlightService
     private let foldingController: FoldingController
     private let invisibleCharacterConfiguration = InvisibleCharacterConfiguration()
@@ -749,6 +788,7 @@ final class TextInputView: UIView, UITextInput {
             self?.selection = range
         }
         bracketMatchingController.emphasisManager = emphasisManager
+        diagnosticEmphasisController.emphasisManager = emphasisManager
         layoutManager.foldingController = foldingController
         lineMovementController.foldingController = foldingController
         caretRectService.foldingController = foldingController
@@ -1187,6 +1227,13 @@ private extension TextInputView {
     }
 
     private func adjustSelectionForFoldingIfNeeded() {
+        if multiSelectionController.hasMultipleSelections {
+            let adjustedSelections = multiSelectionController.selections.map { foldingController.adjustedSelection($0) }
+            if adjustedSelections != multiSelectionController.selections {
+                applySelectedRanges(adjustedSelections, notifyDelegate: false)
+            }
+            return
+        }
         guard let currentSelection = _selectedRange else {
             return
         }
@@ -1195,6 +1242,120 @@ private extension TextInputView {
             return
         }
         selection = adjustedSelection
+    }
+}
+
+// MARK: - Multi Selection
+extension TextInputView {
+    func applySelectedRanges(_ ranges: [NSRange], primaryIndex: Int = 0, notifyDelegate: Bool = true) {
+        let sanitized = ranges.compactMap { sanitizedSelection($0) }
+        let normalized = MultiSelectionController.normalize(sanitized)
+        guard !normalized.isEmpty else {
+            return
+        }
+        isApplyingMultipleSelectionUpdate = true
+        multiSelectionController.setSelections(normalized, primaryIndex: primaryIndex)
+        let primary = multiSelectionController.primarySelection
+        if primary != _selectedRange {
+            _selectedRange = primary
+        } else {
+            layoutManager.selectedRange = _selectedRange
+            layoutManager.setNeedsLayoutLineSelection()
+            selectionOverlayController.selectionDidChange()
+            setNeedsLayout()
+        }
+        isApplyingMultipleSelectionUpdate = false
+        if notifyDelegate {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.delegate?.textInputViewDidChangeSelection(self)
+            }
+        }
+    }
+
+    func collapseMultiSelectionToPrimary() {
+        guard multiSelectionController.hasMultipleSelections else {
+            return
+        }
+        if let primary = multiSelectionController.primarySelection {
+            applySelectedRanges([primary])
+        }
+    }
+
+    func addSelection(at location: Int) {
+        let range = sanitizedSelection(NSRange(location: location, length: 0)) ?? NSRange(location: location, length: 0)
+        if multiSelectionController.selections.isEmpty, let primary = selection {
+            multiSelectionController.setSelections([primary])
+        }
+        guard multiSelectionController.addSelection(range) else {
+            return
+        }
+        applySelectedRanges(multiSelectionController.selections, primaryIndex: multiSelectionController.primaryIndex)
+    }
+
+    func addSelectionsOnEachLine() {
+        guard let currentSelection = selection, currentSelection.length > 0 else {
+            return
+        }
+        guard let (startLine, endLine) = lineManager.startAndEndLine(in: currentSelection) else {
+            return
+        }
+        var ranges: [NSRange] = []
+        for row in startLine.index...endLine.index {
+            let line = lineManager.line(atRow: row)
+            ranges.append(NSRange(location: line.location, length: 0))
+        }
+        applySelectedRanges(ranges)
+    }
+
+    func selectNextOccurrence() {
+        let string = stringView.string
+        if selection?.length == 0,
+           let wordRange = SelectNextOccurrence.wordRange(at: selection?.location ?? 0, in: string, tokenizer: tokenizer) {
+            applySelectedRanges([wordRange])
+            return
+        }
+        guard let queryRange = selection, queryRange.length > 0,
+              let query = text(in: queryRange), !query.isEmpty else {
+            return
+        }
+        var ranges = selectedRanges.filter { $0.length == queryRange.length }
+        if ranges.isEmpty {
+            ranges = [queryRange]
+        }
+        let searchStart = ranges.map(\.upperBound).max() ?? queryRange.upperBound
+        guard let next = SelectNextOccurrence.nextMatch(for: query,
+                                                          length: queryRange.length,
+                                                          in: string,
+                                                          after: searchStart) else {
+            return
+        }
+        guard !ranges.contains(where: { $0.location == next.location }) else {
+            return
+        }
+        ranges.append(next)
+        applySelectedRanges(ranges)
+    }
+
+    func moveAllSelections(in direction: UITextLayoutDirection) {
+        var newSelections: [NSRange] = []
+        for range in selectedRanges {
+            if range.length > 0 {
+                newSelections.append(range)
+                continue
+            }
+            guard let newLocation = lineMovementController.location(from: range.location, in: direction, offset: 1) else {
+                newSelections.append(range)
+                continue
+            }
+            newSelections.append(NSRange(location: newLocation, length: 0))
+        }
+        applySelectedRanges(MultiSelectionController.normalize(newSelections))
+        if let primary = selection {
+            selectionAnchor = primary.length == 0 ? primary.location : primary.upperBound
+        }
+        inputDelegate?.selectionWillChange(self)
+        inputDelegate?.selectionDidChange(self)
     }
 }
 
@@ -1264,6 +1425,14 @@ extension TextInputView {
         defer {
             isRestoringPreviouslyDeletedText = false
         }
+        if multiSelectionController.hasMultipleSelections {
+            if LineEnding(symbol: text) != nil {
+                collapseMultiSelectionToPrimary()
+            } else {
+                insertTextAtAllSelections(preparedText)
+                return
+            }
+        }
         // If there is no marked range or selected range then we fallback to appending text to the end of our string.
         let replacementRange = imeMarkedRange ?? selection ?? NSRange(location: stringView.string.length, length: 0)
         guard shouldChangeText(in: replacementRange, replacementText: preparedText) else {
@@ -1294,6 +1463,10 @@ extension TextInputView {
 
     func deleteBackward() {
         didCallDeleteBackward = true
+        if multiSelectionController.hasMultipleSelections {
+            deleteBackwardAtAllSelections()
+            return
+        }
         guard let currentSelection = imeMarkedRange ?? selection else {
             return
         }
@@ -1353,6 +1526,10 @@ extension TextInputView {
     }
 
     func deleteForward() {
+        if multiSelectionController.hasMultipleSelections {
+            deleteForwardAtAllSelections()
+            return
+        }
         guard let currentSelection = imeMarkedRange ?? selection else {
             return
         }
@@ -1481,12 +1658,18 @@ extension TextInputView {
     private func replaceText(in range: NSRange,
                              with newString: String,
                              selectedRangeAfterUndo: NSRange? = nil,
-                             undoActionName: String = L10n.Undo.ActionName.typing) {
+                             undoActionName: String = L10n.Undo.ActionName.typing,
+                             updateSelection: Bool = true) {
         let nsNewString = newString as NSString
         let currentText = text(in: range) ?? ""
         let newRange = NSRange(location: range.location, length: nsNewString.length)
         addUndoOperation(replacing: newRange, withText: currentText, selectedRangeAfterUndo: selectedRangeAfterUndo, actionName: undoActionName)
-        _selectedRange = NSRange(location: newRange.upperBound, length: 0)
+        if updateSelection {
+            _selectedRange = NSRange(location: newRange.upperBound, length: 0)
+            if !isApplyingMultipleSelectionUpdate {
+                multiSelectionController.setSelections(_selectedRange.map { [$0] } ?? [])
+            }
+        }
         let textEditHelper = TextEditHelper(stringView: stringView, lineManager: lineManager, lineEndings: lineEndings)
         let textEditResult = textEditHelper.replaceText(in: range, with: newString)
         let textChange = textEditResult.textChange
@@ -1551,6 +1734,106 @@ extension TextInputView {
             }
         }
         return preparedText
+    }
+
+    private func insertTextAtAllSelections(_ text: String) {
+        let selections = multiSelectionController.selections.sorted { $0.location > $1.location }
+        guard !selections.isEmpty else {
+            return
+        }
+        guard selections.allSatisfy({ shouldChangeText(in: $0, replacementText: text) }) else {
+            return
+        }
+        imeMarkedRange = nil
+        timedUndoManager.beginUndoGrouping()
+        var newSelections: [NSRange] = []
+        for selection in selections {
+            replaceText(in: selection, with: text, updateSelection: false)
+            newSelections.append(NSRange(location: selection.location + text.utf16.count, length: 0))
+        }
+        timedUndoManager.endUndoGrouping()
+        applySelectedRanges(newSelections.sorted { $0.location < $1.location }, notifyDelegate: false)
+        setNeedsLayout()
+        delegate?.textInputViewDidChange(self)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.delegate?.textInputViewDidChangeSelection(self)
+        }
+    }
+
+    private func deleteBackwardAtAllSelections() {
+        let selections = multiSelectionController.selections.sorted { $0.location > $1.location }
+        var deleteOperations: [(deleteRange: NSRange, caretLocation: Int)] = []
+        for selection in selections {
+            if selection.length > 0 {
+                deleteOperations.append((selection, selection.location))
+                continue
+            }
+            guard selection.location > 0 else {
+                continue
+            }
+            let characterRange = string.customRangeOfComposedCharacterSequence(at: selection.location - 1)
+            let deleteRange = NSRange(location: characterRange.location, length: selection.location - characterRange.location)
+            deleteOperations.append((deleteRange, deleteRange.location))
+        }
+        guard !deleteOperations.isEmpty else {
+            return
+        }
+        guard deleteOperations.allSatisfy({ shouldChangeText(in: $0.deleteRange, replacementText: "") }) else {
+            return
+        }
+        timedUndoManager.beginUndoGrouping()
+        var newSelections: [NSRange] = []
+        for operation in deleteOperations {
+            replaceText(in: operation.deleteRange, with: "", updateSelection: false)
+            newSelections.append(NSRange(location: operation.caretLocation, length: 0))
+        }
+        for selection in selections where selection.length == 0 && selection.location == 0 {
+            newSelections.append(selection)
+        }
+        timedUndoManager.endUndoGrouping()
+        applySelectedRanges(newSelections.sorted { $0.location < $1.location }, notifyDelegate: false)
+        sendSelectionChangedToTextSelectionView()
+        delegate?.textInputViewDidChange(self)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.delegate?.textInputViewDidChangeSelection(self)
+        }
+    }
+
+    private func deleteForwardAtAllSelections() {
+        let selections = multiSelectionController.selections.sorted { $0.location > $1.location }
+        var deleteOperations: [(deleteRange: NSRange, caretLocation: Int)] = []
+        for selection in selections {
+            if selection.length > 0 {
+                deleteOperations.append((selection, selection.location))
+                continue
+            }
+            guard selection.location < string.length else {
+                continue
+            }
+            let deleteRange = string.customRangeOfComposedCharacterSequence(at: selection.location)
+            deleteOperations.append((deleteRange, selection.location))
+        }
+        guard !deleteOperations.isEmpty else {
+            return
+        }
+        guard deleteOperations.allSatisfy({ shouldChangeText(in: $0.deleteRange, replacementText: "") }) else {
+            return
+        }
+        timedUndoManager.beginUndoGrouping()
+        var newSelections: [NSRange] = []
+        for operation in deleteOperations {
+            replaceText(in: operation.deleteRange, with: "", updateSelection: false)
+            newSelections.append(NSRange(location: operation.caretLocation, length: 0))
+        }
+        timedUndoManager.endUndoGrouping()
+        applySelectedRanges(newSelections.sorted { $0.location < $1.location }, notifyDelegate: false)
+        delegate?.textInputViewDidChange(self)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.delegate?.textInputViewDidChangeSelection(self)
+        }
     }
 }
 

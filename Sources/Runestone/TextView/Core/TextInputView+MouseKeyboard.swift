@@ -22,10 +22,16 @@ extension TextInputView {
             return
         }
         if event.modifierFlags.contains(.shift) {
+            collapseMultiSelectionToPrimary()
             let anchor = selectionAnchor ?? selection?.location ?? 0
             if let index = characterIndex(at: point) {
                 setSelectedRange(from: anchor, to: index)
             }
+        } else if event.modifierFlags.contains(.option), event.clickCount == 1,
+                  delegate?.textInputViewIsEditable(self) ?? true,
+                  let index = characterIndex(at: point) {
+            addSelection(at: index)
+            selectionAnchor = index
         } else if event.clickCount >= 3 {
             selectParagraph(at: point)
             selectionAnchor = selection?.location
@@ -44,6 +50,7 @@ extension TextInputView {
             return
         }
         let point = convert(event.locationInWindow, from: nil)
+        collapseMultiSelectionToPrimary()
         let anchor = selectionAnchor ?? selection?.location ?? 0
         if let index = characterIndex(at: point) {
             setSelectedRange(from: anchor, to: index)
@@ -132,6 +139,11 @@ extension TextInputView {
                 deleteForward()
             }
             return
+        case 0x35:
+            if isMultiCursorActive {
+                collapseMultiSelectionToPrimary()
+                return
+            }
         default:
             break
         }
@@ -254,10 +266,25 @@ private extension TextInputView {
             delegate?.textInputViewDidRequestToggleFindPanel(self, mode: mode)
             return true
         }
+        if characters == "l", event.modifierFlags.contains(.shift) {
+            addSelectionsOnEachLine()
+            return true
+        }
+        if characters == "d" {
+            selectNextOccurrence()
+            return true
+        }
         return false
     }
 
     private func moveSelectionForArrowKey(direction: UITextLayoutDirection, flags: NSEvent.ModifierFlags) {
+        if flags.contains(.shift), isMultiCursorActive {
+            collapseMultiSelectionToPrimary()
+        }
+        if !flags.contains(.shift), isMultiCursorActive {
+            moveAllSelections(in: direction)
+            return
+        }
         if flags.contains(.command) {
             moveSelectionToBoundary(.line, direction: layoutDirectionToTextDirection(direction), extending: flags.contains(.shift))
         } else if flags.contains(.option) {
@@ -359,6 +386,10 @@ private extension TextInputView {
             selection = NSRange(location: activeLocation, length: 0)
             inputDelegate?.selectionDidChange(self)
         }
+    }
+
+    private func moveAllSelectionsByCharacter(in direction: UITextLayoutDirection) {
+        moveAllSelections(in: direction)
     }
 
     private func shouldInsert(characters: String, flags: NSEvent.ModifierFlags) -> Bool {

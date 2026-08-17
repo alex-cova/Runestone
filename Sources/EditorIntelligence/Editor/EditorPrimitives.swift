@@ -12,15 +12,26 @@ public struct Cursor: Hashable, Equatable, Sendable {
 /// Selection range in a document.
 public struct Selection: Hashable, Equatable, Sendable {
     public let range: TextRange
+    /// Additional selection ranges for multi-cursor editing. The primary range is always in ``range``.
+    public let additionalRanges: [TextRange]
     public let isReversed: Bool
 
-    public init(range: TextRange, isReversed: Bool = false) {
+    public init(range: TextRange, additionalRanges: [TextRange] = [], isReversed: Bool = false) {
         self.range = range
+        self.additionalRanges = additionalRanges
         self.isReversed = isReversed
     }
 
     public var isEmpty: Bool {
-        range.isEmpty
+        range.isEmpty && additionalRanges.allSatisfy(\.isEmpty)
+    }
+
+    /// All selection ranges, primary first.
+    public var allRanges: [TextRange] {
+        if additionalRanges.isEmpty {
+            return [range]
+        }
+        return [range] + additionalRanges
     }
 }
 

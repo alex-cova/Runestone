@@ -4,4 +4,5 @@ import Foundation
 public enum EmphasisGroup {
     public static let brackets = "runestone.bracketPairs"
     public static let find = "runestone.find"
+    public static let diagnostics = "runestone.diagnostics"
 }

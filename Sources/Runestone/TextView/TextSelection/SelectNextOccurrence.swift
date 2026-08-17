@@ -1,0 +1,44 @@
+import Foundation
+
+/// Finds the next textual occurrence for multi-cursor "add next occurrence" commands.
+enum SelectNextOccurrence {
+    static func wordRange(at location: Int, in string: NSString, tokenizer: UITextInputTokenizer) -> NSRange? {
+        let position = IndexedPosition(index: min(max(location, 0), string.length))
+        let start = tokenizer.position(from: position, toBoundary: .word, inDirection: .backward) ?? position
+        let end = tokenizer.position(from: position, toBoundary: .word, inDirection: .forward) ?? position
+        guard let startIndex = (start as? IndexedPosition)?.index,
+              let endIndex = (end as? IndexedPosition)?.index,
+              endIndex > startIndex else {
+            return nil
+        }
+        return NSRange(location: startIndex, length: endIndex - startIndex)
+    }
+
+    static func nextMatch(for query: String,
+                          length: Int,
+                          in string: NSString,
+                          after location: Int,
+                          caseSensitive: Bool = true) -> NSRange? {
+        guard !query.isEmpty, length > 0 else {
+            return nil
+        }
+        let start = min(max(location, 0), string.length)
+        guard start < string.length else {
+            return nil
+        }
+        let options: NSString.CompareOptions = caseSensitive ? [] : [.caseInsensitive]
+        var searchLocation = start
+        while searchLocation <= string.length - length {
+            let searchRange = NSRange(location: searchLocation, length: string.length - searchLocation)
+            let found = string.range(of: query, options: options, range: searchRange)
+            guard found.location != NSNotFound else {
+                return nil
+            }
+            if found.length == length {
+                return found
+            }
+            searchLocation = found.location + max(found.length, 1)
+        }
+        return nil
+    }
+}
