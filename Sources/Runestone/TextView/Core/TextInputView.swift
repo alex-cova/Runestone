@@ -23,6 +23,7 @@ protocol TextInputViewDelegate: AnyObject {
     func textInputViewIsEditable(_ view: TextInputView) -> Bool
     func textInputView(_ view: TextInputView, didRequestSelectionInteraction enabled: Bool)
     func textInputViewDidRequestToggleFindPanel(_ view: TextInputView, mode: FindPanelMode)
+    func textInputView(_ view: TextInputView, shouldInterceptKeyDown event: NSEvent) -> Bool
 }
 
 // swiftlint:disable:next type_body_length

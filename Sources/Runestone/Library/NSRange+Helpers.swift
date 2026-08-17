@@ -22,7 +22,7 @@ extension NSRange {
     var nonNegativeLength: NSRange {
         if length < 0 {
             let absoluteLength = abs(length)
-            let safeAbsoluteLength = min(absoluteLength, location)
+            let safeAbsoluteLength = Swift.min(absoluteLength, location)
             return NSRange(location: location - safeAbsoluteLength, length: safeAbsoluteLength)
         } else {
             return self
@@ -33,10 +33,10 @@ extension NSRange {
     /// - Parameter cappingRange: The target range.
     /// - Returns: A range that fits within the target range.
     func capped(to cappingRange: NSRange) -> NSRange {
-        let newLowerBound = min(max(lowerBound, cappingRange.lowerBound), cappingRange.upperBound)
+        let newLowerBound = Swift.min(Swift.max(lowerBound, cappingRange.lowerBound), cappingRange.upperBound)
         let tmpNewUpperBound = newLowerBound + length - (newLowerBound - lowerBound)
-        let newUpperBound = min(max(tmpNewUpperBound, cappingRange.lowerBound), cappingRange.upperBound)
-        let newLength = min(newUpperBound - newLowerBound, cappingRange.length)
+        let newUpperBound = Swift.min(Swift.max(tmpNewUpperBound, cappingRange.lowerBound), cappingRange.upperBound)
+        let newLength = Swift.min(newUpperBound - newLowerBound, cappingRange.length)
         return NSRange(location: newLowerBound, length: newLength)
     }
 

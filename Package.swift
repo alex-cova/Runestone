@@ -12,16 +12,29 @@ let package = Package(
     products: [
         .library(name: "Runestone", targets: ["Runestone"]),
         .library(name: "EditorIntelligence", targets: ["EditorIntelligence"]),
+        .library(name: "EditorIntelligenceLSP", targets: ["EditorIntelligenceLSP"]),
         .library(name: "RunestoneGraphQLLanguage", targets: ["RunestoneGraphQLLanguage"])
     ],
     dependencies: [
-        .package(url: "https://github.com/tree-sitter/tree-sitter", .upToNextMinor(from: "0.20.9"))
+        .package(url: "https://github.com/tree-sitter/tree-sitter", .upToNextMinor(from: "0.20.9")),
+        .package(url: "https://github.com/ChimeHQ/LanguageClient", from: "0.8.0"),
+        .package(url: "https://github.com/ChimeHQ/LanguageServerProtocol", from: "0.14.0"),
+        .package(url: "https://github.com/ChimeHQ/TextFormation", from: "0.9.0")
     ],
     targets: [
         .target(name: "EditorIntelligence", dependencies: []),
+        .target(
+            name: "EditorIntelligenceLSP",
+            dependencies: [
+                "EditorIntelligence",
+                .product(name: "LanguageClient", package: "LanguageClient"),
+                .product(name: "LanguageServerProtocol", package: "LanguageServerProtocol")
+            ]
+        ),
         .target(name: "Runestone", dependencies: [
             "EditorIntelligence",
-            .product(name: "TreeSitter", package: "tree-sitter")
+            .product(name: "TreeSitter", package: "tree-sitter"),
+            .product(name: "TextFormation", package: "TextFormation")
         ], exclude: [
             "Documentation.docc"
         ], resources: [
@@ -49,6 +62,7 @@ let package = Package(
         .testTarget(name: "RunestoneTests", dependencies: [
             "Runestone",
             "EditorIntelligence",
+            "EditorIntelligenceLSP",
             "TestTreeSitterLanguages",
             "RunestoneGraphQLLanguage"
         ])

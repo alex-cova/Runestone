@@ -101,6 +101,10 @@ extension TextInputView {
             return
         }
 
+        if delegate?.textInputView(self, shouldInterceptKeyDown: event) == true {
+            return
+        }
+
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if flags.contains(.command), handleCommandKeyDown(event) {
             return

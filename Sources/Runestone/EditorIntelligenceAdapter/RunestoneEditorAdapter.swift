@@ -13,6 +13,8 @@ public final class RunestoneEditorAdapter: EditorAdapter {
     public var events: AsyncStream<EditorEvent> { eventBus.events }
 
     private(set) weak var textView: TextView?
+    /// Optional delegate that receives text-view callbacks after the adapter updates its document snapshot.
+    public weak var forwardingDelegate: TextViewDelegate?
     private let eventBus = EventBus<EditorEvent>()
     private let documentID: DocumentID
     private let lock = NSLock()
@@ -175,8 +177,25 @@ public final class RunestoneEditorAdapter: EditorAdapter {
 
 // MARK: - TextViewDelegate
 extension RunestoneEditorAdapter: TextViewDelegate {
+    public func textViewShouldBeginEditing(_ textView: TextView) -> Bool {
+        forwardingDelegate?.textViewShouldBeginEditing(textView) ?? true
+    }
+
+    public func textViewShouldEndEditing(_ textView: TextView) -> Bool {
+        forwardingDelegate?.textViewShouldEndEditing(textView) ?? true
+    }
+
+    public func textViewDidBeginEditing(_ textView: TextView) {
+        forwardingDelegate?.textViewDidBeginEditing(textView)
+    }
+
+    public func textViewDidEndEditing(_ textView: TextView) {
+        forwardingDelegate?.textViewDidEndEditing(textView)
+    }
+
     public func textViewDidChange(_ textView: TextView) {
         refreshDocument()
+        forwardingDelegate?.textViewDidChange(textView)
     }
 
     public func textViewDidChangeSelection(_ textView: TextView) {
@@ -193,7 +212,48 @@ extension RunestoneEditorAdapter: TextViewDelegate {
             setLatestDocument(document)
             eventBus.send(.selectionChanged(document.id, document.selection))
             eventBus.send(.cursorMoved(document.id, document.cursor))
+            forwardingDelegate?.textViewDidChangeSelection(textView)
         }
+    }
+
+    public func textView(_ textView: TextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+        forwardingDelegate?.textView(textView, shouldChangeTextIn: range, replacementText: text) ?? true
+    }
+
+    public func textView(_ textView: TextView, shouldInsert characterPair: CharacterPair, in range: NSRange) -> Bool {
+        forwardingDelegate?.textView(textView, shouldInsert: characterPair, in: range) ?? true
+    }
+
+    public func textView(_ textView: TextView, shouldSkipTrailingComponentOf characterPair: CharacterPair, in range: NSRange) -> Bool {
+        forwardingDelegate?.textView(textView, shouldSkipTrailingComponentOf: characterPair, in: range) ?? true
+    }
+
+    public func textViewDidChangeGutterWidth(_ textView: TextView) {
+        forwardingDelegate?.textViewDidChangeGutterWidth(textView)
+    }
+
+    public func textViewDidBeginFloatingCursor(_ textView: TextView) {
+        forwardingDelegate?.textViewDidBeginFloatingCursor(textView)
+    }
+
+    public func textViewDidEndFloatingCursor(_ textView: TextView) {
+        forwardingDelegate?.textViewDidEndFloatingCursor(textView)
+    }
+
+    public func textViewDidLoopToLastHighlightedRange(_ textView: TextView) {
+        forwardingDelegate?.textViewDidLoopToLastHighlightedRange(textView)
+    }
+
+    public func textViewDidLoopToFirstHighlightedRange(_ textView: TextView) {
+        forwardingDelegate?.textViewDidLoopToFirstHighlightedRange(textView)
+    }
+
+    public func textView(_ textView: TextView, canReplaceTextIn highlightedRange: HighlightedRange) -> Bool {
+        forwardingDelegate?.textView(textView, canReplaceTextIn: highlightedRange) ?? false
+    }
+
+    public func textView(_ textView: TextView, replaceTextIn highlightedRange: HighlightedRange) {
+        forwardingDelegate?.textView(textView, replaceTextIn: highlightedRange)
     }
 }
 

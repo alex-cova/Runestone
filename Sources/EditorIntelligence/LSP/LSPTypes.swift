@@ -80,3 +80,86 @@ public struct LSPCompletionItem: Sendable, Hashable {
         self.detail = detail
     }
 }
+
+/// LSP location (URI + range).
+public struct LSPLocation: Sendable, Hashable {
+    public let uri: String
+    public let range: LSPRange
+
+    public init(uri: String, range: LSPRange) {
+        self.uri = uri
+        self.range = range
+    }
+}
+
+/// A single text edit returned by formatting or rename operations.
+public struct LSPTextEdit: Sendable, Hashable {
+    public let range: LSPRange
+    public let newText: String
+
+    public init(range: LSPRange, newText: String) {
+        self.range = range
+        self.newText = newText
+    }
+}
+
+/// Workspace edit returned by rename operations.
+public struct LSPWorkspaceEdit: Sendable {
+    public let changes: [String: [LSPTextEdit]]
+
+    public init(changes: [String: [LSPTextEdit]]) {
+        self.changes = changes
+    }
+}
+
+/// Signature help payload.
+public struct LSPSignatureHelp: Sendable {
+    public let signatures: [String]
+    public let activeSignature: Int
+    public let activeParameter: Int
+
+    public init(signatures: [String], activeSignature: Int = 0, activeParameter: Int = 0) {
+        self.signatures = signatures
+        self.activeSignature = activeSignature
+        self.activeParameter = activeParameter
+    }
+}
+
+/// Compressed semantic token data from a language server.
+public struct LSPSemanticTokens: Sendable {
+    public let resultId: String?
+    public let data: [UInt32]
+
+    public init(resultId: String?, data: [UInt32]) {
+        self.resultId = resultId
+        self.data = data
+    }
+}
+
+/// Semantic token delta returned by `textDocument/semanticTokens/full/delta`.
+public struct LSPSemanticTokensDelta: Sendable {
+    public let resultId: String?
+    public let data: [UInt32]
+
+    public init(resultId: String?, data: [UInt32]) {
+        self.resultId = resultId
+        self.data = data
+    }
+}
+
+/// Decoded semantic token used for highlighting and storage.
+public struct LSPSemanticToken: Sendable, Hashable {
+    public let line: Int
+    public let character: Int
+    public let length: Int
+    public let typeIndex: Int
+    public let modifiers: UInt32
+
+    public init(line: Int, character: Int, length: Int, typeIndex: Int, modifiers: UInt32) {
+        self.line = line
+        self.character = character
+        self.length = length
+        self.typeIndex = typeIndex
+        self.modifiers = modifiers
+    }
+}

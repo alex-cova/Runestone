@@ -14,6 +14,8 @@ import CoreText
 open class TextView: UIScrollView {
     /// Delegate to receive callbacks for events triggered by the editor.
     public weak var editorDelegate: TextViewDelegate?
+    /// Optional handler invoked before default key handling. Return `true` to consume the event.
+    public var keyDownHandler: ((NSEvent) -> Bool)?
     /// Whether the text view is in a state where the contents can be edited.
     public private(set) var isEditing = false {
         didSet {
@@ -673,6 +675,18 @@ open class TextView: UIScrollView {
                 setNeedsLayout()
             }
         }
+    }
+    /// Coordinates pluggable syntax-highlight providers (tree-sitter overlays, semantic tokens, etc.).
+    public private(set) var highlightProviderCoordinator: HighlightProviderCoordinator?
+
+    /// Attach highlight providers and begin coordinating invalidation and queries.
+    public func configureHighlightProviders(_ providers: [HighlightProviding]) {
+        let coordinator = HighlightProviderCoordinator()
+        coordinator.attach(to: self, providers: providers)
+        coordinator.onHighlightsChanged = { [weak self] in
+            self?.textInputView.setNeedsDisplay()
+        }
+        highlightProviderCoordinator = coordinator
     }
 
     private let textInputView: TextInputView
@@ -1537,6 +1551,9 @@ extension TextView: TextInputViewDelegate {
             minimapView.setNeedsDisplayForContentChange()
         }
         findPanelController.refreshIfVisible()
+        if let selection = textInputView.selection {
+            highlightProviderCoordinator?.applyEdit(in: selection, delta: 0)
+        }
         editorDelegate?.textViewDidChange(self)
     }
 
@@ -1631,6 +1648,10 @@ extension TextView: TextInputViewDelegate {
 
     func textInputViewDidRequestToggleFindPanel(_ view: TextInputView, mode: FindPanelMode) {
         toggleFindPanel(mode: mode)
+    }
+
+    func textInputView(_ view: TextInputView, shouldInterceptKeyDown event: NSEvent) -> Bool {
+        keyDownHandler?(event) ?? false
     }
 }
 
