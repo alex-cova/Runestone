@@ -16,12 +16,29 @@ let package = Package(
         .library(name: "RunestoneGraphQLLanguage", targets: ["RunestoneGraphQLLanguage"])
     ],
     dependencies: [
-        .package(path: "Packages/TreeSitter"),
         .package(url: "https://github.com/ChimeHQ/LanguageClient", from: "0.8.0"),
         .package(url: "https://github.com/ChimeHQ/LanguageServerProtocol", from: "0.14.0"),
         .package(url: "https://github.com/ChimeHQ/TextFormation", from: "0.9.0")
     ],
     targets: [
+        .target(
+            name: "TreeSitter",
+            path: "Packages/TreeSitter/lib",
+            exclude: [
+                "src/unicode/ICU_SHA",
+                "src/unicode/README.md",
+                "src/unicode/LICENSE",
+                "src/wasm/stdlib-symbols.txt"
+            ],
+            sources: ["src/lib.c"],
+            cSettings: [
+                .headerSearchPath("src"),
+                .define("_POSIX_C_SOURCE", to: "200112L"),
+                .define("_DEFAULT_SOURCE"),
+                .define("_BSD_SOURCE"),
+                .define("_DARWIN_C_SOURCE")
+            ]
+        ),
         .target(name: "EditorIntelligence", dependencies: []),
         .target(
             name: "EditorIntelligenceLSP",
@@ -33,7 +50,7 @@ let package = Package(
         ),
         .target(name: "Runestone", dependencies: [
             "EditorIntelligence",
-            .product(name: "TreeSitter", package: "TreeSitter"),
+            "TreeSitter",
             .product(name: "TextFormation", package: "TextFormation")
         ], exclude: [
             "Documentation.docc"
