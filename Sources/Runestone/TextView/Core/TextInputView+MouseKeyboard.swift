@@ -126,6 +126,8 @@ extension TextInputView {
             return
         }
 
+        delegate?.textInputView(self, didReceiveKeyDown: event)
+
         if delegate?.textInputView(self, shouldInterceptKeyDown: event) == true {
             return
         }

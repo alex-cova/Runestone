@@ -24,6 +24,8 @@ final class MinimapView: UIView {
     weak var lineDataSource: TextInputView?
     /// The scroll view whose `contentOffset`/`contentSize` this minimap reflects and controls.
     weak var scrollView: TextView?
+    /// Called before the minimap changes `scrollView.contentOffset` from a click or drag.
+    var onUserScroll: (() -> Void)?
 
     /// Height, in points, of each line's row.
     var rowHeight: CGFloat = 3
@@ -206,6 +208,7 @@ final class MinimapView: UIView {
         guard let scrollView else {
             return
         }
+        onUserScroll?()
         let clampedY = min(max(contentOffsetY, 0), mainScrollableRange)
         scrollView.contentOffset = CGPoint(x: scrollView.contentOffset.x, y: clampedY)
     }

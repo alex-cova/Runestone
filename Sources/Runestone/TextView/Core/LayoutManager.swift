@@ -496,6 +496,18 @@ extension LayoutManager {
         contentSizeService.setSize(of: lineController.line, to: lineSize)
     }
 
+    /// Vertical center of the document line containing `location`, in content coordinates.
+    func lineAnchorY(at location: Int) -> CGFloat? {
+        let safeLocation = min(max(location, 0), stringView.string.length)
+        guard let line = lineManager.line(containingCharacterAt: safeLocation) else {
+            return nil
+        }
+        prepareLineForDisplay(atLocation: safeLocation)
+        let lineController = lineControllerStorage.getOrCreateLineController(for: line)
+        let lineTop = textContainerInset.top + line.yPosition
+        return TypewriterScrollingPolicy.anchorY(lineYPosition: lineTop, lineHeight: lineController.lineHeight)
+    }
+
     // swiftlint:disable:next function_body_length
     private func layoutLinesInViewport() {
         // Immediately bail out from generating lines in a viewport of zero size.

@@ -160,6 +160,19 @@
 
 - ``contentOffset``
 - ``isAutomaticScrollEnabled``
+- ``isTypewriterScrollingEnabled``
+- ``typewriterAnchorFraction``
+- ``scrollRangeToVisible(_:)``
+
+#### Typewriter scrolling
+
+When both ``isTypewriterScrollingEnabled`` and ``isAutomaticScrollEnabled`` are on, the
+vertical center of the line containing the primary caret stays pinned at
+``typewriterAnchorFraction`` of the viewport while you type or move the caret. The text view
+adds bottom overscroll automatically so the last line can still reach the anchor. Toggling
+typewriter mode, changing the anchor fraction, or resizing the view re-anchors the caret.
+Manual scrolling (trackpad, mouse wheel, or minimap) suspends anchoring until the next key
+press. Non-empty selections keep standard minimum-reveal scrolling.
 
 ### Laying Out Subviews
 

@@ -20,7 +20,7 @@ Based on [simonbs/Runestone](https://github.com/simonbs/Runestone) (originally f
 * **Minimap**: Trailing miniature document overview with real-time viewport indicator and interactive click/drag scrolling (`showMinimap`).
 * **Focus Mode & Typewriter Scrolling**:
   * **Focus Mode**: Keeps active sentence or paragraph at full opacity while dimming surrounding text (`isFocusModeEnabled`).
-  * **Typewriter Scrolling**: Pins the active line at a configurable vertical position in the viewport (`isTypewriterScrollingEnabled`).
+  * **Typewriter Scrolling**: Keeps the active line pinned at a configurable vertical fraction of the viewport (`isTypewriterScrollingEnabled`, `typewriterAnchorFraction`; requires `isAutomaticScrollEnabled`). The document scrolls beneath the caret as you type or move lines. Manual scrolling suspends anchoring until the next key press.
 * **Editing & Formatting**:
   * **TextFormation Integration**: Auto-closing bracket/character pairs (`CharacterPair`), skip-over closing delimiters, tab expansion, and whitespace cleanup.
   * **Smart Indentation**: Language-aware indent on newline, block indent/unindent (shift left/right), and automatic indentation strategy detection (tabs vs. spaces).

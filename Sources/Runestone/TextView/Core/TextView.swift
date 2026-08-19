@@ -399,19 +399,46 @@ open class TextView: UIScrollView {
     public var focusedRanges: [NSRange] {
         textInputView.focusedRanges
     }
-    /// Whether typewriter scrolling is enabled. When on, the line containing the caret stays
-    /// pinned at ``typewriterAnchorFraction`` of the viewport's height instead of moving as you
-    /// type — the document scrolls beneath it. Off by default.
-    public var isTypewriterScrollingEnabled = false
-    /// The vertical fraction of the viewport (`0` = top, `1` = bottom) that the caret's line is
-    /// pinned to while ``isTypewriterScrollingEnabled`` is on. Clamped to `0...1`. Defaults to
-    /// `0.5` (vertical center).
+    /// Whether typewriter scrolling is enabled.
+    ///
+    /// When on (and ``isAutomaticScrollEnabled`` is also on), the vertical center of the line
+    /// containing the primary caret stays pinned at ``typewriterAnchorFraction`` of the
+    /// viewport while you type or move the caret — the document scrolls beneath it instead of
+    /// the caret drifting. Non-empty selections and ``scrollRangeToVisible(_:)`` calls keep
+    /// standard minimum-reveal scrolling. Manual scrolling suspends anchoring until the next
+    /// key press. Off by default.
+    public var isTypewriterScrollingEnabled = false {
+        didSet {
+            guard isTypewriterScrollingEnabled != oldValue else {
+                return
+            }
+            if !isTypewriterScrollingEnabled {
+                isTypewriterScrollingSuspendedByUser = false
+            }
+            hasPendingContentSizeUpdate = true
+            setNeedsLayout()
+            handleContentSizeUpdateIfNeeded()
+            reanchorTypewriterCaretIfNeeded()
+        }
+    }
+    /// The vertical fraction of the viewport (`0` = top, `1` = bottom) where the active line's
+    /// center is pinned while ``isTypewriterScrollingEnabled`` is on. Clamped to `0...1`.
+    /// Defaults to `0.5` (vertical center). Changing this value also increases bottom
+    /// overscroll so the last line can still reach the anchor.
     public var typewriterAnchorFraction: CGFloat = 0.5 {
         didSet {
             let clamped = min(max(typewriterAnchorFraction, 0), 1)
             if clamped != typewriterAnchorFraction {
                 typewriterAnchorFraction = clamped
+                return
             }
+            guard typewriterAnchorFraction != oldValue else {
+                return
+            }
+            hasPendingContentSizeUpdate = true
+            setNeedsLayout()
+            handleContentSizeUpdateIfNeeded()
+            reanchorTypewriterCaretIfNeeded()
         }
     }
     /// Manages grouped text emphases such as find matches, bracket pairs, and diagnostics.
@@ -673,7 +700,18 @@ open class TextView: UIScrollView {
         }
     }
     /// Automatically scrolls the text view to show the caret when typing or moving the caret.
-    public var isAutomaticScrollEnabled = true
+    ///
+    /// When ``isTypewriterScrollingEnabled`` is also on, caret scrolling uses typewriter
+    /// anchoring (pin the active line at ``typewriterAnchorFraction``) instead of scrolling
+    /// only when the caret leaves the viewport.
+    public var isAutomaticScrollEnabled = true {
+        didSet {
+            guard isAutomaticScrollEnabled != oldValue else {
+                return
+            }
+            reanchorTypewriterCaretIfNeeded()
+        }
+    }
     /// Amount of overscroll to add in the vertical direction.
     ///
     /// The overscroll is a factor of the scrollable area height and will not take into account any insets. 0 means no overscroll and 1 means an amount equal to the height of the text view. Detaults to 0.
@@ -834,9 +872,10 @@ open class TextView: UIScrollView {
         let horizontalOverscrollLength = max(frame.width * horizontalOverscrollFactor, 0)
         var verticalOverscrollLength = max(frame.height * verticalOverscrollFactor, 0)
         if isTypewriterScrollingEnabled {
-            // Typewriter mode needs enough room below the last line for it to still reach
-            // typewriterAnchorFraction up the viewport; never shrinks a larger host-set overscroll.
-            let typewriterOverscrollLength = frame.height * (1 - typewriterAnchorFraction)
+            let typewriterOverscrollLength = TypewriterScrollingPolicy.requiredBottomOverscroll(
+                viewportHeight: frame.height,
+                anchorFraction: typewriterAnchorFraction
+            )
             verticalOverscrollLength = max(verticalOverscrollLength, typewriterOverscrollLength)
         }
         let baseContentSize = textInputView.contentSize
@@ -857,6 +896,8 @@ open class TextView: UIScrollView {
         }
     }
     private var _scrollPocketView: UIView?
+    private var isTypewriterScrollingSuspendedByUser = false
+
 
     /// Create a new text view.
     /// - Parameter frame: The frame rectangle of the text view.
@@ -871,6 +912,9 @@ open class TextView: UIScrollView {
         addSubview(textInputView)
         minimapView.lineDataSource = textInputView
         minimapView.scrollView = self
+        minimapView.onUserScroll = { [weak self] in
+            self?.suspendTypewriterScrollingForUserInteraction()
+        }
         minimapView.isHidden = true
         minimapView.applyTheme()
         addFixedOverlaySubview(minimapView)
@@ -904,7 +948,9 @@ open class TextView: UIScrollView {
         // SwiftUI often sizes the host after the first setState. Without
         // re-arming contentSize, the document stays stuck at the zero-frame
         // measurement and scrolling dies.
+        var shouldReanchorAfterLayout = false
         if frame.size != lastLaidOutSize {
+            shouldReanchorAfterLayout = frame.size != .zero
             lastLaidOutSize = frame.size
             hasPendingContentSizeUpdate = true
         }
@@ -932,12 +978,18 @@ open class TextView: UIScrollView {
                                                      y: bounds.height - panelHeight,
                                                      width: bounds.width - reservedMinimapWidth,
                                                      height: panelHeight)
+        if shouldReanchorAfterLayout {
+            reanchorTypewriterCaretIfNeeded()
+        }
     }
 
     /// Forwards to the base scroll handling, then keeps the minimap's viewport indicator in sync.
     /// Scrolling changes `contentOffset` without necessarily triggering a fresh `layoutSubviews()`
     /// pass on every tick, so the minimap can't rely on that alone to stay positioned correctly.
     override open func scrollWheel(with event: NSEvent) {
+        if isTypewriterScrollingEnabled {
+            suspendTypewriterScrollingForUserInteraction()
+        }
         super.scrollWheel(with: event)
         if showMinimap {
             minimapView.setNeedsDisplayForContentChange()
@@ -1553,7 +1605,28 @@ private extension TextView {
         }
     }
 
+    private func syncContentSizeIfNeeded() {
+        let preferred = preferredContentSize
+        guard contentSize != preferred else {
+            return
+        }
+        let preservedOffset = contentOffset
+        contentSize = preferred
+        contentOffset = preservedOffset
+    }
+
+    // Typewriter anchoring: see TypewriterScrollingPolicy.
     private func justScrollRangeToVisible(_ range: NSRange) {
+        if TypewriterScrollingPolicy.shouldAnchor(isTypewriterScrollingEnabled: isTypewriterScrollingEnabled,
+                                                  isAutomaticScrollEnabled: isAutomaticScrollEnabled,
+                                                  isSuspendedByUser: isTypewriterScrollingSuspendedByUser,
+                                                  rangeLength: range.length) {
+            syncContentSizeIfNeeded()
+            if let offset = contentOffsetForTypewriterAnchor(at: range.lowerBound) {
+                contentOffset = offset
+                return
+            }
+        }
         let lowerBoundRect = textInputView.caretRect(at: range.lowerBound)
         let upperBoundRect = range.length == 0 ? lowerBoundRect : textInputView.caretRect(at: range.upperBound)
         let rectMinX = min(lowerBoundRect.minX, upperBoundRect.minX)
@@ -1579,28 +1652,76 @@ private extension TextView {
         textInputView.setSelectionOverlayEnabled(false)
     }
 
+    private func suspendTypewriterScrollingForUserInteraction() {
+        guard isTypewriterScrollingEnabled else {
+            return
+        }
+        isTypewriterScrollingSuspendedByUser = true
+    }
+
+    private func resumeTypewriterScrollingAfterKeyPress() {
+        isTypewriterScrollingSuspendedByUser = false
+    }
+
+    private func reanchorTypewriterCaretIfNeeded() {
+        guard isTypewriterScrollingEnabled, isAutomaticScrollEnabled else {
+            return
+        }
+        guard !isTypewriterScrollingSuspendedByUser else {
+            return
+        }
+        guard let selection = textInputView.selection, selection.length == 0 else {
+            return
+        }
+        let location = selection.location
+        DispatchQueue.main.async { [weak self] in
+            self?.scrollLocationToVisible(location)
+        }
+    }
+
+    private func scrollViewport(at offset: CGPoint) -> CGRect {
+        var viewport = CGRect(x: offset.x, y: offset.y, width: frame.width, height: frame.height)
+        viewport.origin.y += adjustedContentInset.top
+        viewport.origin.x += adjustedContentInset.left + gutterWidth
+        viewport.size.width -= adjustedContentInset.left + adjustedContentInset.right + gutterWidth
+        viewport.size.height -= adjustedContentInset.top + adjustedContentInset.bottom
+        return viewport
+    }
+
+    private func applyHorizontalScrollReveal(for rect: CGRect, viewport: CGRect, into contentOffset: inout CGPoint) {
+        if rect.minX < viewport.minX {
+            contentOffset.x -= viewport.minX - rect.minX
+        } else if rect.maxX > viewport.maxX && rect.width <= viewport.width {
+            contentOffset.x += rect.maxX - viewport.maxX
+        } else if rect.maxX > viewport.maxX {
+            contentOffset.x += rect.minX
+        }
+    }
+
+    private func contentOffsetForTypewriterAnchor(at location: Int) -> CGPoint? {
+        textInputView.prepareLineForDisplay(atLocation: location)
+        guard let anchorY = textInputView.lineAnchorY(at: location) else {
+            return nil
+        }
+        let caretRect = textInputView.caretRect(at: location)
+        let viewport = scrollViewport(at: contentOffset)
+        var newContentOffset = contentOffset
+        applyHorizontalScrollReveal(for: caretRect, viewport: viewport, into: &newContentOffset)
+        newContentOffset.y = anchorY - adjustedContentInset.top - viewport.height * typewriterAnchorFraction
+        let cappedXOffset = min(max(newContentOffset.x, minimumContentOffset.x), maximumContentOffset.x)
+        let cappedYOffset = min(max(newContentOffset.y, minimumContentOffset.y), maximumContentOffset.y)
+        return CGPoint(x: cappedXOffset, y: cappedYOffset)
+    }
+
     /// Computes a content offset to scroll to in order to reveal the specified rectangle.
     ///
     /// The function will return a rectangle that scrolls the text view a minimum amount while revealing as much as possible of the rectangle. It is not guaranteed that the entire rectangle can be revealed.
     /// - Parameter rect: The rectangle to reveal.
     /// - Returns: The content offset to scroll to.
     private func contentOffsetForScrollingToVisibleRect(_ rect: CGRect) -> CGPoint {
-        // Create the viewport: a rectangle containing the content that is visible to the user.
-        var viewport = CGRect(x: contentOffset.x, y: contentOffset.y, width: frame.width, height: frame.height)
-        viewport.origin.y += adjustedContentInset.top
-        viewport.origin.x += adjustedContentInset.left + gutterWidth
-        viewport.size.width -= adjustedContentInset.left + adjustedContentInset.right + gutterWidth
-        viewport.size.height -= adjustedContentInset.top + adjustedContentInset.bottom
-        // Construct the best possible content offset.
+        let viewport = scrollViewport(at: contentOffset)
         var newContentOffset = contentOffset
-        if rect.minX < viewport.minX {
-            newContentOffset.x -= viewport.minX - rect.minX
-        } else if rect.maxX > viewport.maxX && rect.width <= viewport.width {
-            // The end of the rectangle is not visible and the rect fits within the screen so we'll scroll to reveal the entire rect.
-            newContentOffset.x += rect.maxX - viewport.maxX
-        } else if rect.maxX > viewport.maxX {
-            newContentOffset.x += rect.minX
-        }
+        applyHorizontalScrollReveal(for: rect, viewport: viewport, into: &newContentOffset)
         if rect.minY < viewport.minY {
             newContentOffset.y -= viewport.minY - rect.minY
         } else if rect.maxY > viewport.maxY && rect.height <= viewport.height {
@@ -1759,6 +1880,12 @@ extension TextView: TextInputViewDelegate {
 
     func textInputView(_ view: TextInputView, shouldInterceptKeyDown event: NSEvent) -> Bool {
         keyDownHandler?(event) ?? false
+    }
+
+    func textInputView(_ view: TextInputView, didReceiveKeyDown event: NSEvent) {
+        if isTypewriterScrollingSuspendedByUser {
+            resumeTypewriterScrollingAfterKeyPress()
+        }
     }
 }
 

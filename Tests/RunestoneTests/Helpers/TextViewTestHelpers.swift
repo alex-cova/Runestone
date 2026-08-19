@@ -63,4 +63,5 @@ enum TestKeyCode {
     static let letterK: UInt16 = 0x28
     static let letterL: UInt16 = 0x25
     static let letterU: UInt16 = 0x20
+    static let returnKey: UInt16 = 0x24
 }

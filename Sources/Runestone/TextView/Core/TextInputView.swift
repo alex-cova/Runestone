@@ -24,6 +24,7 @@ protocol TextInputViewDelegate: AnyObject {
     func textInputView(_ view: TextInputView, didRequestSelectionInteraction enabled: Bool)
     func textInputViewDidRequestToggleFindPanel(_ view: TextInputView, mode: FindPanelMode)
     func textInputView(_ view: TextInputView, shouldInterceptKeyDown event: NSEvent) -> Bool
+    func textInputView(_ view: TextInputView, didReceiveKeyDown event: NSEvent)
 }
 
 // swiftlint:disable:next type_body_length
@@ -1157,6 +1158,10 @@ final class TextInputView: UIView, UITextInput {
 
     func prepareLineForDisplay(atLocation location: Int) {
         layoutManager.prepareLineForDisplay(atLocation: location)
+    }
+
+    func lineAnchorY(at location: Int) -> CGFloat? {
+        layoutManager.lineAnchorY(at: location)
     }
 
     func redisplayVisibleLines() {

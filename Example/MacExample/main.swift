@@ -94,11 +94,23 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
         splitDown.bezelStyle = .rounded
         let closePane = NSButton(title: "Close Pane", target: self, action: #selector(closeActivePane))
         closePane.bezelStyle = .rounded
+        let typewriter = NSButton(title: "Typewriter", target: self, action: #selector(toggleTypewriterScrolling))
+        typewriter.bezelStyle = .rounded
+        typewriter.setButtonType(.toggle)
 
         stack.addArrangedSubview(splitRight)
         stack.addArrangedSubview(splitDown)
         stack.addArrangedSubview(closePane)
+        stack.addArrangedSubview(typewriter)
         return stack
+    }
+
+    @objc private func toggleTypewriterScrolling(_ sender: NSButton) {
+        guard let textView = adapter.textView else { return }
+        textView.isTypewriterScrollingEnabled = sender.state == .on
+        if textView.isTypewriterScrollingEnabled {
+            textView.isAutomaticScrollEnabled = true
+        }
     }
 
     @objc private func splitRight() {
