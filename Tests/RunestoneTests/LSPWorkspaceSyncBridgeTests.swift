@@ -7,18 +7,23 @@ final class LSPWorkspaceSyncBridgeTests: XCTestCase {
         let changed = LockedBox<Document>()
         let closed = LockedBox<DocumentID>()
 
+        let barrier = HandlerBarrier(expected: 3)
+
         let handlers = LSPDocumentSyncHandlers(
             onOpen: { document, languageID, version in
                 XCTAssertEqual(languageID, "swift")
                 XCTAssertEqual(version, 1)
                 opened.value = document
+                await barrier.signal()
             },
             onFullChange: { document, version in
                 XCTAssertEqual(version, 2)
                 changed.value = document
+                await barrier.signal()
             },
             onClose: { documentID in
                 closed.value = documentID
+                await barrier.signal()
             }
         )
 
@@ -30,6 +35,7 @@ final class LSPWorkspaceSyncBridgeTests: XCTestCase {
         await bridge.connect(to: workspace)
 
         let document = makeDocument(text: "let a = 1")
+        async let handlersComplete = barrier.wait()
         await workspace.openDocument(document)
         await workspace.updateDocument(
             Document(
@@ -44,8 +50,7 @@ final class LSPWorkspaceSyncBridgeTests: XCTestCase {
             )
         )
         await workspace.closeDocument(document.id)
-
-        try? await Task.sleep(nanoseconds: 300_000_000)
+        await handlersComplete
 
         XCTAssertEqual(opened.value?.contentSnapshot.text, "let a = 1")
         if let changedDocument = changed.value {
@@ -54,6 +59,37 @@ final class LSPWorkspaceSyncBridgeTests: XCTestCase {
             XCTFail("Expected document change handler")
         }
         XCTAssertEqual(closed.value, document.id)
+    }
+}
+
+private actor HandlerBarrier {
+    private let expected: Int
+    private var received = 0
+    private var waiter: CheckedContinuation<Void, Never>?
+
+    init(expected: Int) {
+        self.expected = expected
+    }
+
+    func signal() {
+        received += 1
+        if received >= expected, let waiter {
+            waiter.resume()
+            self.waiter = nil
+        }
+    }
+
+    func wait() async {
+        if received >= expected {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            if received >= expected {
+                continuation.resume()
+            } else {
+                waiter = continuation
+            }
+        }
     }
 }
 

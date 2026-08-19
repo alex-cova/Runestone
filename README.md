@@ -86,7 +86,7 @@ Based on [simonbs/Runestone](https://github.com/simonbs/Runestone) (originally f
 * **macOS**: 12.0 (Monterey) or later
 * **Swift**: 5.5+ / Xcode 13+
 * **Dependencies**:
-  * [Tree-sitter](https://github.com/tree-sitter/tree-sitter) (v0.20.9+)
+  * [Tree-sitter](https://github.com/tree-sitter/tree-sitter) (v0.26.12, vendored in `Packages/TreeSitter`)
   * [ChimeHQ/LanguageClient](https://github.com/ChimeHQ/LanguageClient) (v0.8.0+)
   * [ChimeHQ/LanguageServerProtocol](https://github.com/ChimeHQ/LanguageServerProtocol) (v0.14.0+)
   * [ChimeHQ/TextFormation](https://github.com/ChimeHQ/TextFormation) (v0.9.0+)

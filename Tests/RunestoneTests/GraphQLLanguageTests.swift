@@ -14,8 +14,8 @@ final class GraphQLLanguageTests: XCTestCase {
 
     func testGraphQLParserProducesTree() {
         let text: NSString = "query GetUser($id: ID!) { user(id: $id) { name email } }"
-        let parser = TreeSitterParser(encoding: TSInputEncodingUTF16)
-        parser.language = tree_sitter_graphql()
+        let parser = TreeSitterParser(encoding: .treeSitterUTF16)
+        parser.language = TreeSitterLanguagePointer(tree_sitter_graphql())
         let tree = parser.parse(text)
         XCTAssertNotNil(tree)
         XCTAssertFalse(tree?.rootNode.expressionString?.isEmpty ?? true)

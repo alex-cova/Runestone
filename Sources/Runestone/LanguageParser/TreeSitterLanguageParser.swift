@@ -12,7 +12,7 @@ public actor TreeSitterLanguageParser: LanguageParser {
 
     public init(languageMode: TreeSitterLanguageMode) {
         self.languageMode = languageMode
-        self.parser = TreeSitterParser(encoding: TSInputEncodingUTF16)
+        self.parser = TreeSitterParser(encoding: .treeSitterUTF16)
         self.parser.language = languageMode.language.languagePointer
     }
 

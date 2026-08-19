@@ -9,7 +9,7 @@ Runestone is a Swift Package Manager library: a high-performance plain text/code
 - **`Runestone`** — the text rendering/editing engine itself (line layout, gutter, tree-sitter syntax highlighting, selection, undo, search & replace).
 - **`EditorIntelligence`** — a separate, editor-agnostic IDE-intelligence platform (completion, indexing, hover, navigation, diagnostics, refactoring, LSP/AI adapters) that has **no dependency on `Runestone`**. The two are connected only through `Sources/Runestone/EditorIntelligenceAdapter/RunestoneEditorAdapter.swift`.
 
-Requires macOS 12+, Swift 5.5+/Xcode 13+. Tree-sitter (v0.20.9+) is pulled in as an SPM dependency.
+Requires macOS 12+, Swift 5.5+/Xcode 13+. Tree-sitter (v0.26.12) is vendored in `Packages/TreeSitter` as a local SPM package.
 
 ## Features
 

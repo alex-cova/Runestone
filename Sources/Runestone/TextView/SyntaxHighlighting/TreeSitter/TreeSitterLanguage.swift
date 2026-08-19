@@ -8,7 +8,7 @@ import TreeSitter
 /// Refer to <doc:AddingATreeSitterLanguage> for more information on adding a Tree-sitter language to your project.
 public final class TreeSitterLanguage {
     /// Reference to the raw Tree-sitter language.
-    public let languagePointer: UnsafePointer<TSLanguage>
+    public let languagePointer: TreeSitterLanguagePointer
     /// Query used for syntax highlighting.
     public let highlightsQuery: TreeSitterLanguage.Query?
     /// Query used for detecting injected languages.
@@ -34,7 +34,7 @@ public final class TreeSitterLanguage {
     ///   - highlightsQuery: Query used for syntax highlighting.
     ///   - injectionsQuery: Query used for detecting injected languages.
     ///   - indentationScopes: Rules used for indenting text.
-    public init(_ language: UnsafePointer<TSLanguage>,
+    public init(_ language: TreeSitterLanguagePointer,
                 highlightsQuery: TreeSitterLanguage.Query? = nil,
                 injectionsQuery: TreeSitterLanguage.Query? = nil,
                 indentationScopes: TreeSitterIndentationScopes? = nil) {
@@ -42,6 +42,16 @@ public final class TreeSitterLanguage {
         self.highlightsQuery = highlightsQuery
         self.injectionsQuery = injectionsQuery
         self.indentationScopes = indentationScopes
+    }
+
+    public convenience init<T>(_ language: UnsafePointer<T>,
+                highlightsQuery: TreeSitterLanguage.Query? = nil,
+                injectionsQuery: TreeSitterLanguage.Query? = nil,
+                indentationScopes: TreeSitterIndentationScopes? = nil) {
+        self.init(TreeSitterLanguagePointer(language),
+                  highlightsQuery: highlightsQuery,
+                  injectionsQuery: injectionsQuery,
+                  indentationScopes: indentationScopes)
     }
 
     /// Prepares the language to be used by Runestone. This can be called on a background queue to have the language prepared before it is needed.
@@ -93,7 +103,7 @@ private extension TreeSitterInternalLanguage {
                   indentationScopes: language.indentationScopes)
     }
 
-    private static func makeInternalQuery(from query: TreeSitterLanguage.Query?, with language: UnsafePointer<TSLanguage>) -> TreeSitterQuery? {
+    private static func makeInternalQuery(from query: TreeSitterLanguage.Query?, with language: TreeSitterLanguagePointer) -> TreeSitterQuery? {
         if let string = query?.string {
             do {
                 return try TreeSitterQuery(source: string, language: language)

@@ -16,7 +16,7 @@ let package = Package(
         .library(name: "RunestoneGraphQLLanguage", targets: ["RunestoneGraphQLLanguage"])
     ],
     dependencies: [
-        .package(url: "https://github.com/tree-sitter/tree-sitter", .upToNextMinor(from: "0.20.9")),
+        .package(path: "Packages/TreeSitter"),
         .package(url: "https://github.com/ChimeHQ/LanguageClient", from: "0.8.0"),
         .package(url: "https://github.com/ChimeHQ/LanguageServerProtocol", from: "0.14.0"),
         .package(url: "https://github.com/ChimeHQ/TextFormation", from: "0.9.0")
@@ -33,7 +33,7 @@ let package = Package(
         ),
         .target(name: "Runestone", dependencies: [
             "EditorIntelligence",
-            .product(name: "TreeSitter", package: "tree-sitter"),
+            .product(name: "TreeSitter", package: "TreeSitter"),
             .product(name: "TextFormation", package: "TextFormation")
         ], exclude: [
             "Documentation.docc"

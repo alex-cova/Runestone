@@ -39,8 +39,9 @@ public actor LSPWorkspaceSyncBridge {
     @discardableResult
     public func connect(to workspace: Workspace) -> Task<Void, Never> {
         subscription?.cancel()
+        let stream = workspace.eventBus.events
         let task = Task {
-            for await event in workspace.eventBus.events {
+            for await event in stream {
                 await handle(event)
             }
         }

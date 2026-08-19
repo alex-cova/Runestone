@@ -13,6 +13,7 @@ public actor Workspace {
     private var activeDocumentID: DocumentID?
     private var fileSystemWatcher: FileSystemWatcher?
     private var fileSystemWatcherTask: Task<Void, Never>?
+    private var adapterEventTask: Task<Void, Never>?
 
     public init(id: UUID = UUID()) {
         self.id = id
@@ -180,10 +181,14 @@ public actor Workspace {
     /// Subscribe to an editor adapter's events and update the workspace in the background.
     @discardableResult
     public func connect(to adapter: EditorAdapter) -> Task<Void, Never> {
-        Task {
-            for await event in adapter.events {
+        adapterEventTask?.cancel()
+        let stream = adapter.events
+        let task = Task {
+            for await event in stream {
                 await handleEditorEvent(event)
             }
         }
+        adapterEventTask = task
+        return task
     }
 }
