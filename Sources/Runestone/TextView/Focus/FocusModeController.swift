@@ -47,6 +47,7 @@ final class FocusModeController {
         }
     }
 
+    private let textSegmenter = TextSegmenter()
     private var lineLocalRangesByLineID: [DocumentLineNodeID: [NSRange]] = [:]
 
     init(lineManager: LineManager, stringView: StringView) {
@@ -66,10 +67,10 @@ final class FocusModeController {
             focusedRanges = []
             return true
         }
-        let newRanges = FocusRangeResolver.focusRanges(for: selections,
-                                                        granularity: granularity,
-                                                        lineManager: lineManager,
-                                                        stringView: stringView)
+        let newRanges = textSegmenter.focusRanges(for: selections,
+                                                  granularity: granularity,
+                                                  lineManager: lineManager,
+                                                  stringView: stringView)
         guard newRanges != focusedRanges else {
             return false
         }

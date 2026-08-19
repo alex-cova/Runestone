@@ -95,7 +95,7 @@ final class TextViewTypewriterScrollingTests: XCTestCase {
         XCTAssertEqual(relativeMidY, viewportHeight(in: textView) * 0.25, accuracy: 2)
     }
 
-    func testTypewriterClampsAtDocumentTop() {
+    func testTypewriterCentersFirstLineWithTopOverscroll() {
         let text = multilineText(lineCount: 40)
         let textView = makeFocusedTextView(text: text)
 
@@ -104,7 +104,10 @@ final class TextViewTypewriterScrollingTests: XCTestCase {
         textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
         textView.layoutIfNeeded()
 
-        XCTAssertEqual(textView.contentOffset.y, textView.minimumContentOffset.y, accuracy: 1)
+        guard let relativeMidY = caretMidYRelativeToViewport(in: textView, at: 0) else {
+            return XCTFail("Missing caret position")
+        }
+        XCTAssertEqual(relativeMidY, viewportHeight(in: textView) * 0.5, accuracy: 2)
     }
 
     func testTypewriterClampsAtDocumentBottom() {
@@ -121,7 +124,7 @@ final class TextViewTypewriterScrollingTests: XCTestCase {
             return XCTFail("Missing caret position")
         }
         XCTAssertGreaterThan(textView.contentOffset.y, 0)
-        XCTAssertLessThanOrEqual(relativeMidY, viewportHeight(in: textView) * 0.5 + 2)
+        XCTAssertEqual(relativeMidY, viewportHeight(in: textView) * 0.5, accuracy: 2)
     }
 
     func testEnablingTypewriterIncreasesContentSize() {
@@ -137,11 +140,15 @@ final class TextViewTypewriterScrollingTests: XCTestCase {
         textView.layoutIfNeeded()
         drainMainQueue()
 
-        let extra = TypewriterScrollingPolicy.requiredBottomOverscroll(
+        let topExtra = TypewriterScrollingPolicy.requiredTopOverscroll(
             viewportHeight: textView.frame.height,
             anchorFraction: textView.typewriterAnchorFraction
         )
-        XCTAssertEqual(textView.contentSize.height - baseHeight, extra, accuracy: 1)
+        let bottomExtra = TypewriterScrollingPolicy.requiredBottomOverscroll(
+            viewportHeight: textView.frame.height,
+            anchorFraction: textView.typewriterAnchorFraction
+        )
+        XCTAssertEqual(textView.contentSize.height - baseHeight, topExtra + bottomExtra, accuracy: 1)
     }
 
     func testScrollRangeToVisibleWithSelectionIgnoresTypewriter() {
@@ -306,7 +313,10 @@ final class TextViewTypewriterScrollingTests: XCTestCase {
         textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
         textView.layoutIfNeeded()
 
-        XCTAssertEqual(textView.contentOffset.y, textView.minimumContentOffset.y, accuracy: 1)
+        guard let relativeMidY = caretMidYRelativeToViewport(in: textView, at: 0) else {
+            return XCTFail("Missing caret position")
+        }
+        XCTAssertEqual(relativeMidY, viewportHeight(in: textView) * 0.5, accuracy: 2)
         XCTAssertGreaterThan(textView.contentSize.height, textView.frame.height * 0.5)
     }
 
@@ -327,6 +337,27 @@ final class TextViewTypewriterScrollingTests: XCTestCase {
             return XCTFail("Missing caret position")
         }
         XCTAssertEqual(relativeMidY, viewportHeight(in: textView) * 0.5, accuracy: 2)
+    }
+
+    func testWrappedVisualLineContainingCaretIsAnchored() {
+        let longLine = Array(repeating: "wrapped", count: 80).joined(separator: " ")
+        let text = (1...20).map { $0 == 10 ? longLine : "Line \($0)" }.joined(separator: "\n")
+        let textView = makeFocusedTextView(text: text)
+        textView.frame.size.width = 180
+        textView.layoutIfNeeded()
+        let wrappedLineStart = location(ofLine: 10, in: text)
+        let caret = wrappedLineStart + (longLine as NSString).length - 2
+
+        textView.isTypewriterScrollingEnabled = true
+        textView.isAutomaticScrollEnabled = true
+        textView.selectedRange = NSRange(location: caret, length: 0)
+        textView.scrollRangeToVisible(NSRange(location: caret, length: 0))
+        textView.layoutIfNeeded()
+
+        guard let relativeMidY = caretMidYRelativeToViewport(in: textView, at: caret) else {
+            return XCTFail("Missing caret position")
+        }
+        XCTAssertEqual(relativeMidY, viewportHeight(in: textView) * 0.5, accuracy: 3)
     }
 
     func testDisablingTypewriterRestoresStandardScrollBehavior() {
@@ -386,6 +417,27 @@ final class TextViewTypewriterScrollingTests: XCTestCase {
             return XCTFail("Missing caret position")
         }
         XCTAssertEqual(relativeMidYAfterKey, viewportHeight(in: textView) * 0.5, accuracy: 4)
+    }
+
+    func testCaretRepositioningResumesTypewriterAfterManualScroll() {
+        let text = multilineText(lineCount: 60)
+        let textView = makeFocusedTextView(text: text)
+        let line25 = location(ofLine: 25, in: text)
+        textView.isTypewriterScrollingEnabled = true
+        textView.isAutomaticScrollEnabled = true
+        textView.selectedRange = NSRange(location: line25, length: 0)
+        textView.scrollRangeToVisible(NSRange(location: line25, length: 0))
+        textView.layoutIfNeeded()
+        simulateUserScroll(deltaY: 3, on: textView)
+
+        textView.resumeTypewriterScrollingAfterCaretRepositioning()
+        textView.scrollRangeToVisible(NSRange(location: line25, length: 0))
+        textView.layoutIfNeeded()
+
+        guard let relativeMidY = caretMidYRelativeToViewport(in: textView, at: line25) else {
+            return XCTFail("Missing caret position")
+        }
+        XCTAssertEqual(relativeMidY, viewportHeight(in: textView) * 0.5, accuracy: 4)
     }
 
     func testDisablingTypewriterClearsUserSuspension() {

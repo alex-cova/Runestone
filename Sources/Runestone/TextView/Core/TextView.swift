@@ -415,6 +415,7 @@ open class TextView: UIScrollView {
             if !isTypewriterScrollingEnabled {
                 isTypewriterScrollingSuspendedByUser = false
             }
+            applyEffectiveTextContainerInset()
             hasPendingContentSizeUpdate = true
             setNeedsLayout()
             handleContentSizeUpdateIfNeeded()
@@ -435,11 +436,44 @@ open class TextView: UIScrollView {
             guard typewriterAnchorFraction != oldValue else {
                 return
             }
+            applyEffectiveTextContainerInset()
             hasPendingContentSizeUpdate = true
             setNeedsLayout()
             handleContentSizeUpdateIfNeeded()
             reanchorTypewriterCaretIfNeeded()
         }
+    }
+    /// Enables distraction-free chrome fading. Typing hides editor chrome; mouse movement or an
+    /// idle pause restores it. Host-owned chrome is coordinated through ``TextViewDelegate``.
+    public var isDistractionFreeModeEnabled: Bool {
+        get {
+            distractionFreeController.isEnabled
+        }
+        set {
+            distractionFreeController.isEnabled = newValue
+        }
+    }
+    /// Delay after the last key event before hidden chrome returns. Defaults to 1.5 seconds.
+    public var distractionFreeIdleDelay: TimeInterval {
+        get {
+            distractionFreeController.idleDelay
+        }
+        set {
+            distractionFreeController.idleDelay = max(newValue, 0)
+        }
+    }
+    /// Duration of chrome opacity transitions. Defaults to 0.3 seconds.
+    public var distractionFreeFadeDuration: TimeInterval {
+        get {
+            distractionFreeController.fadeDuration
+        }
+        set {
+            distractionFreeController.fadeDuration = max(newValue, 0)
+        }
+    }
+    /// Whether distraction-free chrome is currently visible.
+    public var isDistractionFreeChromeVisible: Bool {
+        distractionFreeController.isChromeVisible
     }
     /// Manages grouped text emphases such as find matches, bracket pairs, and diagnostics.
     public var emphasisManager: EmphasisManager {
@@ -633,10 +667,11 @@ open class TextView: UIScrollView {
     /// The amount of spacing surrounding the lines.
     public var textContainerInset: UIEdgeInsets {
         get {
-            textInputView.textContainerInset
+            configuredTextContainerInset
         }
         set {
-            textInputView.textContainerInset = newValue
+            configuredTextContainerInset = newValue
+            applyEffectiveTextContainerInset()
         }
     }
     /// When line wrapping is disabled, users can scroll the text view horizontally to see the entire line.
@@ -851,9 +886,12 @@ open class TextView: UIScrollView {
     }
     private var hasPendingContentSizeUpdate = false
     private var lastLaidOutSize: CGSize = .zero
+    private var configuredTextContainerInset: UIEdgeInsets = .zero
     private var isInputAccessoryViewEnabled = false
     private let keyboardObserver = KeyboardObserver()
     private let highlightNavigationController = HighlightNavigationController()
+    private let distractionFreeController = DistractionFreeController()
+    private var distractionFreeTrackingArea: NSTrackingArea?
     private var textSearchingHelper = UITextSearchingHelper()
     private lazy var findPanelController: FindPanelController = {
         let controller = FindPanelController(target: self)
@@ -872,8 +910,9 @@ open class TextView: UIScrollView {
         let horizontalOverscrollLength = max(frame.width * horizontalOverscrollFactor, 0)
         var verticalOverscrollLength = max(frame.height * verticalOverscrollFactor, 0)
         if isTypewriterScrollingEnabled {
+            let viewportHeight = max(frame.height - adjustedContentInset.top - adjustedContentInset.bottom, 0)
             let typewriterOverscrollLength = TypewriterScrollingPolicy.requiredBottomOverscroll(
-                viewportHeight: frame.height,
+                viewportHeight: viewportHeight,
                 anchorFraction: typewriterAnchorFraction
             )
             verticalOverscrollLength = max(verticalOverscrollLength, typewriterOverscrollLength)
@@ -897,6 +936,7 @@ open class TextView: UIScrollView {
     }
     private var _scrollPocketView: UIView?
     private var isTypewriterScrollingSuspendedByUser = false
+    private var lastTypewriterCaretMoveTime: TimeInterval = 0
 
 
     /// Create a new text view.
@@ -926,6 +966,9 @@ open class TextView: UIScrollView {
         keyboardObserver.delegate = self
         highlightNavigationController.delegate = self
         textSearchingHelper.textView = self
+        distractionFreeController.onVisibilityChange = { [weak self] isVisible, duration in
+            self?.applyDistractionFreeChromeVisibility(isVisible, duration: duration)
+        }
     }
 
     /// The initializer has not been implemented.
@@ -952,6 +995,7 @@ open class TextView: UIScrollView {
         if frame.size != lastLaidOutSize {
             shouldReanchorAfterLayout = frame.size != .zero
             lastLaidOutSize = frame.size
+            applyEffectiveTextContainerInset()
             hasPendingContentSizeUpdate = true
         }
         handleContentSizeUpdateIfNeeded()
@@ -989,11 +1033,32 @@ open class TextView: UIScrollView {
     override open func scrollWheel(with event: NSEvent) {
         if isTypewriterScrollingEnabled {
             suspendTypewriterScrollingForUserInteraction()
+            cancelAnimatedScrolling()
         }
         super.scrollWheel(with: event)
         if showMinimap {
             minimapView.setNeedsDisplayForContentChange()
         }
+    }
+
+    override open func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let distractionFreeTrackingArea {
+            removeTrackingArea(distractionFreeTrackingArea)
+        }
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+        distractionFreeTrackingArea = trackingArea
+    }
+
+    override open func mouseMoved(with event: NSEvent) {
+        distractionFreeController.mouseDidMove()
+        super.mouseMoved(with: event)
     }
 
     /// Called when the safe area of the view changes.
@@ -1500,6 +1565,7 @@ private extension TextView {
             return
         }
         if gestureRecognizer.state == .ended {
+            resumeTypewriterScrollingAfterCaretRepositioning()
             let point = gestureRecognizer.location(in: textInputView)
             let oldSelectedRange = textInputView.selection
             textInputView.moveCaret(to: point)
@@ -1615,15 +1681,57 @@ private extension TextView {
         contentOffset = preservedOffset
     }
 
+    private func applyEffectiveTextContainerInset() {
+        var effectiveInset = configuredTextContainerInset
+        if isTypewriterScrollingEnabled {
+            let viewportHeight = max(frame.height - adjustedContentInset.top - adjustedContentInset.bottom, 0)
+            effectiveInset.top += TypewriterScrollingPolicy.requiredTopOverscroll(
+                viewportHeight: viewportHeight,
+                anchorFraction: typewriterAnchorFraction
+            )
+        }
+        textInputView.textContainerInset = effectiveInset
+    }
+
+    private func applyDistractionFreeChromeVisibility(_ isVisible: Bool, duration: TimeInterval) {
+        let alpha: CGFloat = isVisible ? 1 : 0
+        let chromeViews: [NSView] = [
+            textInputView.gutterContainerView,
+            minimapView,
+            findPanelController.panelView
+        ]
+        if duration > 0 {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = duration
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                for view in chromeViews {
+                    view.animator().alphaValue = alpha
+                }
+            }
+        } else {
+            for view in chromeViews {
+                view.alphaValue = alpha
+            }
+        }
+        editorDelegate?.textView(
+            self,
+            didChangeDistractionFreeChromeVisibility: isVisible,
+            transitionDuration: duration
+        )
+    }
+
     // Typewriter anchoring: see TypewriterScrollingPolicy.
-    private func justScrollRangeToVisible(_ range: NSRange) {
+    private func justScrollRangeToVisible(_ range: NSRange, animateTypewriter: Bool = false) {
         if TypewriterScrollingPolicy.shouldAnchor(isTypewriterScrollingEnabled: isTypewriterScrollingEnabled,
                                                   isAutomaticScrollEnabled: isAutomaticScrollEnabled,
                                                   isSuspendedByUser: isTypewriterScrollingSuspendedByUser,
                                                   rangeLength: range.length) {
             syncContentSizeIfNeeded()
             if let offset = contentOffsetForTypewriterAnchor(at: range.lowerBound) {
-                contentOffset = offset
+                let now = ProcessInfo.processInfo.systemUptime
+                let isRapidMove = now - lastTypewriterCaretMoveTime < 0.12
+                lastTypewriterCaretMoveTime = now
+                setContentOffset(offset, animationDuration: animateTypewriter && !isRapidMove ? 0.12 : 0)
                 return
             }
         }
@@ -1637,9 +1745,9 @@ private extension TextView {
         contentOffset = contentOffsetForScrollingToVisibleRect(rect)
     }
 
-    private func scrollLocationToVisible(_ location: Int) {
+    private func scrollLocationToVisible(_ location: Int, animateTypewriter: Bool = false) {
         let range = NSRange(location: location, length: 0)
-        justScrollRangeToVisible(range)
+        justScrollRangeToVisible(range, animateTypewriter: animateTypewriter)
     }
 
     private func installEditableInteraction() {
@@ -1736,6 +1844,12 @@ private extension TextView {
     }
 }
 
+extension TextView {
+    func resumeTypewriterScrollingAfterCaretRepositioning() {
+        isTypewriterScrollingSuspendedByUser = false
+    }
+}
+
 // MARK: - TextInputViewDelegate
 extension TextView: TextInputViewDelegate {
     func textInputViewWillBeginEditing(_ view: TextInputView) {
@@ -1772,7 +1886,7 @@ extension TextView: TextInputViewDelegate {
         if isAutomaticScrollEnabled, let newRange = textInputView.selection, newRange.length == 0 {
             let location = newRange.location
             DispatchQueue.main.async { [weak self] in
-                self?.scrollLocationToVisible(location)
+                self?.scrollLocationToVisible(location, animateTypewriter: true)
             }
         }
         if showMinimap {
@@ -1793,7 +1907,7 @@ extension TextView: TextInputViewDelegate {
             // this often fires during layoutSubviews / setState from SwiftUI.
             let location = newRange.location
             DispatchQueue.main.async { [weak self] in
-                self?.scrollLocationToVisible(location)
+                self?.scrollLocationToVisible(location, animateTypewriter: true)
             }
         }
         editorDelegate?.textViewDidChangeSelection(self)
@@ -1883,9 +1997,14 @@ extension TextView: TextInputViewDelegate {
     }
 
     func textInputView(_ view: TextInputView, didReceiveKeyDown event: NSEvent) {
+        distractionFreeController.typingDidBegin()
         if isTypewriterScrollingSuspendedByUser {
             resumeTypewriterScrollingAfterKeyPress()
         }
+    }
+
+    func textInputViewDidReceiveCaretRepositioningClick(_ view: TextInputView) {
+        resumeTypewriterScrollingAfterCaretRepositioning()
     }
 }
 

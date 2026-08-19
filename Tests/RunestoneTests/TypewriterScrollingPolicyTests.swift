@@ -52,14 +52,22 @@ final class TypewriterScrollingPolicyTests: XCTestCase {
         )
     }
 
-    func testRequiredBottomOverscrollMatchesViewportAndFraction() {
+    func testRequiredOverscrollKeepsAtLeastHalfViewportOnBothEdges() {
+        XCTAssertEqual(
+            TypewriterScrollingPolicy.requiredTopOverscroll(viewportHeight: 400, anchorFraction: 0.5),
+            200
+        )
+        XCTAssertEqual(
+            TypewriterScrollingPolicy.requiredTopOverscroll(viewportHeight: 400, anchorFraction: 0.75),
+            300
+        )
         XCTAssertEqual(
             TypewriterScrollingPolicy.requiredBottomOverscroll(viewportHeight: 400, anchorFraction: 0.5),
             200
         )
         XCTAssertEqual(
             TypewriterScrollingPolicy.requiredBottomOverscroll(viewportHeight: 400, anchorFraction: 0.75),
-            100
+            200
         )
     }
 }

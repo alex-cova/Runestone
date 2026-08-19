@@ -101,6 +101,10 @@ public protocol TextViewDelegate: AnyObject {
     ///
     /// The text view will call this method when the user chooses to replace the text in the highlighted range, for example by selecting the action in a [UIMenuController](https://developer.apple.com/documentation/uikit/uimenucontroller).
     func textView(_ textView: TextView, replaceTextIn highlightedRange: HighlightedRange)
+    /// Tells the host to show or hide app-owned chrome alongside distraction-free editor chrome.
+    func textView(_ textView: TextView,
+                  didChangeDistractionFreeChromeVisibility isVisible: Bool,
+                  transitionDuration: TimeInterval)
 }
 
 public extension TextViewDelegate {
@@ -147,4 +151,8 @@ public extension TextViewDelegate {
     }
 
     func textView(_ textView: TextView, replaceTextIn highlightedRange: HighlightedRange) {}
+
+    func textView(_ textView: TextView,
+                  didChangeDistractionFreeChromeVisibility isVisible: Bool,
+                  transitionDuration: TimeInterval) {}
 }

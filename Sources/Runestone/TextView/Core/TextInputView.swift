@@ -25,6 +25,7 @@ protocol TextInputViewDelegate: AnyObject {
     func textInputViewDidRequestToggleFindPanel(_ view: TextInputView, mode: FindPanelMode)
     func textInputView(_ view: TextInputView, shouldInterceptKeyDown event: NSEvent) -> Bool
     func textInputView(_ view: TextInputView, didReceiveKeyDown event: NSEvent)
+    func textInputViewDidReceiveCaretRepositioningClick(_ view: TextInputView)
 }
 
 // swiftlint:disable:next type_body_length

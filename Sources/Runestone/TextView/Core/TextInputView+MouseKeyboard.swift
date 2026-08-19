@@ -14,6 +14,7 @@ extension TextInputView {
         if window?.firstResponder !== self {
             window?.makeFirstResponder(self)
         }
+        delegate?.textInputViewDidReceiveCaretRepositioningClick(self)
         if !(delegate?.textInputViewIsEditable(self) ?? true) {
             delegate?.textInputView(self, didRequestSelectionInteraction: true)
         }

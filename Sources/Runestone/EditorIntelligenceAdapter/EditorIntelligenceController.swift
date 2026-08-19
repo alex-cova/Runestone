@@ -824,4 +824,14 @@ public final class EditorIntelligenceForwardingDelegate: TextViewDelegate {
     public func textViewDidChangeSelection(_ textView: TextView) {
         userDelegate?.textViewDidChangeSelection(textView)
     }
+
+    public func textView(_ textView: TextView,
+                         didChangeDistractionFreeChromeVisibility isVisible: Bool,
+                         transitionDuration: TimeInterval) {
+        userDelegate?.textView(
+            textView,
+            didChangeDistractionFreeChromeVisibility: isVisible,
+            transitionDuration: transitionDuration
+        )
+    }
 }

@@ -143,4 +143,14 @@ extension RunestoneWorkbenchEditorAdapter: TextViewDelegate {
     public func textView(_ textView: TextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
         forwardingDelegate?.textView(textView, shouldChangeTextIn: range, replacementText: text) ?? true
     }
+
+    public func textView(_ textView: TextView,
+                         didChangeDistractionFreeChromeVisibility isVisible: Bool,
+                         transitionDuration: TimeInterval) {
+        forwardingDelegate?.textView(
+            textView,
+            didChangeDistractionFreeChromeVisibility: isVisible,
+            transitionDuration: transitionDuration
+        )
+    }
 }

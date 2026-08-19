@@ -20,6 +20,7 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
     private var workspaceBridge = RunestoneWorkbenchWorkspaceBridge()
     private var adapter: RunestoneWorkbenchEditorAdapter!
     private var layoutHost: EditorLayoutHostView!
+    private var toolbar: NSStackView!
     private var paneHosts: [UUID: PaneHost] = [:]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -49,7 +50,7 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
         let root = NSView(frame: window.contentView?.bounds ?? CGRect(x: 0, y: 0, width: 960, height: 640))
         root.autolayout()
 
-        let toolbar = makeToolbar()
+        toolbar = makeToolbar()
         layoutHost = EditorLayoutHostView()
         layoutHost.autolayout()
 
@@ -66,6 +67,7 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
         ])
 
         adapter = RunestoneWorkbenchEditorAdapter(workbench: workbench)
+        adapter.forwardingDelegate = self
         layoutHost.onPaneActivated = { [weak self] paneID in
             self?.activatePane(paneID)
         }
@@ -97,12 +99,42 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
         let typewriter = NSButton(title: "Typewriter", target: self, action: #selector(toggleTypewriterScrolling))
         typewriter.bezelStyle = .rounded
         typewriter.setButtonType(.toggle)
+        let focus = NSSegmentedControl(
+            labels: ["Focus Off", "Sentence", "Paragraph"],
+            trackingMode: .selectOne,
+            target: self,
+            action: #selector(changeFocusMode(_:))
+        )
+        focus.selectedSegment = 0
+        let distractionFree = NSButton(
+            title: "Distraction Free",
+            target: self,
+            action: #selector(toggleDistractionFreeMode(_:))
+        )
+        distractionFree.bezelStyle = .rounded
+        distractionFree.setButtonType(.toggle)
 
         stack.addArrangedSubview(splitRight)
         stack.addArrangedSubview(splitDown)
         stack.addArrangedSubview(closePane)
+        stack.addArrangedSubview(focus)
         stack.addArrangedSubview(typewriter)
+        stack.addArrangedSubview(distractionFree)
         return stack
+    }
+
+    @objc private func changeFocusMode(_ sender: NSSegmentedControl) {
+        guard let textView = adapter.textView else { return }
+        switch sender.selectedSegment {
+        case 1:
+            textView.focusGranularity = .sentence
+            textView.isFocusModeEnabled = true
+        case 2:
+            textView.focusGranularity = .paragraph
+            textView.isFocusModeEnabled = true
+        default:
+            textView.isFocusModeEnabled = false
+        }
     }
 
     @objc private func toggleTypewriterScrolling(_ sender: NSButton) {
@@ -111,6 +143,10 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
         if textView.isTypewriterScrollingEnabled {
             textView.isAutomaticScrollEnabled = true
         }
+    }
+
+    @objc private func toggleDistractionFreeMode(_ sender: NSButton) {
+        adapter.textView?.isDistractionFreeModeEnabled = sender.state == .on
     }
 
     @objc private func splitRight() {
@@ -217,6 +253,17 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         )
+    }
+}
+
+extension MacExampleAppDelegate: TextViewDelegate {
+    func textView(_ textView: TextView,
+                  didChangeDistractionFreeChromeVisibility isVisible: Bool,
+                  transitionDuration: TimeInterval) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = transitionDuration
+            toolbar.animator().alphaValue = isVisible ? 1 : 0
+        }
     }
 }
 

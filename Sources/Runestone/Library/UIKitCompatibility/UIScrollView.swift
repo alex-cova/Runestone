@@ -8,10 +8,15 @@ open class UIScrollView: UIView {
             updateDocumentViewFrame()
         }
     }
-    open var contentOffset: CGPoint = .zero {
-        didSet {
-            guard contentOffset != oldValue else { return }
-            clipView.scroll(to: contentOffset)
+    private var storedContentOffset: CGPoint = .zero
+    open var contentOffset: CGPoint {
+        get {
+            storedContentOffset
+        }
+        set {
+            guard newValue != storedContentOffset else { return }
+            storedContentOffset = newValue
+            clipView.scroll(to: newValue)
         }
     }
     open var contentInset: UIEdgeInsets = .zero
@@ -44,6 +49,26 @@ open class UIScrollView: UIView {
     /// viewport-anchored overlay (e.g. a minimap) as a child of a `UIScrollView`.
     open func addFixedOverlaySubview(_ view: NSView) { super.addSubview(view) }
     open func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool { true }
+
+    /// Scrolls to `offset`, optionally animating the AppKit clip view with an ease-out curve.
+    open func setContentOffset(_ offset: CGPoint, animationDuration: TimeInterval) {
+        guard animationDuration > 0, offset != storedContentOffset else {
+            contentOffset = offset
+            return
+        }
+        storedContentOffset = offset
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = animationDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            clipView.animator().setBoundsOrigin(offset)
+        }
+    }
+
+    /// Stops a pending animated scroll at the current target.
+    open func cancelAnimatedScrolling() {
+        clipView.layer?.removeAllAnimations()
+        clipView.scroll(to: storedContentOffset)
+    }
     private func updateDocumentViewFrame() {
         // AppKit hit-tests against the document view's frame. For short or empty
         // documents, contentSize is only ~one line tall, so clicks in the empty

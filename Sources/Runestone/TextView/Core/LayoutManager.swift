@@ -496,7 +496,7 @@ extension LayoutManager {
         contentSizeService.setSize(of: lineController.line, to: lineSize)
     }
 
-    /// Vertical center of the document line containing `location`, in content coordinates.
+    /// Vertical center of the visual line fragment containing `location`, in content coordinates.
     func lineAnchorY(at location: Int) -> CGFloat? {
         let safeLocation = min(max(location, 0), stringView.string.length)
         guard let line = lineManager.line(containingCharacterAt: safeLocation) else {
@@ -504,6 +504,10 @@ extension LayoutManager {
         }
         prepareLineForDisplay(atLocation: safeLocation)
         let lineController = lineControllerStorage.getOrCreateLineController(for: line)
+        let lineLocalLocation = min(max(safeLocation - line.location, 0), line.data.length)
+        if let fragment = lineController.lineFragmentNode(containingCharacterAt: lineLocalLocation)?.data.lineFragment {
+            return textContainerInset.top + line.yPosition + fragment.yPosition + fragment.scaledSize.height / 2
+        }
         let lineTop = textContainerInset.top + line.yPosition
         return TypewriterScrollingPolicy.anchorY(lineYPosition: lineTop, lineHeight: lineController.lineHeight)
     }

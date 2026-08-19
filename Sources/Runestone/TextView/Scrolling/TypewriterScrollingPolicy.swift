@@ -41,10 +41,16 @@ enum TypewriterScrollingPolicy {
         anchorY - viewportHeight * anchorFraction
     }
 
-    /// Extra vertical overscroll below the document so the last line can still reach
-    /// `anchorFraction` up the viewport. Matches ``TextView``'s `preferredContentSize` math.
+    /// Virtual padding above the document. At least half a viewport is retained at every anchor
+    /// so the first visual line can reach the requested position.
+    static func requiredTopOverscroll(viewportHeight: CGFloat, anchorFraction: CGFloat) -> CGFloat {
+        max(viewportHeight / 2, viewportHeight * anchorFraction)
+    }
+
+    /// Extra vertical overscroll below the document so the last visual line can still reach
+    /// `anchorFraction` up the viewport. At least half a viewport is always retained.
     static func requiredBottomOverscroll(viewportHeight: CGFloat, anchorFraction: CGFloat) -> CGFloat {
-        viewportHeight * (1 - anchorFraction)
+        max(viewportHeight / 2, viewportHeight * (1 - anchorFraction))
     }
 
     // MARK: - Multi-caret
