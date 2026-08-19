@@ -136,6 +136,10 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode {
             return .unknown
         }
     }
+
+    var rootSyntaxNode: TreeSitterNode? {
+        rootLanguageLayer.tree?.rootNode
+    }
 }
 
 extension TreeSitterInternalLanguageMode: TreeSitterParserDelegate {

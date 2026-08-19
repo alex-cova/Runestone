@@ -18,20 +18,28 @@ extension TextInputView {
             delegate?.textInputView(self, didRequestSelectionInteraction: true)
         }
         isMouseSelecting = true
+        pendingOptionClickPoint = nil
         if isPointOnSelectionHandle(point) {
             return
         }
-        if event.modifierFlags.contains(.shift) {
+        let isEditable = delegate?.textInputViewIsEditable(self) ?? true
+        if event.modifierFlags.contains(.option), event.modifierFlags.contains(.shift), isEditable {
+            // Option+Shift extends the active block selection (or starts one from the current
+            // caret if none is active yet) — distinct from plain Shift, which is checked below
+            // and extends a linear selection instead. Checked first since Shift alone would
+            // otherwise win this modifier combination.
+            beginBlockSelectionAtCurrentCaretIfNeeded()
+            extendBlockSelection(to: point)
+        } else if event.modifierFlags.contains(.shift) {
             collapseMultiSelectionToPrimary()
             let anchor = selectionAnchor ?? selection?.location ?? 0
             if let index = characterIndex(at: point) {
                 setSelectedRange(from: anchor, to: index)
             }
-        } else if event.modifierFlags.contains(.option), event.clickCount == 1,
-                  delegate?.textInputViewIsEditable(self) ?? true,
-                  let index = characterIndex(at: point) {
-            addSelection(at: index)
-            selectionAnchor = index
+        } else if event.modifierFlags.contains(.option), event.clickCount == 1, isEditable {
+            // Deferred: a plain click (no drag before mouseUp) resolves into the existing
+            // add-a-caret behavior; mouseDragged promotes it into a fresh block selection instead.
+            pendingOptionClickPoint = point
         } else if event.clickCount >= 3 {
             selectParagraph(at: point)
             selectionAnchor = selection?.location
@@ -50,6 +58,16 @@ extension TextInputView {
             return
         }
         let point = convert(event.locationInWindow, from: nil)
+        if let pendingPoint = pendingOptionClickPoint {
+            pendingOptionClickPoint = nil
+            beginBlockSelection(at: pendingPoint)
+            extendBlockSelection(to: point)
+            return
+        }
+        if blockSelectionController.isActive {
+            extendBlockSelection(to: point)
+            return
+        }
         collapseMultiSelectionToPrimary()
         let anchor = selectionAnchor ?? selection?.location ?? 0
         if let index = characterIndex(at: point) {
@@ -59,6 +77,13 @@ extension TextInputView {
 
     override func mouseUp(with event: NSEvent) {
         isMouseSelecting = false
+        if let pendingPoint = pendingOptionClickPoint {
+            pendingOptionClickPoint = nil
+            if let index = characterIndex(at: pendingPoint) {
+                addSelection(at: index)
+                selectionAnchor = index
+            }
+        }
         if selection?.length == 0 {
             selectionAnchor = selection?.location
         }
@@ -110,6 +135,40 @@ extension TextInputView {
             return
         }
 
+        // ⌥⌘↑/↓ clone a caret vertically; ⌃⇧←/→/↑/↓ grow/shrink a block selection. Both are
+        // checked before the plain arrow-key switch below, where ⌥ and ⇧ each already mean
+        // something else (word movement, linear selection extension).
+        if flags == [.command, .option] {
+            switch event.keyCode {
+            case 0x7E:
+                addCaretAbove()
+                return
+            case 0x7D:
+                addCaretBelow()
+                return
+            default:
+                break
+            }
+        }
+        if flags == [.control, .shift] {
+            switch event.keyCode {
+            case 0x7B:
+                extendBlockSelection(in: .left)
+                return
+            case 0x7C:
+                extendBlockSelection(in: .right)
+                return
+            case 0x7D:
+                extendBlockSelection(in: .down)
+                return
+            case 0x7E:
+                extendBlockSelection(in: .up)
+                return
+            default:
+                break
+            }
+        }
+
         switch event.keyCode {
         case 0x7B:
             moveSelectionForArrowKey(direction: .left, flags: flags)
@@ -144,6 +203,11 @@ extension TextInputView {
             }
             return
         case 0x35:
+            if blockSelectionController.isActive {
+                endBlockSelection()
+                collapseMultiSelectionToPrimary()
+                return
+            }
             if isMultiCursorActive {
                 collapseMultiSelectionToPrimary()
                 return
@@ -261,6 +325,21 @@ private extension TextInputView {
         guard let characters = event.charactersIgnoringModifiers?.lowercased() else {
             return false
         }
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
+        // ⌘K ⌘D: a bare ⌘K arms a short window for the next ⌘-key to complete the chord. Any
+        // other ⌘-key (including a second ⌘K) drops it rather than accumulating stale state.
+        if let pending = pendingChordPrefix {
+            pendingChordPrefix = nil
+            if pending.key == "k", Date().timeIntervalSince1970 - pending.timestamp < 2, characters == "d", flags == .command {
+                skipCurrentOccurrence()
+                return true
+            }
+        }
+        if characters == "k", flags == .command {
+            pendingChordPrefix = (key: "k", timestamp: Date().timeIntervalSince1970)
+            return true
+        }
         if characters == "a" {
             selectAll(nil)
             return true
@@ -270,12 +349,20 @@ private extension TextInputView {
             delegate?.textInputViewDidRequestToggleFindPanel(self, mode: mode)
             return true
         }
-        if characters == "l", event.modifierFlags.contains(.shift) {
+        if characters == "l", flags == [.command, .shift] {
+            selectAllOccurrences()
+            return true
+        }
+        if characters == "l", flags == [.command, .option] {
             addSelectionsOnEachLine()
             return true
         }
-        if characters == "d" {
+        if characters == "d", flags == .command {
             selectNextOccurrence()
+            return true
+        }
+        if characters == "u", flags == .command {
+            undoLastCaretChange()
             return true
         }
         return false

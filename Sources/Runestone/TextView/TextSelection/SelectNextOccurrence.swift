@@ -41,4 +41,24 @@ enum SelectNextOccurrence {
         }
         return nil
     }
+
+    /// Finds every occurrence of `query` in `string`, for select-all-occurrences (⌘⇧L).
+    static func allMatches(for query: String, in string: NSString, caseSensitive: Bool = true) -> [NSRange] {
+        guard !query.isEmpty else {
+            return []
+        }
+        let options: NSString.CompareOptions = caseSensitive ? [] : [.caseInsensitive]
+        var matches: [NSRange] = []
+        var searchLocation = 0
+        while searchLocation < string.length {
+            let searchRange = NSRange(location: searchLocation, length: string.length - searchLocation)
+            let found = string.range(of: query, options: options, range: searchRange)
+            guard found.location != NSNotFound else {
+                break
+            }
+            matches.append(found)
+            searchLocation = found.location + max(found.length, 1)
+        }
+        return matches
+    }
 }

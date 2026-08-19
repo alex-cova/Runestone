@@ -26,6 +26,13 @@ public protocol LSPClient: Sendable {
     /// Request formatting for the given document range.
     func requestFormatting(for document: Document, in range: TextRange?) async throws -> [LSPTextEdit]
 
+    /// Request code actions at the given position.
+    func requestCodeActions(
+        for document: Document,
+        at position: TextPosition,
+        diagnostics: [LSPDiagnostic]
+    ) async throws -> [LSPCodeAction]
+
     /// Request signature help at the given position.
     func requestSignatureHelp(for document: Document, at position: TextPosition) async throws -> LSPSignatureHelp?
 
@@ -41,6 +48,11 @@ public extension LSPClient {
     func requestReferences(for document: Document, at position: TextPosition) async throws -> [LSPLocation] { [] }
     func requestRename(for document: Document, at position: TextPosition, to newName: String) async throws -> LSPWorkspaceEdit? { nil }
     func requestFormatting(for document: Document, in range: TextRange?) async throws -> [LSPTextEdit] { [] }
+    func requestCodeActions(
+        for document: Document,
+        at position: TextPosition,
+        diagnostics: [LSPDiagnostic]
+    ) async throws -> [LSPCodeAction] { [] }
     func requestSignatureHelp(for document: Document, at position: TextPosition) async throws -> LSPSignatureHelp? { nil }
     func requestSemanticTokens(for document: Document) async throws -> LSPSemanticTokens { LSPSemanticTokens(resultId: nil, data: []) }
     func requestSemanticTokensDelta(for document: Document, previousResultId: String) async throws -> LSPSemanticTokensDelta {

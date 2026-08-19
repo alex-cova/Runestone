@@ -37,6 +37,53 @@ final class EditorIntelligenceControllerTests: XCTestCase {
         XCTAssertFalse(controller.adapter.currentDocument?.text.isEmpty ?? true)
     }
 
+    func testAcceptSelectedCompletionAppliesAtEveryCaret() async throws {
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 400, height: 300),
+                              styleMask: [.titled],
+                              backing: .buffered,
+                              defer: false)
+        let textView = TextView(frame: window.contentView!.bounds)
+        textView.theme = DefaultTheme()
+        textView.text = "hel hel hel"
+        window.contentView = textView
+        textView.selectedRange = NSRange(location: 3, length: 0)
+
+        let provider = MockCompletionProvider(items: [
+            CompletionItem(
+                label: "hello",
+                insertText: "hello",
+                kind: .function,
+                range: makeRange(start: 0, end: 3),
+                source: "Test"
+            )
+        ])
+        let controller = EditorIntelligenceController(
+            textView: textView,
+            completionEngine: CompletionEngine(providers: [provider], debounceInterval: 0),
+            hoverEngine: HoverEngine(providers: []),
+            diagnosticEngine: DiagnosticEngine(providers: [])
+        )
+
+        // `RunestoneEditorAdapter` captures its initial document snapshot asynchronously on
+        // init; wait for that to land before triggering, or `adapter.currentDocument` is still
+        // nil and `requestCompletion` bails out having never started a completion task at all.
+        try await Task.sleep(nanoseconds: 100_000_000)
+        controller.triggerCompletion()
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        // A caret after each "hel", simulating multi-cursor at trigger time having grown into
+        // this set before the user accepted the completion.
+        textView.selectedRanges = [
+            NSRange(location: 3, length: 0),
+            NSRange(location: 7, length: 0),
+            NSRange(location: 11, length: 0)
+        ]
+
+        controller.acceptSelectedCompletion()
+
+        XCTAssertEqual(textView.text as String, "hello hello hello")
+    }
+
     func testControllerAppliesDiagnostics() async throws {
         let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
         textView.theme = DefaultTheme()

@@ -93,6 +93,7 @@ final class LayoutManager {
             foldRibbonView.foldingController = foldingController
         }
     }
+    weak var focusModeController: FocusModeController?
     var lineSelectionDisplayType: LineSelectionDisplayType = .disabled {
         didSet {
             if lineSelectionDisplayType != oldValue {
@@ -317,6 +318,39 @@ extension LayoutManager {
     }
 }
 
+// MARK: - Block Selection
+extension LayoutManager {
+    /// Row index of the document line at `yPosition` (view-space). Falls back to the first/last
+    /// line when `yPosition` falls outside the laid-out content, mirroring `closestIndex(to:)`'s
+    /// own y-fallback branches. Used to seed and extend a block/column selection from a mouse point.
+    func lineIndex(forYPosition yPosition: CGFloat) -> Int {
+        let adjustedYPosition = yPosition - textContainerInset.top
+        if let line = lineManager.line(containingYOffset: adjustedYPosition) {
+            return line.index
+        } else if adjustedYPosition <= 0 {
+            return lineManager.firstLine.index
+        } else {
+            return lineManager.lastLine.index
+        }
+    }
+
+    /// Character index closest to `xPosition` (view-space) within the first visual line fragment
+    /// of the document line at `row`, clamped to that line's own bounds (excluding its line
+    /// delimiter). Used by column/block selection, which reasons about specific document rows
+    /// rather than a y-position — rows may be off-screen, so this typesets the line on demand via
+    /// `prepareLineForDisplay(atLocation:)` rather than relying on it already being laid out.
+    func closestIndex(toXPosition xPosition: CGFloat, inLineAtRow row: Int) -> Int {
+        let line = lineManager.line(atRow: row)
+        prepareLineForDisplay(atLocation: line.location)
+        guard let lineController = lineControllerStorage[line.id] else {
+            return line.location
+        }
+        let adjustedXPosition = xPosition - leadingLineSpacing
+        let globalIndex = lineController.closestIndex(to: CGPoint(x: adjustedXPosition, y: 0))
+        return min(max(globalIndex, line.location), line.location + line.data.length)
+    }
+}
+
 // MARK: - Layout
 extension LayoutManager {
     func setNeedsLayout() {
@@ -501,12 +535,18 @@ extension LayoutManager {
             let lineYPosition = line.yPosition
             let lineFragmentControllers = lineController.lineFragmentControllers(in: layoutBounds)
             let collapsedFold = foldingController?.collapsedFold(withHeaderLineID: line.id)
+            let lineRange = NSRange(location: line.location, length: line.data.length)
+            let focusedLineRanges = focusModeController?.focusedRanges(forLineWithID: line.id, lineRange: lineRange) ?? []
             for (lineFragmentIndex, lineFragmentController) in lineFragmentControllers.enumerated() {
                 let lineFragment = lineFragmentController.lineFragment
                 var lineFragmentFrame: CGRect = .zero
                 appearedLineFragmentIDs.insert(lineFragment.id)
                 lineFragmentController.highlightedRangeFragments = highlightService.highlightedRangeFragments(for: lineFragment,
                                                                                                               inLineWithID: line.id)
+                lineFragmentController.unfocusedAlpha = focusModeController?.effectiveUnfocusedAlpha ?? 1
+                lineFragmentController.focusedRanges = focusedLineRanges.compactMap { range in
+                    range.overlaps(lineFragment.range) ? range.capped(to: lineFragment.range) : nil
+                }
                 lineFragmentController.foldPlaceholderText = (collapsedFold != nil && lineFragmentIndex == lineFragmentControllers.count - 1)
                     ? "\u{22EF}"
                     : nil

@@ -6,53 +6,7 @@ import XCTest
 /// on macOS — in particular the shift-arrow "extension sticks after one step" regression, and
 /// that read-only (but selectable) editors still support navigation, selection and copy.
 final class TextViewKeyboardSelectionTests: XCTestCase {
-    // MARK: - Helpers
-
-    private func makeFocusedTextView(text: String, isEditable: Bool = true) -> TextView {
-        let window = NSWindow(
-            contentRect: CGRect(x: 0, y: 0, width: 400, height: 300),
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false
-        )
-        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
-        textView.isEditable = isEditable
-        textView.isSelectable = true
-        window.contentView = textView
-        window.makeKeyAndOrderFront(nil)
-        textView.setState(TextViewState(text: text, theme: DefaultTheme()))
-        // A real window always lays the view out before the user can type into it;
-        // do the same here so line-fragment-dependent boundary math (Home/End, ⌘←/→)
-        // isn't operating on unlaid-out (zero-length) line fragments.
-        textView.layoutIfNeeded()
-        XCTAssertTrue(textView.focusTextInput(), "focusTextInput() should install first responder")
-        return textView
-    }
-
-    private func keyEvent(keyCode: UInt16, characters: String = "", flags: NSEvent.ModifierFlags = []) -> NSEvent {
-        NSEvent.keyEvent(
-            with: .keyDown,
-            location: .zero,
-            modifierFlags: flags,
-            timestamp: 0,
-            windowNumber: 0,
-            context: nil,
-            characters: characters,
-            charactersIgnoringModifiers: characters,
-            isARepeat: false,
-            keyCode: keyCode
-        )!
-    }
-
-    private func send(_ event: NSEvent, to textView: TextView) {
-        textView.window?.sendEvent(event)
-    }
-
-    private enum KeyCode {
-        static let leftArrow: UInt16 = 0x7B
-        static let rightArrow: UInt16 = 0x7C
-        static let letterA: UInt16 = 0x00
-    }
+    private typealias KeyCode = TestKeyCode
 
     // MARK: - Shift-arrow extension (regression: stuck after one step)
 

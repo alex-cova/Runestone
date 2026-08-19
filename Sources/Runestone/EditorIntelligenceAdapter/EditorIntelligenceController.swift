@@ -1,10 +1,34 @@
 import AppKit
 import EditorIntelligence
 
+/// Optional LSP and workspace services wired into ``EditorIntelligenceController``.
+public struct EditorIntelligenceServices {
+    public var formattingProvider: LSPFormattingProvider?
+    public var signatureHelpProvider: LSPSignatureHelpProvider?
+    public var codeActionProvider: LSPCodeActionProvider?
+    public var symbolIndex: SymbolIndex?
+    public var workspace: Workspace?
+
+    public init(
+        formattingProvider: LSPFormattingProvider? = nil,
+        signatureHelpProvider: LSPSignatureHelpProvider? = nil,
+        codeActionProvider: LSPCodeActionProvider? = nil,
+        symbolIndex: SymbolIndex? = nil,
+        workspace: Workspace? = nil
+    ) {
+        self.formattingProvider = formattingProvider
+        self.signatureHelpProvider = signatureHelpProvider
+        self.codeActionProvider = codeActionProvider
+        self.symbolIndex = symbolIndex
+        self.workspace = workspace
+    }
+}
+
 /// Wires Editor Intelligence Platform services into a live `TextView`.
 ///
 /// Owns the `RunestoneEditorAdapter`, mounts completion/hover/ghost-text UI, and drives
-/// completion, hover, and diagnostics from editor events.
+/// completion, hover, diagnostics, formatting, code actions, outline, breadcrumbs, and
+/// workspace search from editor events.
 @MainActor
 public final class EditorIntelligenceController {
     public let adapter: RunestoneEditorAdapter
@@ -12,12 +36,32 @@ public final class EditorIntelligenceController {
     public let hoverEngine: HoverEngine
     public let diagnosticEngine: DiagnosticEngine
     public let navigationEngine: NavigationEngine?
+    /// Not currently invoked from anywhere in this controller — stored for callers who drive
+    /// refactoring themselves. Whoever wires up a rename invocation: `RenameOperation`/
+    /// `LSPRenameProvider` both take a single cursor position (EIP's `Cursor` is single-position
+    /// by construction; there's no multi-position `textDocument/rename` request in LSP), so
+    /// `collapseMultiSelectionToPrimary()` before requesting and apply the result through
+    /// `TextEditApplicator` — don't attempt to extend rename itself to multiple sites.
     public let refactoringEngine: RefactoringEngine?
+
+    public let breadcrumbBarView = BreadcrumbBarView()
+    public let outlineSidebarView = OutlineSidebarView()
+    public let codeActionView = CodeActionView()
+    public let workspaceSearchPanelView = WorkspaceSearchPanelView()
 
     private weak var textView: TextView?
     private var eventTask: Task<Void, Never>?
     private var hoverTask: Task<Void, Never>?
     private var completionTask: Task<Void, Never>?
+    private var signatureHelpTask: Task<Void, Never>?
+    private var accessoryTask: Task<Void, Never>?
+
+    private let formattingProvider: LSPFormattingProvider?
+    private let signatureHelpProvider: LSPSignatureHelpProvider?
+    private let codeActionProvider: LSPCodeActionProvider?
+    private let symbolIndex: SymbolIndex?
+    private let workspace: Workspace?
+    private let workspaceSearchEngine = WorkspaceSearchEngine()
 
     private let overlayContainer = NSView()
     private let completionPanelView: CompletionPanelView
@@ -30,6 +74,7 @@ public final class EditorIntelligenceController {
     private var isCompletionVisible = false
     private var currentReplacementRange: EditorIntelligence.TextRange?
     private var ghostTextModel: GhostTextModel?
+    private var latestDiagnostics: [Diagnostic] = []
     private let forwardingDelegateBox: EditorIntelligenceForwardingDelegate
 
     /// Create a controller that connects EIP services to a text view.
@@ -41,6 +86,7 @@ public final class EditorIntelligenceController {
         diagnosticEngine: DiagnosticEngine,
         navigationEngine: NavigationEngine? = nil,
         refactoringEngine: RefactoringEngine? = nil,
+        services: EditorIntelligenceServices = EditorIntelligenceServices(),
         forwardingDelegate: TextViewDelegate? = nil
     ) {
         self.textView = textView
@@ -49,6 +95,11 @@ public final class EditorIntelligenceController {
         self.diagnosticEngine = diagnosticEngine
         self.navigationEngine = navigationEngine
         self.refactoringEngine = refactoringEngine
+        self.formattingProvider = services.formattingProvider
+        self.signatureHelpProvider = services.signatureHelpProvider
+        self.codeActionProvider = services.codeActionProvider
+        self.symbolIndex = services.symbolIndex
+        self.workspace = services.workspace
 
         let placeholderRange = EditorIntelligence.TextRange(
             start: TextPosition(line: 0, column: 0, utf16Offset: 0),
@@ -73,6 +124,7 @@ public final class EditorIntelligenceController {
         adapter.forwardingDelegate = forwarding
 
         installOverlayViews(on: textView)
+        configureAccessoryViews()
         textView.keyDownHandler = { [weak self] event in
             self?.handleKeyDown(event) ?? false
         }
@@ -84,6 +136,8 @@ public final class EditorIntelligenceController {
         eventTask?.cancel()
         hoverTask?.cancel()
         completionTask?.cancel()
+        signatureHelpTask?.cancel()
+        accessoryTask?.cancel()
     }
 
     // MARK: - Public API
@@ -141,19 +195,197 @@ public final class EditorIntelligenceController {
         Task {
             let report = await diagnosticEngine.diagnostics(for: document)
             await MainActor.run {
+                self.latestDiagnostics = report.diagnostics
                 textView.diagnostics = report.diagnostics.map(TextViewDiagnostic.init)
             }
         }
     }
 
+    /// Format the entire document using the configured LSP formatting provider.
+    public func formatDocument() {
+        guard let document = adapter.currentDocument, let formattingProvider, let textView else {
+            return
+        }
+        Task {
+            let edits = await formattingProvider.formatDocument(document)
+            await MainActor.run {
+                TextEditApplicator.apply(edits, in: textView)
+            }
+        }
+    }
+
+    /// Format the current selection using the configured LSP formatting provider. With multiple
+    /// selections active (multi-caret or block), every non-empty range is formatted individually
+    /// and the results applied together.
+    public func formatSelection() {
+        guard let document = adapter.currentDocument, let formattingProvider, let textView else {
+            formatDocument()
+            return
+        }
+        let ranges = document.selection.allRanges.filter { $0.start != $0.end }
+        guard !ranges.isEmpty else {
+            formatDocument()
+            return
+        }
+        Task {
+            var allEdits: [EditorIntelligence.TextEdit] = []
+            for range in ranges {
+                let edits = await formattingProvider.formatSelection(in: document, range: range)
+                allEdits.append(contentsOf: edits)
+            }
+            await MainActor.run {
+                TextEditApplicator.apply(allEdits, in: textView)
+            }
+        }
+    }
+
+    /// Request code actions at the current cursor and show the action panel.
+    public func requestCodeActions() {
+        guard let document = adapter.currentDocument, let codeActionProvider else {
+            return
+        }
+        Task {
+            let actions = await codeActionProvider.codeActions(
+                for: document,
+                at: document.cursor.position,
+                diagnostics: latestDiagnostics
+            )
+            await MainActor.run {
+                guard !actions.isEmpty else {
+                    self.hideCodeActions()
+                    return
+                }
+                self.showCodeActions(actions, anchorRange: document.selection.range)
+            }
+        }
+    }
+
+    /// Apply a code action's edits to the current document.
+    public func applyCodeAction(_ action: CodeAction) {
+        guard let textView else {
+            return
+        }
+        TextEditApplicator.apply(action.edits, in: textView)
+        hideCodeActions()
+    }
+
+    /// Refresh the outline sidebar from the symbol index.
+    public func refreshOutline() {
+        guard let document = adapter.currentDocument, let symbolIndex else {
+            return
+        }
+        accessoryTask?.cancel()
+        accessoryTask = Task { [weak self] in
+            guard let self else { return }
+            let symbols = await symbolIndex.symbols(in: document.id)
+            let items = OutlineBuilder.build(from: symbols)
+            let selectedID = self.selectedOutlineItemID(for: document.cursor.position, in: items)
+            await MainActor.run {
+                self.outlineSidebarView.update(model: OutlineModel(items: items, selectedItemID: selectedID))
+            }
+        }
+    }
+
+    /// Refresh breadcrumb segments for the current cursor.
+    public func refreshBreadcrumbs() {
+        guard let document = adapter.currentDocument, let symbolIndex else {
+            return
+        }
+        accessoryTask?.cancel()
+        accessoryTask = Task { [weak self] in
+            guard let self else { return }
+            let symbols = await symbolIndex.symbols(in: document.id)
+            let cursorOffset = document.cursor.position.utf16Offset
+            let enclosing = symbols
+                .filter { symbol in
+                    let start = min(symbol.range.start.utf16Offset, symbol.range.end.utf16Offset)
+                    let end = max(symbol.range.start.utf16Offset, symbol.range.end.utf16Offset)
+                    return start <= cursorOffset && cursorOffset <= end
+                }
+                .sorted { $0.range.start.utf16Offset < $1.range.start.utf16Offset }
+            let segments = enclosing.map {
+                BreadcrumbSegment(title: $0.name, range: $0.range)
+            }
+            await MainActor.run {
+                self.breadcrumbBarView.update(model: BreadcrumbBarModel(segments: segments))
+            }
+        }
+    }
+
+    /// Search all open workspace documents and present results.
+    public func searchWorkspace(query: String, matchWholeWord: Bool = false, useRegularExpression: Bool = false) {
+        guard let workspace else {
+            return
+        }
+        let searchQuery = WorkspaceSearchQuery(
+            text: query,
+            matchWholeWord: matchWholeWord,
+            useRegularExpression: useRegularExpression
+        )
+        Task {
+            let results = await workspaceSearchEngine.search(searchQuery, in: workspace)
+            await MainActor.run {
+                self.presentWorkspaceSearch(query: query, results: results)
+            }
+        }
+    }
+
+    /// Mount the breadcrumb bar above the text view inside a container.
+    public func installBreadcrumbBar(in container: NSView) {
+        breadcrumbBarView.translatesAutoresizingMaskIntoConstraints = false
+        if breadcrumbBarView.superview !== container {
+            container.addSubview(breadcrumbBarView)
+        }
+        guard let textView else { return }
+        NSLayoutConstraint.activate([
+            breadcrumbBarView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            breadcrumbBarView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            breadcrumbBarView.topAnchor.constraint(equalTo: container.topAnchor),
+            breadcrumbBarView.heightAnchor.constraint(equalToConstant: 24)
+        ])
+        if textView.superview === container {
+            textView.frame.origin.y = 24
+        }
+    }
+
+    /// Mount the outline sidebar to the leading edge of a container.
+    public func installOutlineSidebar(in container: NSView, width: CGFloat = 220) {
+        outlineSidebarView.translatesAutoresizingMaskIntoConstraints = false
+        if outlineSidebarView.superview !== container {
+            container.addSubview(outlineSidebarView)
+        }
+        NSLayoutConstraint.activate([
+            outlineSidebarView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            outlineSidebarView.topAnchor.constraint(equalTo: container.topAnchor),
+            outlineSidebarView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            outlineSidebarView.widthAnchor.constraint(equalToConstant: width)
+        ])
+        refreshOutline()
+    }
+
     // MARK: - Setup
+
+    private func configureAccessoryViews() {
+        breadcrumbBarView.onSelectSegment = { [weak self] segment in
+            self?.focus(range: segment.range)
+        }
+        outlineSidebarView.onSelectItem = { [weak self] item in
+            self?.focus(range: item.range)
+        }
+        codeActionView.onSelectAction = { [weak self] action in
+            self?.applyCodeAction(action)
+        }
+        workspaceSearchPanelView.onSelectResult = { [weak self] result in
+            self?.focusWorkspaceResult(result)
+        }
+    }
 
     private func installOverlayViews(on textView: TextView) {
         overlayContainer.translatesAutoresizingMaskIntoConstraints = false
         overlayContainer.isHidden = true
         textView.addSubview(overlayContainer)
 
-        for view in [completionPanelView, hoverWindowView, ghostTextView, parameterHintsView] {
+        for view in [completionPanelView, hoverWindowView, ghostTextView, parameterHintsView, codeActionView, workspaceSearchPanelView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             view.isHidden = true
             overlayContainer.addSubview(view)
@@ -182,13 +414,17 @@ public final class EditorIntelligenceController {
         switch event {
         case .documentChanged:
             refreshDiagnostics()
+            refreshOutline()
             if isCompletionVisible {
                 requestCompletion(trigger: .idle)
             }
         case .cursorMoved, .selectionChanged:
             scheduleHoverRequest()
+            refreshBreadcrumbs()
         case .documentOpened:
             refreshDiagnostics()
+            refreshOutline()
+            refreshBreadcrumbs()
         default:
             break
         }
@@ -260,6 +496,7 @@ public final class EditorIntelligenceController {
             location: replacementRange.start.utf16Offset,
             length: replacementRange.end.utf16Offset - replacementRange.start.utf16Offset
         )
+        let insertedText: String
         if item.kind == .snippet {
             let parser = SnippetParser()
             let nodes = parser.parse(item.insertText)
@@ -267,10 +504,22 @@ public final class EditorIntelligenceController {
                 nodes: nodes,
                 context: SnippetExpansionContext(selectedText: textView.text(in: nsRange) ?? "")
             )
-            let expansion = expander.expand()
-            textView.replace(nsRange, withText: expansion.text)
+            // Multi-site tab stops aren't supported -- there's no tab-stop session in the editor
+            // at all yet, single- or multi-caret -- so a snippet's placeholders always collapse
+            // to their default text; `expansion.placeholders`/`finalCursorOffset` go unused here
+            // exactly as they already do on the single-caret path below.
+            insertedText = expander.expand().text
         } else {
-            textView.replace(nsRange, withText: item.insertText)
+            insertedText = item.insertText
+        }
+        if textView.isMultiCursorActive {
+            // Apply the same relative edit -- "replace these N characters around the primary
+            // caret" -- at every caret, not just the primary one.
+            let primaryCaretLocation = textView.selectedRange.location
+            let relativeStartOffset = nsRange.location - primaryCaretLocation
+            textView.replaceAtAllSelections(relativeStartOffset: relativeStartOffset, length: nsRange.length, with: insertedText)
+        } else {
+            textView.replace(nsRange, withText: insertedText)
         }
     }
 
@@ -367,13 +616,112 @@ public final class EditorIntelligenceController {
         updateOverlayVisibility()
     }
 
+    private func requestSignatureHelp() {
+        guard let document = adapter.currentDocument, let signatureHelpProvider else {
+            return
+        }
+        signatureHelpTask?.cancel()
+        signatureHelpTask = Task { [weak self] in
+            guard let self else { return }
+            if let model = await signatureHelpProvider.signatureHelp(for: document, at: document.cursor.position) {
+                await MainActor.run {
+                    self.showParameterHints(model)
+                }
+            }
+        }
+    }
+
+    // MARK: - Code Actions
+
+    private func showCodeActions(_ actions: [CodeAction], anchorRange: EditorIntelligence.TextRange) {
+        guard let textView else {
+            return
+        }
+        codeActionView.update(model: CodeActionModel(actions: actions, anchorRange: anchorRange))
+        positionPanel(
+            codeActionView,
+            near: anchorRange.start.utf16Offset,
+            in: textView,
+            size: NSSize(width: 280, height: min(CGFloat(actions.count) * 24 + 8, 200))
+        )
+        codeActionView.isHidden = false
+        overlayContainer.isHidden = false
+    }
+
+    private func hideCodeActions() {
+        codeActionView.isHidden = true
+        updateOverlayVisibility()
+    }
+
+    // MARK: - Workspace Search
+
+    private func presentWorkspaceSearch(query: String, results: [WorkspaceSearchResult]) {
+        guard let textView, let document = adapter.currentDocument else {
+            return
+        }
+        workspaceSearchPanelView.update(model: WorkspaceSearchModel(query: query, results: results))
+        positionPanel(
+            workspaceSearchPanelView,
+            near: document.cursor.position.utf16Offset,
+            in: textView,
+            size: NSSize(width: 480, height: 180)
+        )
+        workspaceSearchPanelView.isHidden = false
+        overlayContainer.isHidden = false
+    }
+
+    public func hideWorkspaceSearch() {
+        workspaceSearchPanelView.isHidden = true
+        updateOverlayVisibility()
+    }
+
+    // MARK: - Navigation Helpers
+
+    private func focus(range: EditorIntelligence.TextRange) {
+        guard let textView else {
+            return
+        }
+        let nsRange = TextEditApplicator.nsRange(for: range, in: textView)
+        textView.selectedRanges = [nsRange]
+        textView.scrollRangeToVisible(nsRange)
+    }
+
+    private func focusWorkspaceResult(_ result: WorkspaceSearchResult) {
+        focus(range: result.range)
+        hideWorkspaceSearch()
+    }
+
+    private func selectedOutlineItemID(for position: TextPosition, in items: [OutlineItem]) -> UUID? {
+        let offset = position.utf16Offset
+        var match: OutlineItem?
+        func walk(_ items: [OutlineItem]) {
+            for item in items {
+                let start = min(item.range.start.utf16Offset, item.range.end.utf16Offset)
+                let end = max(item.range.start.utf16Offset, item.range.end.utf16Offset)
+                if start <= offset, offset <= end {
+                    match = item
+                    walk(item.children)
+                }
+            }
+        }
+        walk(items)
+        return match?.id
+    }
+
     // MARK: - Keyboard
 
     private func handleKeyDown(_ event: NSEvent) -> Bool {
-        guard isCompletionVisible else {
-            if event.keyCode == 0x35 {
-                hideHover()
+        if event.keyCode == 0x35 {
+            hideHover()
+            hideCodeActions()
+            hideWorkspaceSearch()
+            if isCompletionVisible {
+                dismissCompletion()
+                return true
             }
+        }
+
+        guard isCompletionVisible else {
             return false
         }
 
@@ -394,10 +742,6 @@ public final class EditorIntelligenceController {
             acceptSelectedCompletion()
             return true
         default:
-            if let characters = event.characters, characters.count == 1,
-               shouldTriggerCompletion(for: characters) {
-                return false
-            }
             return false
         }
     }
@@ -409,7 +753,17 @@ public final class EditorIntelligenceController {
         return CharacterSet.alphanumerics.contains(scalar) || text == "." || text == ":"
     }
 
+    private func shouldTriggerSignatureHelp(for text: String) -> Bool {
+        text == "(" || text == ","
+    }
+
     func handleTextInsertion(_ text: String) {
+        if shouldTriggerSignatureHelp(for: text) {
+            requestSignatureHelp()
+        } else if text == ")" {
+            hideParameterHints()
+        }
+
         if shouldTriggerCompletion(for: text) {
             requestCompletion(trigger: .keystroke(text))
         } else if isCompletionVisible {
@@ -433,6 +787,8 @@ public final class EditorIntelligenceController {
             || !hoverWindowView.isHidden
             || !ghostTextView.isHidden
             || !parameterHintsView.isHidden
+            || !codeActionView.isHidden
+            || !workspaceSearchPanelView.isHidden
         overlayContainer.isHidden = !hasVisibleChild
     }
 }
@@ -453,19 +809,19 @@ public final class EditorIntelligenceForwardingDelegate: TextViewDelegate {
         self.controller = controller
     }
 
-  public func textViewDidChange(_ textView: TextView) {
-    userDelegate?.textViewDidChange(textView)
-  }
-
-  public func textView(_ textView: TextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
-    let allowed = userDelegate?.textView(textView, shouldChangeTextIn: range, replacementText: text) ?? true
-    if allowed, text.count == 1 {
-      controller?.handleTextInsertion(text)
+    public func textViewDidChange(_ textView: TextView) {
+        userDelegate?.textViewDidChange(textView)
     }
-    return allowed
-  }
 
-  public func textViewDidChangeSelection(_ textView: TextView) {
-    userDelegate?.textViewDidChangeSelection(textView)
-  }
+    public func textView(_ textView: TextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+        let allowed = userDelegate?.textView(textView, shouldChangeTextIn: range, replacementText: text) ?? true
+        if allowed, text.count == 1 {
+            controller?.handleTextInsertion(text)
+        }
+        return allowed
+    }
+
+    public func textViewDidChangeSelection(_ textView: TextView) {
+        userDelegate?.textViewDidChangeSelection(textView)
+    }
 }

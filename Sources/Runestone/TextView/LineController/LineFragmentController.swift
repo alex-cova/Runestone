@@ -66,6 +66,28 @@ final class LineFragmentController {
             }
         }
     }
+    var unfocusedAlpha: CGFloat {
+        get {
+            renderer.unfocusedAlpha
+        }
+        set {
+            if newValue != renderer.unfocusedAlpha {
+                renderer.unfocusedAlpha = newValue
+                lineFragmentView?.setNeedsDisplay()
+            }
+        }
+    }
+    var focusedRanges: [NSRange] {
+        get {
+            renderer.focusedRanges
+        }
+        set {
+            if newValue != renderer.focusedRanges {
+                renderer.focusedRanges = newValue
+                lineFragmentView?.setNeedsDisplay()
+            }
+        }
+    }
     var foldPlaceholderText: String? {
         get {
             renderer.foldPlaceholderText

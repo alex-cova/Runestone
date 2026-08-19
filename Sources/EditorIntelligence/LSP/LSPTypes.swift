@@ -112,6 +112,21 @@ public struct LSPWorkspaceEdit: Sendable {
     }
 }
 
+/// A code action returned by a language server.
+public struct LSPCodeAction: Sendable, Hashable {
+    public let title: String
+    public let kind: String?
+    public let edits: [LSPTextEdit]
+    public let isPreferred: Bool
+
+    public init(title: String, kind: String? = nil, edits: [LSPTextEdit], isPreferred: Bool = false) {
+        self.title = title
+        self.kind = kind
+        self.edits = edits
+        self.isPreferred = isPreferred
+    }
+}
+
 /// Signature help payload.
 public struct LSPSignatureHelp: Sendable {
     public let signatures: [String]

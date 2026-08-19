@@ -220,6 +220,56 @@ open class TextView: UIScrollView {
     public func selectNextOccurrence() {
         textInputView.selectNextOccurrence()
     }
+    /// Replaces the most recently added occurrence range with the next match after it, rather
+    /// than appending (⌘K ⌘D) — skip a match you don't want without losing the ones already
+    /// selected. No-op with fewer than two selected ranges.
+    public func skipCurrentOccurrence() {
+        textInputView.skipCurrentOccurrence()
+    }
+    /// Selects every occurrence of the current query in the document (⌘⇧L). If the selection is
+    /// empty, the word under the caret becomes the query first.
+    public func selectAllOccurrences() {
+        textInputView.selectAllOccurrences()
+    }
+    /// Adds a new caret one visual line above the topmost caret (⌥⌘↑).
+    public func addCaretAbove() {
+        textInputView.addCaretAbove()
+    }
+    /// Adds a new caret one visual line below the bottommost caret (⌥⌘↓).
+    public func addCaretBelow() {
+        textInputView.addCaretBelow()
+    }
+    /// Steps the caret set back to what it was before the most recent additive multi-caret
+    /// operation (⌘U) — e.g. undoes the last `selectNextOccurrence()`, `addCaretAbove()`, or
+    /// Option-click. This is independent of the document's text undo stack.
+    public func undoLastCaretChange() {
+        textInputView.undoLastCaretChange()
+    }
+    /// Whether a column/block selection is currently active.
+    public var isBlockSelectionActive: Bool {
+        textInputView.blockSelectionController.isActive
+    }
+    /// Starts a column/block selection anchored at `point` (view coordinates).
+    public func beginBlockSelection(at point: CGPoint) {
+        textInputView.beginBlockSelection(at: point)
+    }
+    /// Extends the active block selection's far corner to `point` (view coordinates). Starts a
+    /// new block selection at the current caret if one isn't already active.
+    public func extendBlockSelection(to point: CGPoint) {
+        textInputView.extendBlockSelection(to: point)
+    }
+    /// Ends block-selection mode without changing the current selection.
+    public func endBlockSelection() {
+        textInputView.endBlockSelection()
+    }
+    /// Replaces, at every selected range, the range beginning `relativeStartOffset` UTF-16 units
+    /// from that selection's own start and extending `length` units — the same relative edit
+    /// applied identically at every caret. Used to apply a completion (or similar) at every
+    /// multi-cursor site once its replacement range relative to the primary caret is known.
+    /// No-op when only one selection is active — callers should use `replace(_:withText:)` there.
+    public func replaceAtAllSelections(relativeStartOffset: Int, length: Int, with text: String) {
+        textInputView.replaceAtAllSelections(relativeStartOffset: relativeStartOffset, length: length, with: text)
+    }
     /// The current selection range of the text view as a UITextRange.
     public var selectedTextRange: UITextRange? {
         get {
@@ -311,6 +361,57 @@ open class TextView: UIScrollView {
         }
         set {
             textInputView.isLineFoldingEnabled = newValue
+        }
+    }
+    /// Whether Focus Mode is enabled. When on, the sentence or paragraph (see
+    /// ``focusGranularity``) containing the caret — or touched by the selection, with multiple
+    /// cursors each keeping their own unit lit — stays at full opacity, while the rest of the
+    /// document dims to ``unfocusedTextAlpha``. Off by default.
+    public var isFocusModeEnabled: Bool {
+        get {
+            textInputView.isFocusModeEnabled
+        }
+        set {
+            textInputView.isFocusModeEnabled = newValue
+        }
+    }
+    /// The unit of text Focus Mode keeps focused. Defaults to ``FocusGranularity/paragraph``.
+    public var focusGranularity: FocusGranularity {
+        get {
+            textInputView.focusGranularity
+        }
+        set {
+            textInputView.focusGranularity = newValue
+        }
+    }
+    /// Opacity applied to text outside the focused range while ``isFocusModeEnabled`` is on.
+    /// Clamped to `0...1`. Defaults to `0.35`.
+    public var unfocusedTextAlpha: CGFloat {
+        get {
+            textInputView.unfocusedTextAlpha
+        }
+        set {
+            textInputView.unfocusedTextAlpha = newValue
+        }
+    }
+    /// The document ranges Focus Mode currently keeps at full opacity. Empty when
+    /// ``isFocusModeEnabled`` is off or the caret sits on a blank line.
+    public var focusedRanges: [NSRange] {
+        textInputView.focusedRanges
+    }
+    /// Whether typewriter scrolling is enabled. When on, the line containing the caret stays
+    /// pinned at ``typewriterAnchorFraction`` of the viewport's height instead of moving as you
+    /// type — the document scrolls beneath it. Off by default.
+    public var isTypewriterScrollingEnabled = false
+    /// The vertical fraction of the viewport (`0` = top, `1` = bottom) that the caret's line is
+    /// pinned to while ``isTypewriterScrollingEnabled`` is on. Clamped to `0...1`. Defaults to
+    /// `0.5` (vertical center).
+    public var typewriterAnchorFraction: CGFloat = 0.5 {
+        didSet {
+            let clamped = min(max(typewriterAnchorFraction, 0), 1)
+            if clamped != typewriterAnchorFraction {
+                typewriterAnchorFraction = clamped
+            }
         }
     }
     /// Manages grouped text emphases such as find matches, bracket pairs, and diagnostics.
@@ -578,7 +679,7 @@ open class TextView: UIScrollView {
     /// The overscroll is a factor of the scrollable area height and will not take into account any insets. 0 means no overscroll and 1 means an amount equal to the height of the text view. Detaults to 0.
     public var verticalOverscrollFactor: CGFloat = 0 {
         didSet {
-            if horizontalOverscrollFactor != oldValue {
+            if verticalOverscrollFactor != oldValue {
                 hasPendingContentSizeUpdate = true
                 handleContentSizeUpdateIfNeeded()
             }
@@ -731,7 +832,13 @@ open class TextView: UIScrollView {
     private var previousSelectedRangeDuringGestureHandling: NSRange?
     private var preferredContentSize: CGSize {
         let horizontalOverscrollLength = max(frame.width * horizontalOverscrollFactor, 0)
-        let verticalOverscrollLength = max(frame.height * verticalOverscrollFactor, 0)
+        var verticalOverscrollLength = max(frame.height * verticalOverscrollFactor, 0)
+        if isTypewriterScrollingEnabled {
+            // Typewriter mode needs enough room below the last line for it to still reach
+            // typewriterAnchorFraction up the viewport; never shrinks a larger host-set overscroll.
+            let typewriterOverscrollLength = frame.height * (1 - typewriterAnchorFraction)
+            verticalOverscrollLength = max(verticalOverscrollLength, typewriterOverscrollLength)
+        }
         let baseContentSize = textInputView.contentSize
         let width = isLineWrappingEnabled ? baseContentSize.width : baseContentSize.width + horizontalOverscrollLength
         let height = baseContentSize.height + verticalOverscrollLength

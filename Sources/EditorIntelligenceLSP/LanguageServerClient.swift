@@ -94,15 +94,49 @@ public actor LanguageServerClient: LSPClient {
     }
 
     public func requestFormatting(for document: Document, in range: EditorIntelligence.TextRange?) async throws -> [EditorIntelligence.LSPTextEdit] {
-        _ = range
+        let options = FormattingOptions(tabSize: 4, insertSpaces: true)
+        if let range {
+            let params = DocumentRangeFormattingParams(
+                textDocument: textDocument(for: document),
+                range: lspRange(from: range),
+                options: options
+            )
+            guard let edits = try await server.rangeFormatting(params) else {
+                return []
+            }
+            return edits.map { EditorIntelligence.LSPTextEdit(range: eipRange(from: $0.range), newText: $0.newText) }
+        }
         let params = DocumentFormattingParams(
             textDocument: textDocument(for: document),
-            options: FormattingOptions(tabSize: 4, insertSpaces: true)
+            options: options
         )
         guard let edits = try await server.formatting(params) else {
             return []
         }
         return edits.map { EditorIntelligence.LSPTextEdit(range: eipRange(from: $0.range), newText: $0.newText) }
+    }
+
+    public func requestCodeActions(
+        for document: Document,
+        at position: TextPosition,
+        diagnostics: [EditorIntelligence.LSPDiagnostic]
+    ) async throws -> [EditorIntelligence.LSPCodeAction] {
+        let params = CodeActionParams(
+            textDocument: textDocument(for: document),
+            range: LSPRange(
+                start: lspPosition(from: position),
+                end: lspPosition(from: position)
+            ),
+            context: CodeActionContext(
+                diagnostics: diagnostics.map(lspDiagnostic(from:)),
+                only: nil,
+                triggerKind: CodeActionTriggerKind.invoked
+            )
+        )
+        guard let response = try await server.codeAction(params) else {
+            return []
+        }
+        return response.compactMap(eipCodeAction(from:))
     }
 
     public func requestSignatureHelp(for document: Document, at position: TextPosition) async throws -> EditorIntelligence.LSPSignatureHelp? {
@@ -159,6 +193,13 @@ public actor LanguageServerClient: LSPClient {
 
 private func lspPosition(from position: TextPosition) -> LanguageServerProtocol.Position {
     LanguageServerProtocol.Position(line: position.line, character: position.column)
+}
+
+private func lspRange(from range: EditorIntelligence.TextRange) -> LanguageServerProtocol.LSPRange {
+    LanguageServerProtocol.LSPRange(
+        start: lspPosition(from: range.start),
+        end: lspPosition(from: range.end)
+    )
 }
 
 private func eipRange(from range: LanguageServerProtocol.LSPRange) -> EditorIntelligence.LSPRange {
@@ -238,5 +279,45 @@ private func diagnosticCodeString(_ code: DiagnosticCode?) -> String? {
         return String(intValue)
     case .optionB(let stringValue):
         return stringValue
+    }
+}
+
+private func lspDiagnostic(from diagnostic: EditorIntelligence.LSPDiagnostic) -> LanguageServerProtocol.Diagnostic {
+    LanguageServerProtocol.Diagnostic(
+        range: LanguageServerProtocol.LSPRange(
+            start: LanguageServerProtocol.Position(line: diagnostic.range.start.line, character: diagnostic.range.start.character),
+            end: LanguageServerProtocol.Position(line: diagnostic.range.end.line, character: diagnostic.range.end.character)
+        ),
+        severity: diagnostic.severity.map { LanguageServerProtocol.DiagnosticSeverity(rawValue: $0) ?? .hint },
+        code: diagnostic.code.map { .optionB($0) },
+        source: diagnostic.source,
+        message: diagnostic.message
+    )
+}
+
+private func eipCodeAction(from action: TwoTypeOption<Command, LanguageServerProtocol.CodeAction>) -> EditorIntelligence.LSPCodeAction? {
+    switch action {
+    case .optionA(let command):
+        return EditorIntelligence.LSPCodeAction(
+            title: command.title,
+            kind: command.command,
+            edits: [],
+            isPreferred: false
+        )
+    case .optionB(let codeAction):
+        let edits: [EditorIntelligence.LSPTextEdit]
+        if let workspaceEdit = codeAction.edit, let changes = workspaceEdit.changes {
+            edits = changes.values.flatMap { $0 }.map {
+                EditorIntelligence.LSPTextEdit(range: eipRange(from: $0.range), newText: $0.newText)
+            }
+        } else {
+            edits = []
+        }
+        return EditorIntelligence.LSPCodeAction(
+            title: codeAction.title,
+            kind: codeAction.kind,
+            edits: edits,
+            isPreferred: codeAction.isPreferred ?? false
+        )
     }
 }

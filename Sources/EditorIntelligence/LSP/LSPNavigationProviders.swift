@@ -49,6 +49,14 @@ public actor LSPFormattingProvider {
         self.client = client
     }
 
+    public func formatDocument(_ document: Document) async -> [TextEdit] {
+        await format(document: document, in: nil)
+    }
+
+    public func formatSelection(in document: Document, range: TextRange) async -> [TextEdit] {
+        await format(document: document, in: range)
+    }
+
     public func format(document: Document, in range: TextRange?) async -> [TextEdit] {
         do {
             let edits = try await client.requestFormatting(for: document, in: range)

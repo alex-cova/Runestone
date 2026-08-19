@@ -19,6 +19,12 @@ final class LineFragmentRenderer {
     var markedTextBackgroundColor: UIColor = .systemFill
     var markedTextBackgroundCornerRadius: CGFloat = 0
     var highlightedRangeFragments: [HighlightedRangeFragment] = []
+    /// Alpha applied to glyphs outside `focusedRanges` when Focus Mode is enabled. `1` (the
+    /// default) disables dimming entirely and keeps the original single-pass draw.
+    var unfocusedAlpha: CGFloat = 1
+    /// Ranges, in the same line-local coordinates as `highlightedRangeFragments`, that stay at
+    /// full opacity while `unfocusedAlpha < 1`. Empty means the entire fragment is dimmed.
+    var focusedRanges: [NSRange] = []
     /// Text drawn right after this fragment's content, used to indicate a collapsed fold whose
     /// header line is this fragment's line. `nil` on every other line fragment.
     var foldPlaceholderText: String?
@@ -40,9 +46,81 @@ final class LineFragmentRenderer {
     func draw(to context: CGContext, inCanvasOfSize canvasSize: CGSize) {
         drawHighlightedRanges(to: context, inCanvasOfSize: canvasSize)
         drawMarkedRange(to: context)
+        drawGlyphs(to: context)
+        drawFoldPlaceholder(to: context)
+    }
+}
+
+private extension LineFragmentRenderer {
+    /// Draws invisible characters and text, dimmed outside `focusedRanges` when Focus Mode is
+    /// enabled. Highlighted ranges, the marked-text background, and the fold placeholder are
+    /// deliberately drawn outside of this (at full opacity, see `draw(to:inCanvasOfSize:)`) so
+    /// selection, find matches, and diagnostics stay legible regardless of focus.
+    private func drawGlyphs(to context: CGContext) {
+        guard unfocusedAlpha < 1 else {
+            drawInvisibleCharacters(to: context)
+            drawText(to: context)
+            return
+        }
+        let fullRange = lineFragment.range
+        let focused = mergedAndClamped(focusedRanges, to: fullRange)
+        let dimmed = complementSpans(of: focused, in: fullRange)
+        guard !dimmed.isEmpty else {
+            // The entire fragment is focused; draw once at full opacity.
+            drawInvisibleCharacters(to: context)
+            drawText(to: context)
+            return
+        }
+        for span in dimmed {
+            drawGlyphs(to: context, clippedTo: span, alpha: unfocusedAlpha)
+        }
+        for span in focused {
+            drawGlyphs(to: context, clippedTo: span, alpha: 1)
+        }
+    }
+
+    private func drawGlyphs(to context: CGContext, clippedTo lineLocalRange: NSRange, alpha: CGFloat) {
+        context.saveGState()
+        let startX = CTLineGetOffsetForStringIndex(lineFragment.line, lineLocalRange.lowerBound, nil)
+        let endX = CTLineGetOffsetForStringIndex(lineFragment.line, lineLocalRange.upperBound, nil)
+        let clipRect = CGRect(x: startX, y: 0, width: max(endX - startX, 0), height: lineFragment.scaledSize.height)
+        context.clip(to: clipRect)
+        context.setAlpha(alpha)
         drawInvisibleCharacters(to: context)
         drawText(to: context)
-        drawFoldPlaceholder(to: context)
+        context.restoreGState()
+    }
+
+    /// Clamps `ranges` to `fullRange`, drops empty results, sorts, and merges overlaps/adjacency
+    /// so the spans that follow (focused and dimmed alike) are disjoint and ordered.
+    private func mergedAndClamped(_ ranges: [NSRange], to fullRange: NSRange) -> [NSRange] {
+        let capped = ranges.map { $0.capped(to: fullRange) }.filter { $0.length > 0 }
+        let sorted = capped.sorted { $0.location < $1.location }
+        var merged: [NSRange] = []
+        for range in sorted {
+            if let last = merged.last, range.location <= last.upperBound {
+                merged[merged.count - 1] = NSRange(location: last.location, length: max(last.upperBound, range.upperBound) - last.location)
+            } else {
+                merged.append(range)
+            }
+        }
+        return merged
+    }
+
+    /// The gaps between `ranges` (assumed disjoint and sorted) within `fullRange`.
+    private func complementSpans(of ranges: [NSRange], in fullRange: NSRange) -> [NSRange] {
+        var spans: [NSRange] = []
+        var cursor = fullRange.location
+        for range in ranges {
+            if range.location > cursor {
+                spans.append(NSRange(location: cursor, length: range.location - cursor))
+            }
+            cursor = max(cursor, range.upperBound)
+        }
+        if cursor < fullRange.upperBound {
+            spans.append(NSRange(location: cursor, length: fullRange.upperBound - cursor))
+        }
+        return spans
     }
 }
 

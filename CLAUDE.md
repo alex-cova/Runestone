@@ -11,6 +11,147 @@ Runestone is a Swift Package Manager library: a high-performance plain text/code
 
 Requires macOS 12+, Swift 5.5+/Xcode 13+. Tree-sitter (v0.20.9+) is pulled in as an SPM dependency.
 
+## Features
+
+### Runestone text engine (`TextView`)
+
+**Editing & input**
+- Full `NSTextInputClient` / `UITextInput` compatibility for native macOS text input, IME, and accessibility.
+- Undo/redo with timed grouping (`TimedUndoManager`) so rapid typing coalesces into one undo step.
+- Character-pair auto-insertion and skip-over-trailing (`CharacterPair`, delegate hooks).
+- TextFormation integration for tab expansion, bracket pairing, and whitespace cleanup (`TextFormationController`).
+- Language-aware indent on line break, block indent/unindent (`shiftLeft`/`shiftRight`), and auto-detect tab vs. spaces (`detectIndentStrategy`).
+- Move selected lines up/down (`moveSelectedLinesUp`/`moveSelectedLinesDown`).
+- Configurable `keyDownHandler` for custom keybindings.
+- Floating caret (long-press drag) for precise cursor placement on touch/trackpad.
+- Smart text substitutions: autocorrection, smart quotes/dashes, spell checking (via UIKit-compat properties).
+
+**Selection**
+- Single and multiple cursors (`selectedRanges`, Option-click to add cursors, ⌥⌘↑/↓ to clone a caret vertically, `undoLastCaretChange()`/⌘U to step back).
+- Column/block (rectangular) selection: Option-drag or ⌃⇧-arrows (`beginBlockSelection(at:)`/`extendBlockSelection(to:)`/`extendBlockSelection(in:)`), with multi-caret-aware copy/cut/paste.
+- Select word (double-click), paragraph (triple-click), and line selections (`addSelectionsOnEachLine`).
+- Select next occurrence (`selectNextOccurrence`/⌘D), skip the current one (`skipCurrentOccurrence`/⌘K ⌘D), or select all occurrences (`selectAllOccurrences`/⌘⇧L).
+- Selection handles and caret rendering with customizable colors.
+- Shift-click range extension; column-aware line movement.
+- Multi-cursor-aware indent/outdent, move-line, newline, and undo (the whole caret set is restored, not just the primary caret).
+
+**Layout & display**
+- Red-black-tree-backed `LineManager` for O(log n) line lookups on large documents.
+- Line wrapping with configurable break mode; optional page guide column with reformatting-guide shading.
+- Gutter with dynamic-width line numbers, leading/trailing padding, and line-selection highlights.
+- Customizable themes (`Theme`, `DefaultTheme`, `HighlightName`) with font trait overrides, line height, and kern.
+- Invisible-character rendering (tabs, spaces, non-breaking spaces, line breaks, soft line breaks) with custom symbols.
+- Minimap with viewport indicator and click/drag scrolling (`showMinimap`).
+- Background document preparation via `TextViewState` (parse + highlight off main thread before `setState`).
+
+**Syntax highlighting**
+- Incremental Tree-sitter parsing with language layers and injected-language support (e.g. CSS in HTML).
+- Pluggable highlight providers (`HighlightProviding`): Tree-sitter queries + LSP semantic tokens (`SemanticTokenHighlightProvider`).
+- `EmphasisManager` for transient highlights (search matches, bracket pairs, diagnostics).
+- Bracket-pair matching with flash/emphasis at caret (`BracketMatchingController`).
+- `syntaxNode(at:)` for querying the AST at a byte offset.
+
+**Code folding**
+- Indentation-based fold regions with gutter fold ribbons (`FoldingController`, `isLineFoldingEnabled`).
+- Tree-sitter node-based folding via `TreeSitterLineFoldProvider` (auto-selected when a Tree-sitter language mode is active).
+- Collapse/expand by hiding line heights in the line manager (no separate scroll model).
+
+**Search & replace**
+- Programmatic search API (`SearchQuery`) with contains, full-word, starts/ends-with, and regex modes; case sensitivity and scoped range.
+- Regex capture-group replacements (`$0`, `$1`, …) and batch replace (`BatchReplaceSet`).
+- Built-in find/replace panel (`FindPanelController`, `showFindPanel`/`hideFindPanel`/`toggleFindPanel`).
+- `UIFindInteraction` integration for system find UI.
+- Highlighted-range navigation (`selectNextHighlightedRange`, looping modes).
+
+**Navigation**
+- Go to line (`goToLine`) with selection-at-beginning/end options.
+- `TextLocation` ↔ byte-offset conversion for line/column addressing.
+
+**Diagnostics (rendering)**
+- Squiggle underlines for `TextViewDiagnostic` values by severity (`DiagnosticEmphasisController`).
+
+### Editor Intelligence Platform (`EditorIntelligence`)
+
+**Core**
+- Editor-agnostic `Document`, `Cursor`, `Selection`, `TextEdit`/`TextRange` types.
+- `EditorAdapter` protocol + `AsyncStream<EditorEvent>` for decoupled editor integration.
+- `DependencyContainer`, `EventBus`, `EditorContext`, typed `Request`/`Response`.
+
+**Parsing & indexing**
+- `LanguageParser` / `SyntaxTree` abstraction over Tree-sitter.
+- Incremental `SymbolIndex` (Trie-backed) updated by `IndexingService` on document changes.
+- `SymbolSearchEngine` for prefix and exact symbol lookup.
+
+**Completion**
+- `CompletionEngine` runs multiple `CompletionProvider`s concurrently and ranks results (`DefaultRanker`).
+- Built-in providers: symbols (`SymbolCompletionProvider`), in-buffer words (`WordCompletionProvider`), snippets (`SnippetCompletionProvider`).
+- LSP (`LSPCompletionProvider`) and AI (`AICompletionProvider`) backends.
+- Ghost-text inline preview of the top completion (`GhostTextModel`).
+- Accepting a completion applies the same relative edit at every caret when multiple selections are active (`TextView.replaceAtAllSelections(relativeStartOffset:length:with:)`); snippet tab stops are single-site only (no tab-stop session exists yet).
+
+**Snippets**
+- TextMate-style snippet parsing with tab stops, placeholders, and transforms (`SnippetEngine`, `SnippetExpander`).
+
+**Hover**
+- `HoverEngine` with caching; symbol documentation (`SymbolHoverProvider`), LSP (`LSPHoverProvider`), and AI (`AIHoverProvider`) backends.
+
+**Navigation**
+- `NavigationEngine` with Go to Definition (`GoToDefinitionProvider`), Find References (`FindReferencesProvider`), and breadcrumbs (`BreadcrumbProvider`).
+- LSP definition, references, rename, and signature-help providers (`LSPDefinitionProvider`, `LSPReferencesProvider`, `LSPRenameProvider`, `LSPSignatureHelpProvider`).
+- `SymbolSearchEngine` for workspace symbol search.
+
+**Diagnostics**
+- `DiagnosticEngine` aggregating multiple `DiagnosticProvider`s.
+- Built-in duplicate-symbol detection (`DuplicateSymbolDiagnosticProvider`).
+- LSP diagnostics (`LSPDiagnosticProvider`).
+
+**Refactoring**
+- `RefactoringEngine` with rename operations (`RenameOperation`); LSP rename provider.
+
+**LSP integration**
+- `LSPClient` protocol; `EditorIntelligenceLSP` target wraps ChimeHQ `LanguageClient`.
+- Document sync (`LSPDocumentSyncService`), workspace sync bridge (`LSPWorkspaceSyncBridge`).
+- Semantic token decode/storage/map for LSP-driven highlighting.
+- Formatting (`LSPFormattingProvider`) — document and selection formatting via `EditorIntelligenceController.formatDocument()` / `formatSelection()` (formats every range when multiple selections are active); edits applied through `TextEditApplicator` preserve the caret set instead of collapsing it.
+- Code actions (`LSPCodeActionProvider`) — quick fixes via `EditorIntelligenceController.requestCodeActions()`.
+- Signature help auto-trigger on `(` and `,` when `LSPSignatureHelpProvider` is configured.
+
+**AI integration**
+- `AITextModel` abstraction; AI completion and hover providers.
+
+**Workspace**
+- `Workspace` actor for multi-document project state.
+- `WorkspaceSearchEngine` for searching across all open documents.
+- `FileSystemWatcher` / `PollingFileSystemWatcher` for external file changes.
+- `Project` model for workspace organization.
+
+**Navigation & outline**
+- `OutlineBuilder` builds a hierarchical symbol tree from `SymbolIndex` data.
+- `BreadcrumbBarModel` / `BreadcrumbBarView` show enclosing symbols at the cursor.
+
+**UI presentation (`UIBridge` + Runestone views)**
+- `CompletionPanelView`, `HoverWindowView`, `GhostTextView`, `ParameterHintsView`.
+- `EditorIntelligenceController` wires engines to a live `TextView` (completion, hover, diagnostics, ghost text, parameter hints, formatting, code actions, outline, breadcrumbs, workspace search).
+- `EditorIntelligenceServices` bundles optional LSP/workspace services (`LSPFormattingProvider`, `LSPSignatureHelpProvider`, `LSPCodeActionProvider`, `SymbolIndex`, `Workspace`).
+- `TextEditApplicator` applies LSP `TextEdit` arrays to a `TextView` in reverse-offset order.
+- `BreadcrumbBarView`, `OutlineSidebarView`, `CodeActionView`, `WorkspaceSearchPanelView` — AppKit accessory views.
+- `JumpToDefinitionController` for Cmd+click / programmatic go-to-definition.
+- `RunestoneEditorAdapter` bridges `TextView` ↔ EIP.
+
+### Workbench (`Runestone/Workbench`)
+
+- Multi-pane editor layout with horizontal/vertical splits (`EditorWorkbench`, `EditorLayout`).
+- Per-pane tab groups with preview (temporary) tabs, pin, and back/forward tab history (`EditorPane`, `EditorTabHistory`, `TabListEngine`).
+- `WorkbenchDocument` holding editor state; `RunestoneStateBuilder` for `TextViewState` construction.
+- Session restoration (`EditorRestorationState`, Codable layout/document snapshots).
+- `RunestoneWorkbenchWorkspaceBridge` syncs open documents into EIP `Workspace`.
+- `RunestoneWorkbenchEditorAdapter` implements `EditorAdapter` at workbench scope.
+
+### Language packs
+
+- `TestTreeSitterLanguages` — bundled grammars for tests (HTML, JavaScript, JSON, Python, YAML).
+- `RunestoneGraphQLLanguage` — example SPM language target pattern (C grammar + `highlights.scm` + indentation scopes).
+
 ## Common commands
 
 ```bash
