@@ -1,6 +1,9 @@
 import Foundation
 
 /// Builds a fully prepared ``TextViewState`` off the main thread. Callers must apply on the main queue.
+///
+/// Pair this with ``TreeSitterLanguageCache`` to avoid re-preparing (and re-compiling highlight
+/// queries for) the same ``TreeSitterLanguage`` on every call to ``makeState(text:theme:language:languageProvider:)``.
 public enum RunestoneStateBuilder {
     /// Carries a non-Sendable ``TextViewState`` across queues after background preparation.
     public final class PreparedState: @unchecked Sendable {

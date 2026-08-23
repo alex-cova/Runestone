@@ -26,6 +26,26 @@ final class WorkbenchTests: XCTestCase {
         XCTAssertEqual(TabListEngine.selectionIndexAfterClose(closing: 1, selected: 1, count: 3), 1)
     }
 
+    func testDisambiguatedTitlesAppendsParentDirectoryOnCollision() {
+        let urls = [
+            URL(fileURLWithPath: "/project/utils/index.ts"),
+            URL(fileURLWithPath: "/project/models/index.ts")
+        ]
+        let titles = TabListEngine.disambiguatedTitles(fileNames: ["index.ts", "index.ts"], urls: urls)
+        XCTAssertEqual(titles, ["index.ts — utils", "index.ts — models"])
+    }
+
+    func testDisambiguatedTitlesLeavesUniqueNamesUnchanged() {
+        let urls = [URL(fileURLWithPath: "/project/a.swift"), URL(fileURLWithPath: "/project/b.swift")]
+        let titles = TabListEngine.disambiguatedTitles(fileNames: ["a.swift", "b.swift"], urls: urls)
+        XCTAssertEqual(titles, ["a.swift", "b.swift"])
+    }
+
+    func testDisambiguatedTitlesLeavesUntitledBuffersUnchangedEvenOnCollision() {
+        let titles = TabListEngine.disambiguatedTitles(fileNames: ["untitled", "untitled"], urls: [nil, nil])
+        XCTAssertEqual(titles, ["untitled", "untitled"])
+    }
+
     func testWorkbenchAggregatesDocuments() {
         let bench = EditorWorkbench()
         let doc = WorkbenchDocument(displayName: "one", text: "1")

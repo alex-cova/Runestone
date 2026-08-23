@@ -1106,6 +1106,22 @@ open class TextView: UIScrollView {
         return window.makeFirstResponder(textInputView)
     }
 
+    /// Calls ``focusTextInput()``, retrying once on the next runloop turn if it fails because the
+    /// view isn't attached to a window yet — e.g. when called while a SwiftUI-hosted `TextView` is
+    /// still being created. Bounded to a single retry so a view that's never added to a window
+    /// gives up silently rather than looping.
+    public func focusTextInputWhenReady(retriesRemaining: Int = 1) {
+        guard !focusTextInput() else {
+            return
+        }
+        guard retriesRemaining > 0 else {
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?.focusTextInputWhenReady(retriesRemaining: retriesRemaining - 1)
+        }
+    }
+
     /// Updates the custom input and accessory views when the object is the first responder.
     override open func reloadInputViews() {
         textInputView.reloadInputViews()
