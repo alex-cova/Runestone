@@ -13,7 +13,8 @@ let package = Package(
         .library(name: "Runestone", targets: ["Runestone"]),
         .library(name: "EditorIntelligence", targets: ["EditorIntelligence"]),
         .library(name: "EditorIntelligenceLSP", targets: ["EditorIntelligenceLSP"]),
-        .library(name: "RunestoneGraphQLLanguage", targets: ["RunestoneGraphQLLanguage"])
+        .library(name: "RunestoneGraphQLLanguage", targets: ["RunestoneGraphQLLanguage"]),
+        .library(name: "RunestoneMarkdownLanguage", targets: ["RunestoneMarkdownLanguage"])
     ],
     dependencies: [
         .package(url: "https://github.com/ChimeHQ/LanguageClient", from: "0.8.0"),
@@ -81,12 +82,32 @@ let package = Package(
                 .copy("highlights.scm")
             ]
         ),
+        .target(name: "TreeSitterMarkdown", exclude: ["LICENSE", "VERSION"], cSettings: [
+            .headerSearchPath("src"),
+            .unsafeFlags(["-w"])
+        ]),
+        .target(name: "TreeSitterMarkdownInline", exclude: ["LICENSE", "VERSION"], cSettings: [
+            .headerSearchPath("src"),
+            .unsafeFlags(["-w"])
+        ]),
+        .target(
+            name: "RunestoneMarkdownLanguage",
+            dependencies: [
+                "Runestone",
+                "TreeSitterMarkdown",
+                "TreeSitterMarkdownInline"
+            ],
+            resources: [
+                .copy("Queries")
+            ]
+        ),
         .testTarget(name: "RunestoneTests", dependencies: [
             "Runestone",
             "EditorIntelligence",
             "EditorIntelligenceLSP",
             "TestTreeSitterLanguages",
-            "RunestoneGraphQLLanguage"
+            "RunestoneGraphQLLanguage",
+            "RunestoneMarkdownLanguage"
         ])
     ]
 )

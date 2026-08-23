@@ -13,6 +13,13 @@ enum HighlightName: String {
     case float
     case function
     case keyword
+    case markupHeading = "markup.heading"
+    case markupBold = "markup.bold"
+    case markupItalic = "markup.italic"
+    case markupQuote = "markup.quote"
+    case markupRaw = "markup.raw"
+    case markupLinkUrl = "markup.link.url"
+    case markupLinkLabel = "markup.link.label"
     case number
     case `operator`
     case parameter
@@ -22,6 +29,7 @@ enum HighlightName: String {
     case punctuationDelimiter = "punctuation.delimiter"
     case punctuationSpecial = "punctuation.special"
     case string
+    case stringEscape = "string.escape"
     case type
     case typeBuiltin = "type.builtin"
     case variable
