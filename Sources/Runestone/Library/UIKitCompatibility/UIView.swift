@@ -8,6 +8,16 @@ open class UIView: NSView {
     open var backgroundColor: UIColor? {
         didSet { wantsLayer = true; layer?.backgroundColor = backgroundColor?.cgColor }
     }
+
+    /// `backgroundColor` above bakes `NSColor` to `CGColor` once, at assignment time. A dynamic
+    /// (appearance-adaptive) color resolves against the current appearance at that moment and
+    /// never re-resolves on its own, so it goes stale when the effective appearance changes later
+    /// — including when a caller forces a specific appearance via `NSView.appearance` independent
+    /// of the system setting. Re-bake whenever the effective appearance actually changes.
+    override open func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        layer?.backgroundColor = backgroundColor?.cgColor
+    }
     open var isUserInteractionEnabled = true
     open var traitCollection: UITraitCollection { UITraitCollection() }
     open var inputAccessoryView: UIView?

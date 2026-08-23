@@ -119,6 +119,14 @@ final class FindPanelBarView: NSView {
         NotificationCenter.default.removeObserver(self)
     }
 
+    /// `layer?.backgroundColor` above is baked to `CGColor` once, at init, so a dynamic
+    /// (appearance-adaptive) system color like `.windowBackgroundColor` goes stale if the
+    /// effective appearance changes afterward. Re-bake it whenever that happens.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+    }
+
     override var intrinsicContentSize: NSSize {
         NSSize(width: NSView.noIntrinsicMetric, height: mode == .replace ? 78 : 52)
     }

@@ -44,6 +44,18 @@ public final class DefaultTheme: Runestone.Theme {
             return UIColor(themeColorNamed: "function")
         case .keyword:
             return UIColor(themeColorNamed: "keyword")
+        case .markupHeading:
+            return UIColor(themeColorNamed: "keyword")
+        case .markupBold, .markupItalic:
+            return nil
+        case .markupQuote:
+            return UIColor(themeColorNamed: "comment")
+        case .markupRaw:
+            return UIColor(themeColorNamed: "string")
+        case .markupLinkUrl:
+            return UIColor(themeColorNamed: "string")
+        case .markupLinkLabel:
+            return UIColor(themeColorNamed: "property")
         case .number:
             return UIColor(themeColorNamed: "number")
         case .operator:
@@ -62,6 +74,8 @@ public final class DefaultTheme: Runestone.Theme {
             return UIColor(themeColorNamed: "punctuation")
         case .string:
             return UIColor(themeColorNamed: "string")
+        case .stringEscape:
+            return UIColor(themeColorNamed: "string")
         case .type:
             return UIColor(themeColorNamed: "type")
         case .typeBuiltin:
@@ -78,9 +92,12 @@ public final class DefaultTheme: Runestone.Theme {
         guard let highlightName = HighlightName(highlightName) else {
             return []
         }
-        if highlightName == .keyword {
+        switch highlightName {
+        case .keyword, .markupHeading, .markupBold:
             return .bold
-        } else {
+        case .markupItalic:
+            return .italic
+        default:
             return []
         }
     }
@@ -102,16 +119,17 @@ public final class DefaultTheme: Runestone.Theme {
 }
 
 private extension UIColor {
+    /// Theme colors are defined directly in code rather than resolved from `Theme.xcassets` at
+    /// runtime: named/asset-catalog colors have been observed to fail to resolve (`NSColor(named:in:)`
+    /// returns `nil`) when Runestone is statically linked, which used to collapse chrome to a
+    /// near-black fallback and — worse — collapsed every syntax-highlight token color to the same
+    /// indistinguishable fallback, silently defeating syntax highlighting. Defining colors here
+    /// removes the `Bundle.module` resource-bundle dependency from `DefaultTheme`'s correctness
+    /// entirely, so it can't fail this way again. `Theme.xcassets` is kept around for reference
+    /// (e.g. previewing colors in Xcode) but is no longer consulted at runtime.
     convenience init(themeColorNamed name: String) {
-        let fullName = "theme_" + name
-        if NSColor(named: fullName, in: .module, compatibleWith: nil) != nil {
-            self.init(named: fullName, bundle: .module)!
-            return
-        }
-        // Catalog colors often fail to resolve when Runestone is statically
-        // linked. Never fall back to near-black for chrome — that paints the
-        // gutter as a black strip on first layout.
-        self.init(name: nil) { _ in
+        self.init(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
             switch name {
             case "gutter_background", "page_guide_background":
                 return .textBackgroundColor
@@ -127,6 +145,46 @@ private extension UIColor {
             case "line_number", "line_number_current_line", "invisible_characters",
                  "gutter_hairline", "page_guide_hairline":
                 return .secondaryLabelColor
+            case "comment":
+                return isDark
+                    ? UIColor(srgbRed: 0.424, green: 0.475, blue: 0.525, alpha: 1)
+                    : UIColor(srgbRed: 0.365, green: 0.424, blue: 0.475, alpha: 1)
+            case "string":
+                return isDark
+                    ? UIColor(srgbRed: 0.988, green: 0.416, blue: 0.365, alpha: 1)
+                    : UIColor(srgbRed: 0.769, green: 0.102, blue: 0.086, alpha: 1)
+            case "keyword":
+                return isDark
+                    ? UIColor(srgbRed: 0.988, green: 0.373, blue: 0.639, alpha: 1)
+                    : UIColor(srgbRed: 0.608, green: 0.137, blue: 0.576, alpha: 1)
+            case "type":
+                return isDark
+                    ? UIColor(srgbRed: 0.365, green: 0.847, blue: 1.000, alpha: 1)
+                    : UIColor(srgbRed: 0.043, green: 0.310, blue: 0.475, alpha: 1)
+            case "number":
+                return isDark
+                    ? UIColor(srgbRed: 0.816, green: 0.749, blue: 0.412, alpha: 1)
+                    : UIColor(srgbRed: 0.110, green: 0.000, blue: 0.812, alpha: 1)
+            case "function":
+                return isDark
+                    ? UIColor(srgbRed: 0.404, green: 0.718, blue: 0.643, alpha: 1)
+                    : UIColor(srgbRed: 0.196, green: 0.427, blue: 0.455, alpha: 1)
+            case "constructor":
+                return isDark
+                    ? UIColor(srgbRed: 0.620, green: 0.945, blue: 0.867, alpha: 1)
+                    : UIColor(srgbRed: 0.110, green: 0.275, blue: 0.290, alpha: 1)
+            case "property", "constant_builtin", "constant_character":
+                return isDark
+                    ? UIColor(srgbRed: 0.631, green: 0.404, blue: 0.902, alpha: 1)
+                    : UIColor(srgbRed: 0.424, green: 0.212, blue: 0.663, alpha: 1)
+            case "punctuation", "operator":
+                return isDark
+                    ? UIColor(srgbRed: 0.573, green: 0.631, blue: 0.694, alpha: 1)
+                    : UIColor(srgbRed: 0.290, green: 0.333, blue: 0.376, alpha: 1)
+            case "variable_builtin":
+                return isDark
+                    ? UIColor(srgbRed: 0.816, green: 0.659, blue: 1.000, alpha: 1)
+                    : UIColor(srgbRed: 0.224, green: 0.000, blue: 0.627, alpha: 1)
             default:
                 return .labelColor
             }

@@ -25,6 +25,14 @@ public final class WorkspaceSearchPanelView: NSView {
         tableView.reloadData()
     }
 
+    /// `layer?.backgroundColor`/`borderColor` in `configure()` are baked to `CGColor` once, so
+    /// dynamic system colors go stale if the effective appearance changes afterward.
+    public override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        layer?.borderColor = NSColor.separatorColor.cgColor
+    }
+
     private func configure() {
         wantsLayer = true
         layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor

@@ -103,8 +103,22 @@ final class MinimapView: UIView {
         backgroundColor = theme.gutterBackgroundColor
         hairlineView.backgroundColor = theme.gutterHairlineColor
         viewportIndicatorView.backgroundColor = theme.selectionColor.withAlphaComponent(0.25)
-        viewportIndicatorView.layer?.borderColor = theme.selectionColor.withAlphaComponent(0.6).cgColor
+        applyViewportIndicatorBorderColor(theme: theme)
         setNeedsDisplayForContentChange()
+    }
+
+    /// `viewportIndicatorView.layer?.borderColor` isn't a `UIView.backgroundColor`, so it isn't
+    /// covered by `UIView.viewDidChangeEffectiveAppearance()`'s re-bake — re-apply it here too, on
+    /// both theme changes and effective-appearance changes.
+    private func applyViewportIndicatorBorderColor(theme: Theme) {
+        viewportIndicatorView.layer?.borderColor = theme.selectionColor.withAlphaComponent(0.6).cgColor
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        if let theme = lineDataSource?.theme {
+            applyViewportIndicatorBorderColor(theme: theme)
+        }
     }
 
     /// Call whenever the document's content, scroll position, or size changes.

@@ -29,6 +29,13 @@ public final class OutlineSidebarView: NSView {
         }
     }
 
+    /// `layer?.backgroundColor` in `configure()` is baked to `CGColor` once, so a dynamic system
+    /// color goes stale if the effective appearance changes afterward.
+    public override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+    }
+
     private func configure() {
         wantsLayer = true
         layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor

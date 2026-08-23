@@ -1193,6 +1193,21 @@ final class TextInputView: UIView, UITextInput {
         }
     }
 
+    /// CoreText resolves a syntax-highlight token's `NSColor` to `CGColor` at typeset time
+    /// (`LineTypesetter`), so a dynamic (appearance-adaptive) theme color is frozen against
+    /// whatever the effective appearance was when a line was last typeset — typically off the
+    /// main thread, well before any `draw(_:)` call. `traitCollectionDidChange` above is meant to
+    /// catch this but never fires on macOS (`UITraitCollection.hasDifferentColorAppearance` is a
+    /// UIKit-compat stub that always returns `false` here), so hook the real AppKit callback:
+    /// force every line to re-typeset whenever the effective appearance actually changes,
+    /// including when a caller forces one via `NSView.appearance` independent of the system
+    /// setting.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        invalidateLines()
+        layoutManager.setNeedsLayout()
+    }
+
     override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         super.pressesEnded(presses, with: event)
         if let keyCode = presses.first?.key?.keyCode, presses.count == 1 {

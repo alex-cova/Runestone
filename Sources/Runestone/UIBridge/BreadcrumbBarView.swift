@@ -45,6 +45,13 @@ public final class BreadcrumbBarView: NSView {
         NSSize(width: NSView.noIntrinsicMetric, height: 24)
     }
 
+    /// `layer?.backgroundColor` in `configure()` is baked to `CGColor` once, so a dynamic system
+    /// color goes stale if the effective appearance changes afterward.
+    public override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+    }
+
     private func configure() {
         wantsLayer = true
         layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
