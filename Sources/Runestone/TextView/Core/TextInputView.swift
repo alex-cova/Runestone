@@ -369,7 +369,7 @@ final class TextInputView: UIView, UITextInput {
             }
         }
     }
-    var gutterLeadingPadding: CGFloat = 3 {
+    var gutterLeadingPadding: CGFloat = 8 {
         didSet {
             if gutterLeadingPadding != oldValue {
                 gutterWidthService.gutterLeadingPadding = gutterLeadingPadding
@@ -378,7 +378,7 @@ final class TextInputView: UIView, UITextInput {
             }
         }
     }
-    var gutterTrailingPadding: CGFloat = 3 {
+    var gutterTrailingPadding: CGFloat = 10 {
         didSet {
             if gutterTrailingPadding != oldValue {
                 gutterWidthService.gutterTrailingPadding = gutterTrailingPadding
@@ -387,7 +387,7 @@ final class TextInputView: UIView, UITextInput {
             }
         }
     }
-    var gutterMinimumCharacterCount: Int = 2 {
+    var gutterMinimumCharacterCount: Int = 3 {
         didSet {
             if gutterMinimumCharacterCount != oldValue {
                 gutterWidthService.gutterMinimumCharacterCount = gutterMinimumCharacterCount
@@ -874,6 +874,7 @@ final class TextInputView: UIView, UITextInput {
         lineControllerStorage.delegate = self
         gutterWidthService.gutterLeadingPadding = gutterLeadingPadding
         gutterWidthService.gutterTrailingPadding = gutterTrailingPadding
+        gutterWidthService.gutterMinimumCharacterCount = gutterMinimumCharacterCount
         layoutManager.delegate = self
         layoutManager.textInputView = self
         editMenuController.delegate = self
