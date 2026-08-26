@@ -378,7 +378,7 @@ final class TextInputView: UIView, UITextInput {
             }
         }
     }
-    var gutterTrailingPadding: CGFloat = 10 {
+    var gutterTrailingPadding: CGFloat = 6 {
         didSet {
             if gutterTrailingPadding != oldValue {
                 gutterWidthService.gutterTrailingPadding = gutterTrailingPadding
@@ -1154,10 +1154,6 @@ final class TextInputView: UIView, UITextInput {
         layoutManager.textPreview(containing: range)
     }
 
-    func layoutLines(toLocation location: Int) {
-        layoutManager.layoutLines(toLocation: location)
-    }
-
     func prepareLineForDisplay(atLocation location: Int) {
         layoutManager.prepareLineForDisplay(atLocation: location)
     }
@@ -1908,8 +1904,8 @@ extension TextInputView {
             oldLinePosition = lineManager.linePosition(at: oldSelectedRange.location)
         }
         let textEditHelper = TextEditHelper(stringView: stringView, lineManager: lineManager, lineEndings: lineEndings)
-        let newString = textEditHelper.string(byApplying: batchReplaceSet)
-        setStringWithUndoAction(newString)
+        let application = textEditHelper.apply(batchReplaceSet)
+        setStringWithUndoAction(application.newString, inverseReplacements: application.inverseReplacements)
         if let oldLinePosition = oldLinePosition {
             // By restoring the selected range using the old line position we can better preserve the old selected language.
             moveCaret(to: oldLinePosition)
@@ -1928,24 +1924,41 @@ extension TextInputView {
         stringView.substring(in: range)
     }
 
-    private func setStringWithUndoAction(_ newString: NSString) {
+    /// `inverseReplacements` is a delta list (range + old text, sized to what was edited) rather
+    /// than a full-document snapshot — undoing replays it through `replaceText(in:)`, which
+    /// computes its own inverse in turn, so redo/undo/redo... never holds more than one edit's
+    /// worth of text per step, regardless of document size. See PERFORMANCE_AUDIT.md Phase 2 #7.
+    private func setStringWithUndoAction(_ newString: NSString, inverseReplacements: [BatchReplaceSet.Replacement]) {
         guard newString != string else {
             return
         }
-        guard let oldString = stringView.string.copy() as? NSString else {
-            return
+        // When this runs as the body of an undo/redo invocation (i.e. `registerUndo`'s closure,
+        // below, calling back into this method), `UndoManager` already has its own implicit group
+        // open around the invocation, to collect whatever `registerUndo` call happens inside it as
+        // the opposite-direction action. Unconditionally closing/reopening a group here — as this
+        // method used to, pre-existing bug independent of the delta-vs-snapshot change above —
+        // ends that implicit group early; when the manager tries to finalize it after this method
+        // returns, its bookkeeping is already inconsistent and it raises
+        // "endUndoGrouping called with no matching begin". Only manage grouping explicitly for a
+        // top-level (non-nested) call; a nested call relies on the manager's own grouping.
+        let isNestedInUndoOrRedo = timedUndoManager.isUndoing || timedUndoManager.isRedoing
+        if !isNestedInUndoOrRedo {
+            timedUndoManager.endUndoGrouping()
         }
-        timedUndoManager.endUndoGrouping()
         let oldSelectedRange = selection
         preserveUndoStackWhenSettingString = true
         string = newString
         preserveUndoStackWhenSettingString = false
-        timedUndoManager.beginUndoGrouping()
-        timedUndoManager.setActionName(L10n.Undo.ActionName.replaceAll)
-        timedUndoManager.registerUndo(withTarget: self) { textInputView in
-            textInputView.setStringWithUndoAction(oldString)
+        if !isNestedInUndoOrRedo {
+            timedUndoManager.beginUndoGrouping()
+            timedUndoManager.setActionName(L10n.Undo.ActionName.replaceAll)
         }
-        timedUndoManager.endUndoGrouping()
+        timedUndoManager.registerUndo(withTarget: self) { textInputView in
+            textInputView.replaceText(in: BatchReplaceSet(replacements: inverseReplacements))
+        }
+        if !isNestedInUndoOrRedo {
+            timedUndoManager.endUndoGrouping()
+        }
         delegate?.textInputViewDidChange(self)
         if let oldSelectedRange = oldSelectedRange {
             selection = safeSelectionRange(from: oldSelectedRange)

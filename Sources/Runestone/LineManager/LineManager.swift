@@ -63,14 +63,15 @@ final class LineManager {
         var longestLineLength: Int = 0
         while let newLineRange = workingNewLineRange {
             let totalLength = newLineRange.location + newLineRange.length - lastDelimiterEnd
-            let substringRange = NSRange(location: lastDelimiterEnd, length: totalLength)
-            let substring = stringView.string.substring(with: substringRange)
             line.value = totalLength
             line.data.totalLength = totalLength
             line.data.delimiterLength = newLineRange.length
             line.data.lineHeight = estimatedLineHeight
             line.data.totalLineHeight = totalLineHeight
-            line.data.byteCount = substring.byteCount
+            // Byte count is a pure function of the UTF-16 length (see setLength(of:to:newLine:)),
+            // so no need to materialize a substring just to measure it — this halved rebuild()'s
+            // allocation/copy work on initial load. See PERFORMANCE_AUDIT.md Phase 2 #4.
+            line.data.byteCount = ByteCount(totalLength * 2)
             lastDelimiterEnd = newLineRange.location + newLineRange.length
             lines.append(line)
             if totalLength > longestLineLength {
@@ -84,11 +85,9 @@ final class LineManager {
             totalLineHeight += estimatedLineHeight
         }
         let totalLength = stringView.string.length - lastDelimiterEnd
-        let substringRange = NSRange(location: lastDelimiterEnd, length: totalLength)
-        let substring = stringView.string.substring(with: substringRange)
         line.value = totalLength
         line.data.totalLength = totalLength
-        line.data.byteCount = substring.byteCount
+        line.data.byteCount = ByteCount(totalLength * 2)
         lines.append(line)
         if totalLength > longestLineLength {
             longestLineLength = totalLength

@@ -34,6 +34,34 @@ final class FindSearchEngineTests: XCTestCase {
         XCTAssertEqual(outcome.currentRange, NSRange(location: 0, length: 2))
     }
 
+    /// Confirms the scan loop itself checks `Task.isCancelled` (PERFORMANCE_AUDIT.md Phase 3,
+    /// "cancellation") rather than only relying on the caller to discard a completed result — a
+    /// stale search over a huge document should stop scanning, not just have its answer ignored.
+    /// `task.cancel()` runs synchronously right after the task is created, before the task's body
+    /// (which does no `await` of its own before calling into `FindSearchEngine`) has a chance to
+    /// start, so this reliably exercises the mid-scan cancellation path rather than racing it.
+    func testLiteralSearchStopsScanningOnceCancelled() async {
+        let text = String(repeating: "needle ", count: 100_000)
+        let options = FindSearchOptions(query: "needle")
+        let task = Task {
+            FindSearchEngine.search(options: options, in: text, anchorLocation: 0)
+        }
+        task.cancel()
+        let outcome = await task.value
+        XCTAssertEqual(outcome, .empty)
+    }
+
+    func testRegexSearchStopsScanningOnceCancelled() async {
+        let text = String(repeating: "needle ", count: 100_000)
+        let options = FindSearchOptions(query: "nee.le", useRegex: true)
+        let task = Task {
+            FindSearchEngine.search(options: options, in: text, anchorLocation: 0)
+        }
+        task.cancel()
+        let outcome = await task.value
+        XCTAssertEqual(outcome, .empty)
+    }
+
     func testEmptyQueryReturnsEmptyOutcome() {
         let outcome = FindSearchEngine.search(options: FindSearchOptions(query: ""), in: "anything", anchorLocation: 0)
         XCTAssertEqual(outcome, .empty)

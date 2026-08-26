@@ -137,6 +137,30 @@ final class ContentSizeService {
         }
     }
 
+    /// Evicts cached line widths for lines that aren't currently visible, mirroring
+    /// `LineControllerStorage.removeAllLineControllers(exceptLinesWithID:)`. Without this,
+    /// `lineWidths` gains one entry per line ever visited and is never reclaimed — unbounded for a
+    /// user paging through a huge non-wrapped file, and each subsequent invalidation (e.g. a window
+    /// resize) re-scans all of it in `longestLineWidth`'s linear fallback. See
+    /// PERFORMANCE_AUDIT.md, Phase 1 §5/Phase 2 finding on `ContentSizeService`.
+    func removeLineWidths(exceptLinesWithID exceptionLineIDs: Set<DocumentLineNodeID>) {
+        var lineIDsToRelease = Set(lineWidths.keys).subtracting(exceptionLineIDs)
+        // Never evict the line currently tracked as longest: `setSize(of:to:)` reads
+        // `lineWidths[lineIDTrackingWidth]` as the "current maximum" to compare newly-measured
+        // lines against — losing that entry would make it read as 0 and incorrectly treat almost
+        // any subsequently-measured line as the new longest. It would also silently shrink the
+        // reported content width until that happened.
+        if let lineIDTrackingWidth {
+            lineIDsToRelease.remove(lineIDTrackingWidth)
+        }
+        guard !lineIDsToRelease.isEmpty else {
+            return
+        }
+        for lineID in lineIDsToRelease {
+            lineWidths.removeValue(forKey: lineID)
+        }
+    }
+
     func setSize(of line: DocumentLineNode, to newSize: CGSize) {
         let lineWidth = newSize.width
         if lineWidths[line.id] != lineWidth {

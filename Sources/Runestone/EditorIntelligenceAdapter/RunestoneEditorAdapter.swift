@@ -19,6 +19,11 @@ public final class RunestoneEditorAdapter: EditorAdapter {
     private let documentID: DocumentID
     private let lock = NSLock()
     private var latestDocument: Document?
+    private var refreshTask: Task<Void, Never>?
+    /// Matches ``LSPDocumentSyncService``'s default `batchInterval` — downstream consumers of
+    /// this adapter's `.documentChanged` events (`Workspace`, `LSPWorkspaceSyncBridge`,
+    /// `IndexingService`, ...) all get throttled for free once the source event rate drops.
+    private static let refreshDebounceNanoseconds: UInt64 = 200_000_000
 
     /// Create an adapter for a Runestone text view.
     /// - Parameters:
@@ -88,13 +93,24 @@ public final class RunestoneEditorAdapter: EditorAdapter {
         }
     }
 
+    /// Debounced: re-bridging the whole document (`makeDocument(with:)`) is O(document size), and
+    /// this is called on every keystroke via `textViewDidChange`. Coalescing bursts of edits into
+    /// one refresh per quiet period — rather than one per keystroke — is what makes typing on a
+    /// large document not pay that cost per character. See PERFORMANCE_AUDIT.md Phase 2 #1.
     private func refreshDocument() {
-        Task { @MainActor in
+        refreshTask?.cancel()
+        refreshTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: Self.refreshDebounceNanoseconds)
+            guard !Task.isCancelled else { return }
             guard let textView = textView else { return }
             let document = makeDocument(with: textView)
             setLatestDocument(document)
             eventBus.send(.documentChanged(document.id, document.contentSnapshot))
         }
+    }
+
+    deinit {
+        refreshTask?.cancel()
     }
 
     /// Builds a fresh document, re-bridging the text view's content into a new `TextSnapshot`.

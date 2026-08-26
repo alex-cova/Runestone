@@ -2056,6 +2056,10 @@ extension TextView: FindPanelTarget {
         textInputView.selection
     }
 
+    var textForFind: String {
+        textInputView.string as String
+    }
+
     func selectedTextForFind() -> String? {
         guard let range = textInputView.selection, range.length > 0 else {
             return nil

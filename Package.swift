@@ -61,6 +61,11 @@ let package = Package(
         ]),
         .executableTarget(name: "SmokeTest", dependencies: ["Runestone"]),
         .executableTarget(
+            name: "PerfHarness",
+            dependencies: ["Runestone", "RunestoneMarkdownLanguage"],
+            path: "Tools/PerfHarness/Sources"
+        ),
+        .executableTarget(
             name: "MacExample",
             dependencies: ["Runestone", "TestTreeSitterLanguages"],
             path: "Example/MacExample"

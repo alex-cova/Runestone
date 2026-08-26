@@ -12,6 +12,12 @@ public enum RunestoneStateBuilder {
     }
 
     /// Weak reference box for crossing isolation boundaries with AppKit views.
+    ///
+    /// `@unchecked Sendable` here relies on `weak var`'s own thread safety: ARC's weak-reference
+    /// side table is internally locked, so concurrent reads of `value` (including a concurrent
+    /// read racing the referenced object's deallocation) are safe without an explicit lock of our
+    /// own — unlike a plain `var T?`, which would need one. This box only ever wraps a single
+    /// weak reference; a type with additional mutable state would need real synchronization.
     public final class WeakBox<T: AnyObject>: @unchecked Sendable {
         public weak var value: T?
         public init(_ value: T?) { self.value = value }

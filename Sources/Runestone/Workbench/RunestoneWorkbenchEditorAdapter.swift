@@ -15,6 +15,11 @@ public final class RunestoneWorkbenchEditorAdapter: EditorAdapter {
     private let lock = NSLock()
     private var liveDocumentID: DocumentID?
     private var cachedOpenDocuments: [Document] = []
+    private var contentRefreshTask: Task<Void, Never>?
+    /// Matches ``LSPDocumentSyncService``'s default `batchInterval`. See
+    /// PERFORMANCE_AUDIT.md Phase 2 #1 — `selected.text = textView.text` is an O(document size)
+    /// bridge, and used to run on every keystroke.
+    private static let contentRefreshDebounceNanoseconds: UInt64 = 200_000_000
 
     public init(workbench: EditorWorkbench, textView: TextView? = nil, context: EditorContext = EditorContext()) {
         self.workbench = workbench
@@ -95,9 +100,12 @@ public final class RunestoneWorkbenchEditorAdapter: EditorAdapter {
         }
     }
 
+    /// Selection/scroll-only refresh: cheap (an `NSRange`/`CGPoint` copy), so this stays
+    /// synchronous and immediate — unlike ``scheduleContentRefresh(from:)``, it does not touch
+    /// `selected.text`, reusing whatever content snapshot is already cached instead of re-bridging
+    /// the whole document. Mirrors the same optimization in ``RunestoneEditorAdapter``.
     func refreshLiveDocumentFromTextView(_ textView: TextView) {
         guard let selected = workbench.activePane.selectedDocument else { return }
-        selected.text = textView.text
         selected.selectedRange = textView.selectedRange
         selected.scrollOffset = textView.contentOffset
         let document = selected.makeEIPDocument()
@@ -107,15 +115,58 @@ public final class RunestoneWorkbenchEditorAdapter: EditorAdapter {
                 cachedOpenDocuments[index] = document
             }
         }
-        eventBus.send(.documentChanged(document.id, document.contentSnapshot))
         eventBus.send(.selectionChanged(document.id, document.selection))
         eventBus.send(.cursorMoved(document.id, document.cursor))
+    }
+
+    /// Debounced: `document.text = textView.text` is an O(document size) bridge, and this used to
+    /// run on every keystroke via `textViewDidChange`. See PERFORMANCE_AUDIT.md Phase 2 #1.
+    ///
+    /// `document` is captured at schedule time (the pane's *active* document at the moment of the
+    /// edit), not re-derived from `workbench.activePane.selectedDocument` when the task fires —
+    /// this is a multi-pane adapter, so the user can switch tabs during the debounce window, and a
+    /// late-firing refresh must still land on the document it was scheduled for, not whatever
+    /// happens to be active 200ms later.
+    private func scheduleContentRefresh(from textView: TextView, for document: WorkbenchDocument) {
+        contentRefreshTask?.cancel()
+        contentRefreshTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: Self.contentRefreshDebounceNanoseconds)
+            guard !Task.isCancelled else { return }
+            self?.refreshLiveDocumentContent(from: textView, for: document)
+        }
+    }
+
+    private func refreshLiveDocumentContent(from textView: TextView, for document: WorkbenchDocument) {
+        document.text = textView.text
+        document.selectedRange = textView.selectedRange
+        document.scrollOffset = textView.contentOffset
+        let eipDocument = document.makeEIPDocument()
+        lock.withLock {
+            if let index = cachedOpenDocuments.firstIndex(where: { $0.id == eipDocument.id }) {
+                cachedOpenDocuments[index] = eipDocument
+            }
+            // Only update the "live" pointer if this document is still the active one — a
+            // debounced refresh that lands after the user switched tabs shouldn't make a
+            // now-inactive document look current.
+            if workbench.activePane.selectedDocument === document {
+                liveDocumentID = document.documentID
+            }
+        }
+        eventBus.send(.documentChanged(eipDocument.id, eipDocument.contentSnapshot))
+        eventBus.send(.selectionChanged(eipDocument.id, eipDocument.selection))
+        eventBus.send(.cursorMoved(eipDocument.id, eipDocument.cursor))
+    }
+
+    deinit {
+        contentRefreshTask?.cancel()
     }
 }
 
 extension RunestoneWorkbenchEditorAdapter: TextViewDelegate {
     public func textViewDidChange(_ textView: TextView) {
-        refreshLiveDocumentFromTextView(textView)
+        if let selected = workbench.activePane.selectedDocument {
+            scheduleContentRefresh(from: textView, for: selected)
+        }
         forwardingDelegate?.textViewDidChange(textView)
     }
 

@@ -444,36 +444,6 @@ extension LayoutManager {
         }
     }
 
-    /// Typesets every line from the start of the document up to `location`, guaranteeing that
-    /// every line's height reflects its real (rather than estimated) size once this returns.
-    ///
-    /// - Warning: This is O(number of lines up to `location`) because it must typeset each of
-    ///   them in turn to measure it. On a large document, jumping to a location near the end pays
-    ///   for typesetting effectively the whole document. Prefer
-    ///   ``prepareLineForDisplay(atLocation:)`` for jump-to-location navigation (e.g.
-    ///   `goToLine`/`scrollRangeToVisible`), which is O(log n) plus the cost of typesetting only
-    ///   the target line, and accepts an estimated (rather than exact) initial scroll position
-    ///   that self-corrects as the user scrolls, the same way ordinary scrolling already does.
-    func layoutLines(toLocation location: Int) {
-        var nextLine: DocumentLineNode? = lineManager.firstLine
-        let isLocationEndOfString = location >= stringView.string.length
-        while let line = nextLine {
-            let lineLocation = line.location
-            let endTypesettingLocation = min(lineLocation + line.data.length, location) - lineLocation
-            let lineController = lineControllerStorage.getOrCreateLineController(for: line)
-            lineController.constrainingWidth = constrainingLineWidth
-            lineController.prepareToDisplayString(toLocation: endTypesettingLocation, syntaxHighlightAsynchronously: true)
-            let lineSize = CGSize(width: lineController.lineWidth, height: lineController.lineHeight)
-            contentSizeService.setSize(of: lineController.line, to: lineSize)
-            let lineEndLocation = lineLocation + line.data.length
-            if ((lineEndLocation < location) || (lineLocation == location && !isLocationEndOfString)) && line.index < lineManager.lineCount - 1 {
-                nextLine = lineManager.line(atRow: line.index + 1)
-            } else {
-                nextLine = nil
-            }
-        }
-    }
-
     /// Typesets only the line containing `location`, without walking every line before it.
     ///
     /// The target line's Y position (`line.yPosition`) is read from the line manager's red-black
@@ -718,5 +688,6 @@ private extension LayoutManager {
 private extension LayoutManager {
     @objc private func clearMemory() {
         lineControllerStorage.removeAllLineControllers(exceptLinesWithID: visibleLineIDs)
+        contentSizeService.removeLineWidths(exceptLinesWithID: visibleLineIDs)
     }
 }

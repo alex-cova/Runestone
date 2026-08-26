@@ -1,6 +1,17 @@
 import Foundation
 import AppKit
 
+/// Drives the find/replace panel via ``FindSession``/``FindSearchScheduler``/``FindSearchEngine``
+/// instead of `TextView.search(for:)`'s synchronous `SearchController` path — search-as-you-type
+/// and document-change refreshes are debounced 200ms and run off the main actor, so typing in the
+/// find field (or editing the document while the panel is open) no longer blocks on a
+/// whole-document scan. See PERFORMANCE_AUDIT.md Phase 2 #5 / migration step 2.
+///
+/// "Replace All" still goes through `target.search(for:replacingMatchesWith:)`
+/// (`TextView`/`SearchController`) rather than ``FindSearchEngine/replaceAll``, since it needs
+/// per-match ranges to build a ``BatchReplaceSet`` (preserving normal, delta-based undo) rather
+/// than ``FindSearchEngine``'s whole-new-`String` result.
+@MainActor
 final class FindPanelController {
     weak var target: FindPanelTarget?
     weak var emphasisManager: EmphasisManager?
@@ -8,31 +19,32 @@ final class FindPanelController {
     private(set) var isVisible = false
     let panelView = FindPanelBarView()
 
-    private var matches: [SearchResult] = []
-    private var currentMatchIndex: Int?
+    private let session = FindSession()
+    private let scheduler = FindSearchScheduler()
     private var wrapAround = true
-    private var matchCase = false
-    private var usesRegularExpression = false
 
     init(target: FindPanelTarget) {
         self.target = target
         panelView.isHidden = true
-        panelView.onFindTextChanged = { [weak self] _ in self?.performFind() }
+        panelView.onFindTextChanged = { [weak self] text in
+            self?.session.query = text
+            self?.scheduleFind()
+        }
         panelView.onPrevious = { [weak self] in self?.selectPreviousMatch() }
         panelView.onNext = { [weak self] in self?.selectNextMatch() }
         panelView.onReplace = { [weak self] in self?.replaceCurrentMatch() }
         panelView.onReplaceAll = { [weak self] in self?.replaceAllMatches() }
         panelView.onClose = { [weak self] in self?.hide() }
         panelView.onMatchCaseChanged = { [weak self] matchCase in
-            self?.matchCase = matchCase
-            self?.performFind()
+            self?.session.matchCase = matchCase
+            self?.scheduleFind()
         }
         panelView.onWrapAroundChanged = { [weak self] wrapAround in
             self?.wrapAround = wrapAround
         }
         panelView.onUsesRegularExpressionChanged = { [weak self] usesRegex in
-            self?.usesRegularExpression = usesRegex
-            self?.performFind()
+            self?.session.useRegex = usesRegex
+            self?.scheduleFind()
         }
         panelView.onModeChanged = { [weak self] _ in
             guard let self else {
@@ -57,8 +69,10 @@ final class FindPanelController {
             target.findPanelWillShow(panelHeight: panelHeight)
         }
         let query = initialQuery ?? target.selectedTextForFind()
+        // Triggers `onFindTextChanged`, which updates `session.query`; the explicit `immediate:
+        // true` below skips the 200ms debounce so opening the panel doesn't read as unresponsive.
         panelView.focusFindField(selecting: query)
-        performFind()
+        scheduleFind(immediate: true)
     }
 
     func hide() {
@@ -66,6 +80,7 @@ final class FindPanelController {
             return
         }
         isVisible = false
+        scheduler.cancel()
         panelView.isHidden = true
         emphasisManager?.removeEmphases(for: EmphasisGroup.find)
         target?.findPanelWillHide(panelHeight: panelHeight)
@@ -80,64 +95,55 @@ final class FindPanelController {
         }
     }
 
+    /// Called on every document edit while the panel is visible. Debounced/off-main like typing in
+    /// the find field — this used to run a synchronous full-document scan on every keystroke typed
+    /// into the *editor* (not just the find field) whenever the panel was open.
     func refreshIfVisible() {
-        guard isVisible, !panelView.findText.isEmpty else {
+        guard isVisible, !session.query.isEmpty else {
             return
         }
-        performFind()
+        scheduleFind()
     }
 }
 
 private extension FindPanelController {
-    private func performFind() {
+    private func scheduleFind(immediate: Bool = false) {
         guard let target else {
             return
         }
-        let queryText = panelView.findText
-        guard !queryText.isEmpty else {
-            matches = []
-            currentMatchIndex = nil
+        guard !session.query.isEmpty else {
+            scheduler.cancel()
+            session.clearHighlights()
             panelView.matchLabelText = ""
             emphasisManager?.removeEmphases(for: EmphasisGroup.find)
             return
         }
-        let query = SearchQuery(text: queryText,
-                                matchMethod: usesRegularExpression ? .regularExpression : .contains,
-                                isCaseSensitive: matchCase)
-        matches = target.search(for: query)
-        currentMatchIndex = nearestMatchIndex()
-        updateMatchLabel()
-        updateFindEmphases()
-        if let currentMatchIndex, matches.indices.contains(currentMatchIndex) {
-            selectMatch(at: currentMatchIndex, scroll: false)
-        }
+        let text = target.textForFind
+        let anchorLocation = target.findSelection?.location ?? 0
+        scheduler.scheduleRefresh(
+            session: session,
+            text: text,
+            anchorLocation: anchorLocation,
+            immediate: immediate,
+            isCurrent: { [weak self] in self?.isVisible ?? false },
+            apply: { [weak self] in self?.didUpdateSearchOutcome() }
+        )
     }
 
-    private func nearestMatchIndex() -> Int? {
-        guard !matches.isEmpty else {
-            return nil
+    private func didUpdateSearchOutcome() {
+        updateMatchLabel()
+        updateFindEmphases()
+        if let currentRange = session.currentRange {
+            target?.setSelectedRange(currentRange)
         }
-        guard let caretLocation = target?.findSelection?.location else {
-            return 0
-        }
-        var bestIndex = 0
-        var bestDiff = Int.max
-        for (index, match) in matches.enumerated() {
-            let diff = abs(match.range.location - caretLocation)
-            if diff < bestDiff {
-                bestDiff = diff
-                bestIndex = index
-            }
-        }
-        return bestIndex
     }
 
     private func updateMatchLabel() {
-        guard !matches.isEmpty, let currentMatchIndex else {
-            panelView.matchLabelText = matches.isEmpty ? "0/0" : ""
+        guard session.matchCount > 0, let currentIndex = session.currentIndex else {
+            panelView.matchLabelText = session.query.isEmpty ? "" : "0/0"
             return
         }
-        panelView.matchLabelText = "\(currentMatchIndex + 1)/\(matches.count)"
+        panelView.matchLabelText = "\(currentIndex + 1)/\(session.matchCount)"
     }
 
     private func updateFindEmphases() {
@@ -145,87 +151,80 @@ private extension FindPanelController {
             return
         }
         let activeColor = UIColor.systemYellow
-        let emphases = matches.enumerated().map { index, match in
-            Emphasis(range: match.range,
+        let currentRange = session.currentRange
+        // `session.highlightRanges` is a capped window (FindSearchEngine.maxHighlightedMatches)
+        // around the current match, not every match in the document — deliberate, so opening the
+        // find panel on a huge file with millions of matches doesn't materialize/emphasize all of
+        // them. See PERFORMANCE_AUDIT.md Phase 2 #5.
+        let emphases = session.highlightRanges.map { range in
+            Emphasis(range: range,
                      style: .standard,
                      flash: false,
-                     inactive: index != currentMatchIndex,
+                     inactive: range != currentRange,
                      selectInDocument: false)
         }
         emphasisManager.replaceEmphases(emphases, for: EmphasisGroup.find, color: activeColor)
     }
 
-    private func selectMatch(at index: Int, scroll: Bool) {
-        guard matches.indices.contains(index) else {
-            return
-        }
-        currentMatchIndex = index
-        let match = matches[index]
-        target?.setSelectedRange(match.range)
-        if scroll {
-            target?.scrollRangeToVisible(match.range)
-        }
-        updateMatchLabel()
-        updateFindEmphases()
-    }
-
+    /// Advances to the next/previous match with a cheap forward/backward scan
+    /// (`FindSearchEngine.findNext`/`findPrevious`, O(distance to match) — not a full recount),
+    /// so jumping between matches on a huge file stays fast. The match-count label and highlight
+    /// window are refreshed separately, immediately but asynchronously (`scheduleFind(immediate:
+    /// true)`), since recomputing those requires a full-document scan.
     private func selectNextMatch() {
-        guard !matches.isEmpty else {
+        guard let target, session.matchCount > 0 else {
             return
         }
-        let nextIndex: Int
-        if let currentMatchIndex {
-            if currentMatchIndex + 1 < matches.count {
-                nextIndex = currentMatchIndex + 1
-            } else if wrapAround {
-                nextIndex = 0
-            } else {
-                return
-            }
-        } else {
-            nextIndex = 0
+        let text = target.textForFind
+        let options = session.searchOptions()
+        // Anchor on the target's actual current selection, not `session.currentRange` — the
+        // latter is only updated once the async refresh below completes, so a second Next/
+        // Previous click arriving before that lands would otherwise re-anchor on a stale range
+        // and fail to advance.
+        let after = target.findSelection.map(NSMaxRange) ?? 0
+        let next = FindSearchEngine.findNext(options: options, in: text, after: after)
+            ?? (wrapAround ? FindSearchEngine.findNext(options: options, in: text, after: 0) : nil)
+        guard let next else {
+            return
         }
-        selectMatch(at: nextIndex, scroll: true)
+        target.setSelectedRange(next)
+        target.scrollRangeToVisible(next)
+        scheduleFind(immediate: true)
     }
 
     private func selectPreviousMatch() {
-        guard !matches.isEmpty else {
+        guard let target, session.matchCount > 0 else {
             return
         }
-        let previousIndex: Int
-        if let currentMatchIndex {
-            if currentMatchIndex > 0 {
-                previousIndex = currentMatchIndex - 1
-            } else if wrapAround {
-                previousIndex = matches.count - 1
-            } else {
-                return
-            }
-        } else {
-            previousIndex = matches.count - 1
+        let text = target.textForFind
+        let options = session.searchOptions()
+        let before = target.findSelection?.location ?? (text as NSString).length
+        let previous = FindSearchEngine.findPrevious(options: options, in: text, before: before)
+            ?? (wrapAround ? FindSearchEngine.findPrevious(options: options, in: text, before: (text as NSString).length + 1) : nil)
+        guard let previous else {
+            return
         }
-        selectMatch(at: previousIndex, scroll: true)
+        target.setSelectedRange(previous)
+        target.scrollRangeToVisible(previous)
+        scheduleFind(immediate: true)
     }
 
     private func replaceCurrentMatch() {
-        guard let target, let currentMatchIndex, matches.indices.contains(currentMatchIndex) else {
+        guard let target, let currentRange = session.currentRange else {
             return
         }
-        let match = matches[currentMatchIndex]
-        target.replace(match.range, withText: panelView.replaceText)
-        performFind()
+        target.replace(currentRange, withText: panelView.replaceText)
+        scheduleFind(immediate: true)
     }
 
     private func replaceAllMatches() {
-        guard let target, !panelView.findText.isEmpty else {
+        guard let target, !session.query.isEmpty else {
             return
         }
-        let query = SearchQuery(text: panelView.findText,
-                                matchMethod: usesRegularExpression ? .regularExpression : .contains,
-                                isCaseSensitive: matchCase)
+        let query = session.searchOptions().searchQuery
         let replacements = target.search(for: query, replacingMatchesWith: panelView.replaceText)
         let batch = BatchReplaceSet(replacements: replacements.map { BatchReplaceSet.Replacement(range: $0.range, text: $0.replacementText) })
         target.replaceText(in: batch)
-        performFind()
+        scheduleFind(immediate: true)
     }
 }

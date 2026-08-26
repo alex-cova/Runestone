@@ -167,6 +167,13 @@ public enum FindSearchEngine {
         var searchRange = NSRange(location: 0, length: ns.length)
 
         while searchRange.length > 0 {
+            // A stale search that's been superseded by a newer query/edit still runs to
+            // completion inside its `Task.detached` unless it checks in here — wasting CPU on a
+            // huge document even though its result will be discarded by the caller's own
+            // `Task.isCancelled` check. See PERFORMANCE_AUDIT.md Phase 3 (cancellation).
+            if Task.isCancelled {
+                return .empty
+            }
             let found = ns.range(of: options.query, options: compare, range: searchRange)
             guard found.location != NSNotFound else { break }
             let index = matchCount
@@ -221,6 +228,9 @@ public enum FindSearchEngine {
         var searchRange = NSRange(location: 0, length: ns.length)
 
         while searchRange.length > 0, matchIndex < endIndex {
+            if Task.isCancelled {
+                return ranges
+            }
             let found = ns.range(of: options.query, options: compare, range: searchRange)
             guard found.location != NSNotFound else { break }
             if matchIndex >= startIndex {
@@ -270,8 +280,14 @@ public enum FindSearchEngine {
         var matchCount = 0
         var currentIndex: Int?
         var currentRange: NSRange?
+        var wasCancelled = false
 
-        regex.enumerateMatches(in: text, options: [], range: full) { result, _, _ in
+        regex.enumerateMatches(in: text, options: [], range: full) { result, _, stop in
+            if Task.isCancelled {
+                wasCancelled = true
+                stop.pointee = true
+                return
+            }
             guard let range = result?.range, range.length > 0 else { return }
             let index = matchCount
             matchCount += 1
@@ -281,6 +297,9 @@ public enum FindSearchEngine {
             }
         }
 
+        if wasCancelled {
+            return .empty
+        }
         if matchCount == 0 {
             return .empty
         }
@@ -321,6 +340,10 @@ public enum FindSearchEngine {
         var ranges: [NSRange] = []
         var matchIndex = 0
         regex.enumerateMatches(in: text, options: [], range: full) { result, _, stop in
+            if Task.isCancelled {
+                stop.pointee = true
+                return
+            }
             guard let range = result?.range, range.length > 0 else { return }
             if matchIndex >= endIndex {
                 stop.pointee = true
