@@ -1,4 +1,4 @@
-import AppKit
+@preconcurrency import AppKit
 import XCTest
 @testable import Runestone
 
@@ -7,6 +7,7 @@ import XCTest
 /// block-selection, and keyboard-selection test suites. Extracted from what
 /// `MultiSelectionTests`/`TextViewKeyboardSelectionTests` each used to duplicate verbatim.
 extension XCTestCase {
+    @MainActor
     func makeFocusedTextView(text: String,
                              isEditable: Bool = true,
                              file: StaticString = #filePath,
@@ -46,6 +47,7 @@ extension XCTestCase {
         )!
     }
 
+    @MainActor
     func send(_ event: NSEvent, to textView: TextView) {
         textView.window?.sendEvent(event)
     }

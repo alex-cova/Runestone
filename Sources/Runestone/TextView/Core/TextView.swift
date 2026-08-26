@@ -1,6 +1,6 @@
 import Foundation
 // swiftlint:disable file_length type_body_length
-import AppKit
+@preconcurrency import AppKit
 import CoreText
 
 /// A type similiar to UITextView with features commonly found in code editors.
@@ -10,8 +10,10 @@ import CoreText
 /// The type does not subclass `UITextView` but its interface is kept close to `UITextView`.
 ///
 /// When initially configuring the `TextView` with a theme, a language and the text to be shown, it is recommended to use the ``setState(_:addUndoAction:)`` function.
-/// The function takes an instance of ``TextViewState`` as input which can be created on a background queue to avoid blocking the main queue while doing the initial parse of a text.
-open class TextView: UIScrollView {
+    /// The function takes an instance of ``TextViewState`` as input which can be created on a background queue to avoid blocking the main queue while doing the initial parse of a text.
+    /// Pass ``SyntaxParsePolicy/deferred`` to skip the parse during `TextViewState` construction entirely: the text view paints immediately and highlights once the background parse finishes.
+    /// Pass ``SyntaxParsePolicy/viewport`` to parse only the visible window so a large file does not build a full-document tree.
+    open class TextView: UIScrollView {
     /// Delegate to receive callbacks for events triggered by the editor.
     public weak var editorDelegate: TextViewDelegate?
     /// Optional handler invoked before default key handling. Return `true` to consume the event.
@@ -36,6 +38,22 @@ open class TextView: UIScrollView {
             hasPendingContentSizeUpdate = true
             setNeedsLayout()
         }
+    }
+    /// Whether the live buffer is a file-backed piece tree rather than a contiguous `NSMutableString`.
+    public var isFileBacked: Bool {
+        textInputView.isFileBacked
+    }
+    /// UTF-16 length of the document without materializing ``text``.
+    public var documentLength: Int {
+        textInputView.documentLength
+    }
+    /// Number of lines in the document (including a trailing empty line after a final newline).
+    public var lineCount: Int {
+        textInputView.lineManager.lineCount
+    }
+
+    func pieceTreeContentSnapshot() -> PieceTreeContentSnapshot? {
+        textInputView.stringView.contentSnapshot()
     }
     /// A Boolean value that indicates whether the text view is editable.
     public var isEditable = true {
@@ -312,14 +330,19 @@ open class TextView: UIScrollView {
     }
     /// The point at which the origin of the content view is offset from the origin of the scroll view.
     override public var contentOffset: CGPoint {
-        didSet {
-            if contentOffset != oldValue {
-                textInputView.viewport = CGRect(origin: contentOffset, size: frame.size)
-                // Scroll-wheel updates contentOffset without going through AppKit's
-                // layout pass — force line layout for the new viewport now or the
-                // clip view reveals empty document space ("text disappears").
-                textInputView.layoutIfNeeded()
+        get { super.contentOffset }
+        set {
+            let oldValue = super.contentOffset
+            super.contentOffset = newValue
+            guard newValue != oldValue else {
+                return
             }
+            textInputView.viewport = CGRect(origin: newValue, size: frame.size)
+            // Scroll-wheel updates contentOffset without going through AppKit's
+            // layout pass — force line layout for the new viewport now or the
+            // clip view reveals empty document space ("text disappears").
+            textInputView.layoutIfNeeded()
+            textInputView.ensureViewportSyntaxParse()
         }
     }
     /// Character pairs are used by the editor to automatically insert a trailing character when the user types the leading character.
@@ -1009,6 +1032,7 @@ open class TextView: UIScrollView {
         // UIView.layout does not walk children; explicitly layout the input view
         // so viewport-driven line fragments exist for the current offset.
         textInputView.layoutIfNeeded()
+        textInputView.ensureViewportSyntaxParse()
         bringSubviewToFront(textInputView.gutterContainerView)
         if let scrollPocketView {
             bringSubviewToFront(scrollPocketView)
@@ -1141,6 +1165,23 @@ open class TextView: UIScrollView {
         textInputView.setState(state, addUndoAction: addUndoAction)
         hasPendingContentSizeUpdate = true
         setNeedsLayout()
+    }
+
+    /// Whether the current language mode has finished its initial syntax parse.
+    ///
+    /// Always `true` for plain text and for ``SyntaxParsePolicy/eager`` state after `setState`.
+    /// Becomes `true` for ``SyntaxParsePolicy/deferred`` and ``SyntaxParsePolicy/viewport`` state after
+    /// ``TextViewDelegate/textViewDidFinishSyntaxParse(_:)``.
+    public var isSyntaxTreeReady: Bool {
+        textInputView.isSyntaxTreeReady
+    }
+
+    /// Cancels an in-flight deferred syntax parse started by ``setState(_:addUndoAction:)``
+    /// or ``setLanguageMode(_:completion:)``.
+    ///
+    /// ``TextViewDelegate/textViewDidFinishSyntaxParse(_:)`` is not called for the cancelled parse.
+    public func cancelSyntaxParse() {
+        textInputView.cancelSyntaxParse()
     }
 
     /// Returns the row and column at the specified location in the text.
@@ -2021,6 +2062,14 @@ extension TextView: TextInputViewDelegate {
 
     func textInputViewDidReceiveCaretRepositioningClick(_ view: TextInputView) {
         resumeTypewriterScrollingAfterCaretRepositioning()
+    }
+
+    func textInputViewDidFinishSyntaxParse(_ view: TextInputView) {
+        editorDelegate?.textViewDidFinishSyntaxParse(self)
+    }
+
+    func textInputView(_ view: TextInputView, didChangeContent change: TextContentChange) {
+        editorDelegate?.textView(self, didChangeContent: change)
     }
 }
 

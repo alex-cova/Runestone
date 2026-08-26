@@ -6,9 +6,9 @@ import EditorIntelligence
 /// Concrete LSP client backed by ChimeHQ's `LanguageClient`.
 public actor LanguageServerClient: LSPClient {
     private let server: InitializingServer
-    private let documentURI: (Document) -> String
+    private let documentURI: @Sendable (Document) -> String
 
-    public init(server: InitializingServer, documentURI: @escaping (Document) -> String) {
+    public init(server: InitializingServer, documentURI: @escaping @Sendable (Document) -> String) {
         self.server = server
         self.documentURI = documentURI
     }

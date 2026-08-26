@@ -2,7 +2,7 @@ import EditorIntelligence
 import Foundation
 
 /// Pushes ``WorkbenchDocument`` snapshots into an EIP ``Workspace`` actor.
-public final class RunestoneWorkbenchWorkspaceBridge {
+public final class RunestoneWorkbenchWorkspaceBridge: @unchecked Sendable {
     public let workspace: Workspace
     private var versions: [DocumentID: Int] = [:]
 

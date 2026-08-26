@@ -1,9 +1,10 @@
-import AppKit
+@preconcurrency import AppKit
 import Foundation
 
 /// Tracks which character indices are visible in the editor and notifies listeners when the set changes.
 @MainActor
 final class VisibleRangeProvider {
+    @MainActor
     protocol Delegate: AnyObject {
         func visibleRangeProvider(_ provider: VisibleRangeProvider, didUpdate indices: IndexSet)
     }

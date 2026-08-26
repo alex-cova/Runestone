@@ -1,6 +1,7 @@
 import XCTest
 @testable import Runestone
 
+@MainActor
 final class TextViewFocusModeTests: XCTestCase {
     func testDefaultsAndAlphaClamping() {
         let textView = makeFocusedTextView(text: "Hello.")

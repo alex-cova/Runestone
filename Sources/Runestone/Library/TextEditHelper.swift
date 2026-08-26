@@ -57,24 +57,19 @@ final class TextEditHelper {
 
     func apply(_ batchReplaceSet: BatchReplaceSet) -> BatchApplication {
         let sortedReplacements = batchReplaceSet.replacements.sorted { $0.range.lowerBound < $1.range.lowerBound }
-        // swiftlint:disable:next force_cast
-        let mutableSubstring = stringView.string.mutableCopy() as! NSMutableString
         var totalChangeInLength = 0
         var replacedRanges: [NSRange] = []
         var inverseReplacements: [BatchReplaceSet.Replacement] = []
         for replacement in sortedReplacements where !replacedRanges.contains(where: { $0.overlaps(replacement.range) }) {
             let range = replacement.range
             let adjustedRange = NSRange(location: range.location + totalChangeInLength, length: range.length)
-            // Read the old text at this position before overwriting it — this is what makes the
-            // replacement's inverse (in `newString`'s coordinates, once every prior replacement in
-            // this loop has been applied) rather than needing a copy of the whole pre-edit string.
-            let oldText = mutableSubstring.substring(with: adjustedRange)
-            mutableSubstring.replaceCharacters(in: adjustedRange, with: replacement.text)
+            let oldText = stringView.substring(in: adjustedRange) ?? ""
+            _ = replaceText(in: adjustedRange, with: replacement.text)
             replacedRanges.append(replacement.range)
             totalChangeInLength += replacement.text.utf16.count - adjustedRange.length
             let newRange = NSRange(location: adjustedRange.location, length: (replacement.text as NSString).length)
             inverseReplacements.append(BatchReplaceSet.Replacement(range: newRange, text: oldText))
         }
-        return BatchApplication(newString: mutableSubstring, inverseReplacements: inverseReplacements)
+        return BatchApplication(newString: stringView.string, inverseReplacements: inverseReplacements)
     }
 }

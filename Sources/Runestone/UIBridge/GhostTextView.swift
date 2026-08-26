@@ -1,4 +1,4 @@
-import AppKit
+@preconcurrency import AppKit
 import EditorIntelligence
 
 /// Native AppKit ghost text view that renders a `GhostTextModel`.

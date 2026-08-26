@@ -1,5 +1,5 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 
 /// Severity of a diagnostic shown in the text view.
 public enum TextViewDiagnosticSeverity: Equatable, Sendable {

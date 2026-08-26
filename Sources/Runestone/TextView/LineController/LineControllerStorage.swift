@@ -1,5 +1,5 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 protocol LineControllerStorageDelegate: AnyObject {
     func lineControllerStorage(_ storage: LineControllerStorage, didCreate lineController: LineController)
 }

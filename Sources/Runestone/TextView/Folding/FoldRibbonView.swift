@@ -1,4 +1,4 @@
-import AppKit
+@preconcurrency import AppKit
 import Foundation
 
 /// The code-folding ribbon shown in the gutter, alongside line numbers. Draws a capsule per

@@ -1,5 +1,5 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 
 final class LineMovementController {
     var lineManager: LineManager
@@ -27,7 +27,7 @@ final class LineMovementController {
         @unknown default:
             newLocation = nil
         }
-        if let newLocation = newLocation, newLocation >= 0 && newLocation <= stringView.string.length {
+        if let newLocation = newLocation, newLocation >= 0 && newLocation <= stringView.length {
             return newLocation
         } else {
             return nil
@@ -38,7 +38,7 @@ final class LineMovementController {
 private extension LineMovementController {
     private func locationForMoving(fromLocation location: Int, by offset: Int) -> Int {
         let naiveNewLocation = location + offset
-        guard naiveNewLocation >= 0 && naiveNewLocation <= stringView.string.length else {
+        guard naiveNewLocation >= 0 && naiveNewLocation <= stringView.length else {
             return location
         }
         // Skip over an entire folded (hidden) region in one step, the same way real editors treat
@@ -56,14 +56,14 @@ private extension LineMovementController {
                 if afterRow < lineManager.lineCount {
                     return lineManager.line(atRow: afterRow).location
                 } else {
-                    return stringView.string.length
+                    return stringView.length
                 }
             }
         }
-        guard naiveNewLocation > 0 && naiveNewLocation < stringView.string.length else {
+        guard naiveNewLocation > 0 && naiveNewLocation < stringView.length else {
             return naiveNewLocation
         }
-        let range = stringView.string.customRangeOfComposedCharacterSequence(at: naiveNewLocation)
+        let range = stringView.rangeOfComposedCharacterSequence(at: naiveNewLocation)
         guard naiveNewLocation > range.location && naiveNewLocation < range.location + range.length else {
             return naiveNewLocation
         }

@@ -1,6 +1,7 @@
 import Foundation
 
 /// The methods for receiving editing-related messages for the text view.
+@MainActor
 public protocol TextViewDelegate: AnyObject {
     /// Asks the delegate whether to begin editing in the text view.
     /// - Parameter textView: The text view for which editing is about to begin.
@@ -105,6 +106,36 @@ public protocol TextViewDelegate: AnyObject {
     func textView(_ textView: TextView,
                   didChangeDistractionFreeChromeVisibility isVisible: Bool,
                   transitionDuration: TimeInterval)
+    /// Tells the delegate that a deferred or viewport syntax parse has finished and highlighting can begin.
+    ///
+    /// Not called for ``SyntaxParsePolicy/eager`` state (the tree is already complete at `setState`)
+    /// or when the parse is cancelled by ``TextView/cancelSyntaxParse()`` / a newer `setState`.
+    /// Subsequent viewport-window expansions after the first successful parse do not call this.
+    func textViewDidFinishSyntaxParse(_ textView: TextView)
+    /// Tells the delegate that a ranged edit was applied.
+    ///
+    /// Called for typing, deletion, and ``TextView/replace(_:withText:)``. Not called for whole-document
+    /// replacements (``TextView/text``, replace-all via ``TextView/replaceText(in:)``), which have no
+    /// single pre-edit range — those only fire ``textViewDidChange(_:)``.
+    func textView(_ textView: TextView, didChangeContent change: TextContentChange)
+}
+
+/// A single ranged edit, with line/column captured against the document *before* the mutation.
+///
+/// ``range`` is UTF-16. ``start``/``oldEnd`` are the endpoints of that range in the pre-edit document,
+/// which is what LSP `textDocument/didChange` incremental ranges need.
+public struct TextContentChange {
+    public let range: NSRange
+    public let replacementText: String
+    public let start: TextLocation
+    public let oldEnd: TextLocation
+
+    public init(range: NSRange, replacementText: String, start: TextLocation, oldEnd: TextLocation) {
+        self.range = range
+        self.replacementText = replacementText
+        self.start = start
+        self.oldEnd = oldEnd
+    }
 }
 
 public extension TextViewDelegate {
@@ -155,4 +186,8 @@ public extension TextViewDelegate {
     func textView(_ textView: TextView,
                   didChangeDistractionFreeChromeVisibility isVisible: Bool,
                   transitionDuration: TimeInterval) {}
+
+    func textViewDidFinishSyntaxParse(_ textView: TextView) {}
+
+    func textView(_ textView: TextView, didChangeContent change: TextContentChange) {}
 }

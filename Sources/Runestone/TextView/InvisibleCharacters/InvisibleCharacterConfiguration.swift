@@ -1,5 +1,5 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 
 final class InvisibleCharacterConfiguration {
     var font: UIFont = .systemFont(ofSize: 12) {

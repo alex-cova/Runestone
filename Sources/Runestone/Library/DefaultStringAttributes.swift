@@ -1,5 +1,5 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 
 struct DefaultStringAttributes {
     let textColor: UIColor

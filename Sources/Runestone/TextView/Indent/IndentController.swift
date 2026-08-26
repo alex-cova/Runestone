@@ -1,11 +1,13 @@
 import Foundation
 
+@MainActor
 protocol IndentControllerDelegate: AnyObject {
     func indentController(_ controller: IndentController, shouldInsert text: String, in range: NSRange)
     func indentController(_ controller: IndentController, shouldSelect range: NSRange)
     func indentControllerDidUpdateTabWidth(_ controller: IndentController)
 }
 
+@MainActor
 final class IndentController {
     weak var delegate: IndentControllerDelegate?
     var stringView: StringView

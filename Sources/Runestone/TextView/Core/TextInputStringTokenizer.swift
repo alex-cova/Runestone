@@ -1,5 +1,5 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 
 final class TextInputStringTokenizer: UITextInputStringTokenizer {
     var lineManager: LineManager
@@ -95,7 +95,7 @@ private extension TextInputStringTokenizer {
             return nil
         }
         if direction.isForward {
-            if location == stringView.string.length {
+            if location == stringView.length {
                 return position
             } else {
                 let lineFragmentRangeUpperBound = lineFragmentNode.location + lineFragmentNode.value
@@ -106,7 +106,7 @@ private extension TextInputStringTokenizer {
                     return IndexedPosition(index: preferredLocation - line.data.delimiterLength)
                 } else {
                     // Navigate to the end of the line but before the last character. This is a hack that avoids an issue where the caret is placed on the next line. The approach seems to be similar to what Textastic is doing.
-                    let lastCharacterRange = stringView.string.customRangeOfComposedCharacterSequence(at: lineFragmentRangeUpperBound)
+                    let lastCharacterRange = stringView.rangeOfComposedCharacterSequence(at: lineFragmentRangeUpperBound)
                     return IndexedPosition(index: lineLocation + lineFragmentRangeUpperBound - lastCharacterRange.length)
                 }
             }
@@ -132,11 +132,11 @@ private extension TextInputStringTokenizer {
         }
         let location = indexedPosition.index
         if direction.isForward {
-            if location == stringView.string.length {
+            if location == stringView.length {
                 return position
             } else {
                 var currentIndex = location
-                while currentIndex < stringView.string.length {
+                while currentIndex < stringView.length {
                     currentIndex = adjustedLocation(forNavigation: currentIndex, direction: direction)
                     guard let currentCharacter = stringView.character(at: currentIndex) else {
                         break
@@ -182,7 +182,7 @@ private extension TextInputStringTokenizer {
             if location == 0 {
                 return false
             } else if let previousCharacter = stringView.character(at: location - 1) {
-                if location == stringView.string.length {
+                if location == stringView.length {
                     return alphanumerics.contains(previousCharacter)
                 } else if let character = stringView.character(at: location) {
                     return alphanumerics.contains(previousCharacter) && !alphanumerics.contains(character)
@@ -193,7 +193,7 @@ private extension TextInputStringTokenizer {
                 return false
             }
         } else {
-            if location == stringView.string.length {
+            if location == stringView.length {
                 return false
             } else if let character = stringView.character(at: location) {
                 if location == 0 {
@@ -218,12 +218,12 @@ private extension TextInputStringTokenizer {
         let location = indexedPosition.index
         let alphanumerics = CharacterSet.alphanumerics
         if direction.isForward {
-            if location == stringView.string.length {
+            if location == stringView.length {
                 return position
             } else if let referenceCharacter = stringView.character(at: location) {
                 let isReferenceCharacterAlphanumeric = alphanumerics.contains(referenceCharacter)
                 var currentIndex = location + 1
-                while currentIndex < stringView.string.length {
+                while currentIndex < stringView.length {
                     guard let currentCharacter = stringView.character(at: currentIndex) else {
                         break
                     }
@@ -278,8 +278,8 @@ private extension TextInputStringTokenizer {
         guard location >= 0 else {
             return nil
         }
-        let safeLocation = min(location, max(stringView.string.length - 1, 0))
-        guard stringView.string.length > 0 else {
+        let safeLocation = min(location, max(stringView.length - 1, 0))
+        guard stringView.length > 0 else {
             return nil
         }
         guard let line = lineManager.line(containingCharacterAt: safeLocation) else {

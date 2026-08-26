@@ -6,6 +6,7 @@ import XCTest
 /// growing a block with the keyboard (⌃⇧←/→/↑/↓), ragged/short lines producing a mix of clamped
 /// non-empty ranges and zero-length carets, off-screen rows that haven't been laid out yet, and
 /// typing into an active block.
+@MainActor
 final class BlockSelectionTests: XCTestCase {
     /// A point in view coordinates for `row`/`column` in `textView`, computed via the same
     /// `caretRect(for:)` the real UI uses, so tests never hardcode pixel geometry.

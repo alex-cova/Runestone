@@ -7,7 +7,7 @@ import EditorIntelligence
 /// services can read `currentDocument` and `openDocuments` without entering `MainActor`. Edits
 /// and focus changes are async and run on the main actor because they touch UI. The adapter
 /// becomes the `TextView`'s `editorDelegate` and emits `EditorEvent`s for text and selection changes.
-public final class RunestoneEditorAdapter: EditorAdapter {
+public final class RunestoneEditorAdapter: EditorAdapter, @unchecked Sendable {
     public let id: EditorAdapterID
     public let context: EditorContext
     public var events: AsyncStream<EditorEvent> { eventBus.events }
@@ -20,6 +20,7 @@ public final class RunestoneEditorAdapter: EditorAdapter {
     private let lock = NSLock()
     private var latestDocument: Document?
     private var refreshTask: Task<Void, Never>?
+    private var pendingContentChanges: [TextEdit] = []
     /// Matches ``LSPDocumentSyncService``'s default `batchInterval` — downstream consumers of
     /// this adapter's `.documentChanged` events (`Workspace`, `LSPWorkspaceSyncBridge`,
     /// `IndexingService`, ...) all get throttled for free once the source event rate drops.
@@ -105,7 +106,15 @@ public final class RunestoneEditorAdapter: EditorAdapter {
             guard let textView = textView else { return }
             let document = makeDocument(with: textView)
             setLatestDocument(document)
-            eventBus.send(.documentChanged(document.id, document.contentSnapshot))
+            let edits = pendingContentChanges
+            pendingContentChanges = []
+            RunestoneSignposts.interval("RunestoneEditorAdapter.refreshDocument") {
+                if edits.isEmpty {
+                    eventBus.send(.documentChanged(document.id, document.contentSnapshot))
+                } else {
+                    eventBus.send(.documentEdited(document.id, edits, newSnapshot: document.contentSnapshot))
+                }
+            }
         }
     }
 
@@ -120,8 +129,17 @@ public final class RunestoneEditorAdapter: EditorAdapter {
     ///   actually changed; for selection/cursor-only updates use
     ///   ``makeDocument(with:snapshot:)`` to reuse the previous snapshot instead.
     private func makeDocument(with textView: TextView) -> Document {
-        let text = textView.text as String
-        let snapshot = TextSnapshot(version: nextVersion(), text: text)
+        let snapshot: TextSnapshot
+        if textView.isFileBacked {
+            snapshot = TextSnapshot(
+                version: nextVersion(),
+                utf16Length: textView.documentLength,
+                text: nil,
+                rangeReader: makeRangeReader(from: textView)
+            )
+        } else {
+            snapshot = TextSnapshot(version: nextVersion(), text: textView.text)
+        }
         return makeDocument(with: textView, snapshot: snapshot)
     }
 
@@ -186,6 +204,15 @@ public final class RunestoneEditorAdapter: EditorAdapter {
         }
     }
 
+    private func makeRangeReader(from textView: TextView) -> TextRangeReader? {
+        guard let snapshot = textView.pieceTreeContentSnapshot() else {
+            return nil
+        }
+        return TextRangeReader(utf16Length: snapshot.utf16Length) { offset, length in
+            snapshot.substring(utf16Offset: offset, length: length)
+        }
+    }
+
     private func setLatestDocument(_ document: Document) {
         lock.withLock { latestDocument = document }
     }
@@ -214,6 +241,11 @@ extension RunestoneEditorAdapter: TextViewDelegate {
         forwardingDelegate?.textViewDidChange(textView)
     }
 
+    public func textView(_ textView: TextView, didChangeContent change: TextContentChange) {
+        pendingContentChanges.append(change.asTextEdit)
+        forwardingDelegate?.textView(textView, didChangeContent: change)
+    }
+
     public func textViewDidChangeSelection(_ textView: TextView) {
         Task { @MainActor in
             guard textView === self.textView else { return }
@@ -223,7 +255,12 @@ extension RunestoneEditorAdapter: TextViewDelegate {
             // documents cheap: previously every selection change paid the same full-document
             // copy as an actual edit.
             let snapshot = currentDocument?.contentSnapshot
-                ?? TextSnapshot(version: nextVersion(), text: textView.text as String)
+                ?? TextSnapshot(
+                    version: nextVersion(),
+                    utf16Length: textView.documentLength,
+                    text: textView.isFileBacked ? nil : textView.text,
+                    rangeReader: textView.isFileBacked ? makeRangeReader(from: textView) : nil
+                )
             let document = makeDocument(with: textView, snapshot: snapshot)
             setLatestDocument(document)
             eventBus.send(.selectionChanged(document.id, document.selection))
@@ -270,6 +307,29 @@ extension RunestoneEditorAdapter: TextViewDelegate {
 
     public func textView(_ textView: TextView, replaceTextIn highlightedRange: HighlightedRange) {
         forwardingDelegate?.textView(textView, replaceTextIn: highlightedRange)
+    }
+
+    public func textViewDidFinishSyntaxParse(_ textView: TextView) {
+        forwardingDelegate?.textViewDidFinishSyntaxParse(textView)
+    }
+}
+
+extension TextContentChange {
+    var asTextEdit: TextEdit {
+        let startPosition = TextPosition(
+            line: start.lineNumber,
+            column: start.column,
+            utf16Offset: range.location
+        )
+        let endPosition = TextPosition(
+            line: oldEnd.lineNumber,
+            column: oldEnd.column,
+            utf16Offset: range.location + range.length
+        )
+        return TextEdit(
+            range: TextRange(start: startPosition, end: endPosition),
+            replacement: replacementText
+        )
     }
 }
 

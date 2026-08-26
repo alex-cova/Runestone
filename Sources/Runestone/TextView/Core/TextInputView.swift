@@ -1,8 +1,9 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 // swiftlint:disable file_length
 import Combine
 
+@MainActor
 protocol TextInputViewDelegate: AnyObject {
     func textInputViewWillBeginEditing(_ view: TextInputView)
     func textInputViewDidBeginEditing(_ view: TextInputView)
@@ -26,6 +27,8 @@ protocol TextInputViewDelegate: AnyObject {
     func textInputView(_ view: TextInputView, shouldInterceptKeyDown event: NSEvent) -> Bool
     func textInputView(_ view: TextInputView, didReceiveKeyDown event: NSEvent)
     func textInputViewDidReceiveCaretRepositioningClick(_ view: TextInputView)
+    func textInputViewDidFinishSyntaxParse(_ view: TextInputView)
+    func textInputView(_ view: TextInputView, didChangeContent change: TextContentChange)
 }
 
 // swiftlint:disable:next type_body_length
@@ -536,7 +539,6 @@ final class TextInputView: UIView, UITextInput {
         set {
             if newValue != stringView.string {
                 stringView.string = newValue
-                languageMode.parse(newValue)
                 lineManager.rebuild()
                 if let oldSelectedRange = selection {
                     inputDelegate?.selectionWillChange(self)
@@ -551,6 +553,7 @@ final class TextInputView: UIView, UITextInput {
                 if !preserveUndoStackWhenSettingString {
                     undoManager?.removeAllActions()
                 }
+                startFullParse(of: newValue)
             }
         }
     }
@@ -567,6 +570,7 @@ final class TextInputView: UIView, UITextInput {
                 // pass. Without this, layoutLinesInViewport never runs and scrolled
                 // regions stay blank.
                 setNeedsLayout()
+                ensureViewportSyntaxParse()
             }
         }
     }
@@ -675,6 +679,12 @@ final class TextInputView: UIView, UITextInput {
     var gutterContainerView: UIView {
         layoutManager.gutterContainerView
     }
+    var isFileBacked: Bool {
+        stringView.isFileBacked
+    }
+    var documentLength: Int {
+        stringView.length
+    }
     private(set) var stringView = StringView() {
         didSet {
             if stringView !== oldValue {
@@ -742,6 +752,14 @@ final class TextInputView: UIView, UITextInput {
             }
         }
     }
+    /// Bumped on every ``setState`` / ``setLanguageMode`` so a stale deferred parse cannot
+    /// invalidate highlighting or notify after the view has moved on to a newer document.
+    private var syntaxParseGeneration = 0
+    private var syntaxParsePolicy: SyntaxParsePolicy = .eager
+    private var hasNotifiedSyntaxParse = false
+    /// Window last handed to ``startViewportParse``. Prevents layout + `contentOffset` from
+    /// cancelling the same in-flight expansion by starting it twice.
+    private var inFlightViewportParseRange: NSRange?
     private let lineControllerFactory: LineControllerFactory
     private let lineControllerStorage: LineControllerStorage
     private let layoutManager: LayoutManager
@@ -1049,20 +1067,34 @@ final class TextInputView: UIView, UITextInput {
         lineManager.linePosition(at: location)
     }
 
+    var isSyntaxTreeReady: Bool {
+        languageMode.isSyntaxTreeReady
+    }
+
+    func cancelSyntaxParse() {
+        languageMode.cancelParse()
+    }
+
     func setState(_ state: TextViewState, addUndoAction: Bool = false) {
-        let oldText = stringView.string
-        let newText = state.stringView.string
-        stringView = state.stringView
-        theme = state.theme
-        languageMode = state.languageMode
-        lineControllerStorage.removeAllLineControllers()
-        lineManager = state.lineManager
-        lineManager.estimatedLineHeight = estimatedLineHeight
-        layoutManager.languageMode = state.languageMode
-        layoutManager.lineManager = state.lineManager
-        contentSizeService.invalidateContentSize()
-        gutterWidthService.invalidateLineNumberWidth()
+        syntaxParseGeneration += 1
+        let parseGeneration = syntaxParseGeneration
+        syntaxParsePolicy = state.parsePolicy
+        hasNotifiedSyntaxParse = false
+        inFlightViewportParseRange = nil
+        languageMode.cancelParse()
         if addUndoAction {
+            let oldText = stringView.string
+            let newText = state.stringView.string
+            stringView = state.stringView
+            theme = state.theme
+            languageMode = state.languageMode
+            lineControllerStorage.removeAllLineControllers()
+            lineManager = state.lineManager
+            lineManager.estimatedLineHeight = estimatedLineHeight
+            layoutManager.languageMode = state.languageMode
+            layoutManager.lineManager = state.lineManager
+            contentSizeService.invalidateContentSize()
+            gutterWidthService.invalidateLineNumberWidth()
             if newText != oldText {
                 let newRange = NSRange(location: 0, length: newText.length)
                 timedUndoManager.endUndoGrouping()
@@ -1071,6 +1103,16 @@ final class TextInputView: UIView, UITextInput {
                 timedUndoManager.endUndoGrouping()
             }
         } else {
+            stringView = state.stringView
+            theme = state.theme
+            languageMode = state.languageMode
+            lineControllerStorage.removeAllLineControllers()
+            lineManager = state.lineManager
+            lineManager.estimatedLineHeight = estimatedLineHeight
+            layoutManager.languageMode = state.languageMode
+            layoutManager.lineManager = state.lineManager
+            contentSizeService.invalidateContentSize()
+            gutterWidthService.invalidateLineNumberWidth()
             timedUndoManager.removeAllActions()
         }
         if let oldSelectedRange = selection {
@@ -1083,6 +1125,7 @@ final class TextInputView: UIView, UITextInput {
         } else {
             hasPendingFullLayout = true
         }
+        startDeferredParseIfNeeded(for: state, generation: parseGeneration)
     }
 
     func clearSelection() {
@@ -1109,6 +1152,9 @@ final class TextInputView: UIView, UITextInput {
     }
 
     func setLanguageMode(_ languageMode: LanguageMode, completion: ((Bool) -> Void)? = nil) {
+        syntaxParseGeneration += 1
+        let parseGeneration = syntaxParseGeneration
+        self.languageMode.cancelParse()
         let internalLanguageMode = InternalLanguageModeFactory.internalLanguageMode(
             from: languageMode,
             stringView: stringView,
@@ -1116,13 +1162,149 @@ final class TextInputView: UIView, UITextInput {
         self.languageMode = internalLanguageMode
         layoutManager.languageMode = internalLanguageMode
         internalLanguageMode.parse(string) { [weak self] finished in
-            if let self = self, finished {
+            guard let self, parseGeneration == self.syntaxParseGeneration else {
+                completion?(false)
+                return
+            }
+            if finished {
                 self.invalidateLines()
                 self.layoutManager.setNeedsLayout()
                 self.setNeedsLayout()
+                self.delegate?.textInputViewDidFinishSyntaxParse(self)
             }
             completion?(finished)
         }
+    }
+
+    private func startDeferredParseIfNeeded(for state: TextViewState, generation: Int) {
+        guard !state.isSyntaxTreeReady else {
+            return
+        }
+        switch state.parsePolicy {
+        case .eager:
+            break
+        case .deferred:
+            startFullParse(of: string, generation: generation, state: state)
+        case .viewport:
+            startViewportParse(generation: generation, state: state, notifyOnCompletion: true)
+        }
+    }
+
+    /// Full reparse of the current string (``string`` setter, ``setLanguageMode``). Invalidates the
+    /// existing tree first so highlighting does not run against a stale AST while the new parse is
+    /// in flight.
+    private func startFullParse(of text: NSString) {
+        guard languageMode is TreeSitterInternalLanguageMode else {
+            return
+        }
+        syntaxParseGeneration += 1
+        let generation = syntaxParseGeneration
+        hasNotifiedSyntaxParse = false
+        inFlightViewportParseRange = nil
+        languageMode.invalidateSyntaxTree()
+        if syntaxParsePolicy == .viewport {
+            startViewportParse(generation: generation, state: nil, notifyOnCompletion: true)
+        } else {
+            startFullParse(of: text, generation: generation, state: nil)
+        }
+    }
+
+    private func startFullParse(of text: NSString, generation: Int, state: TextViewState?) {
+        languageMode.parse(text) { [weak self] finished in
+            guard let self, generation == self.syntaxParseGeneration else {
+                return
+            }
+            guard finished else {
+                return
+            }
+            self.handleSyntaxParseFinished(state: state, notify: true)
+        }
+    }
+
+    private func startViewportParse(generation: Int, state: TextViewState?, notifyOnCompletion: Bool) {
+        guard let treeSitterMode = languageMode as? TreeSitterInternalLanguageMode else {
+            return
+        }
+        let window = viewportUTF16Window()
+        inFlightViewportParseRange = window
+        treeSitterMode.parse(coveringUTF16Range: window) { [weak self] finished in
+            guard let self, generation == self.syntaxParseGeneration else {
+                return
+            }
+            self.inFlightViewportParseRange = nil
+            guard finished else {
+                return
+            }
+            let shouldNotify = notifyOnCompletion || !self.hasNotifiedSyntaxParse
+            self.handleSyntaxParseFinished(state: state, notify: shouldNotify)
+        }
+    }
+
+    /// Restart a deferred or viewport parse that `textDidChange` cancelled so the keystroke
+    /// would not wait on `parseLock`. Incremental apply already ran if a tree existed.
+    private func restartSyntaxParseAfterCancelledEdit() {
+        guard !languageMode.isSyntaxTreeReady,
+              languageMode is TreeSitterInternalLanguageMode else {
+            return
+        }
+        syntaxParseGeneration += 1
+        let generation = syntaxParseGeneration
+        hasNotifiedSyntaxParse = false
+        inFlightViewportParseRange = nil
+        if syntaxParsePolicy == .viewport {
+            startViewportParse(generation: generation, state: nil, notifyOnCompletion: true)
+        } else {
+            startFullParse(of: string, generation: generation, state: nil)
+        }
+    }
+
+    /// Reparse the visible window when ``SyntaxParsePolicy/viewport`` is active and the current
+    /// tree does not cover it. Called from the viewport setter, ``TextView`` layout, and after an
+    /// in-flight parse finishes (so a scroll during that parse is not dropped).
+    func ensureViewportSyntaxParse() {
+        guard syntaxParsePolicy == .viewport,
+              let treeSitterMode = languageMode as? TreeSitterInternalLanguageMode,
+              treeSitterMode.isSyntaxTreeReady else {
+            return
+        }
+        let visible = viewportUTF16Window(overscanScreens: 0)
+        // An empty range at location 0 is contained by the leading window even when the
+        // viewport has moved — only skip when we still have a real visible slice inside
+        // the parsed range, or when we have not scrolled yet.
+        if visible.length > 0, treeSitterMode.parsedRangeContains(visible) {
+            return
+        }
+        if visible.length == 0, viewport.minY <= 0 {
+            return
+        }
+        let window = viewportUTF16Window()
+        if inFlightViewportParseRange == window {
+            return
+        }
+        startViewportParse(generation: syntaxParseGeneration, state: nil, notifyOnCompletion: false)
+    }
+
+    private func viewportUTF16Window(
+        overscanScreens: CGFloat = TreeSitterPerformanceConstants.viewportOverscanScreens
+    ) -> NSRange {
+        ViewportParseWindow.utf16Range(
+            lineManager: lineManager,
+            stringLength: string.length,
+            viewport: viewport,
+            overscanScreens: overscanScreens
+        )
+    }
+
+    private func handleSyntaxParseFinished(state: TextViewState?, notify: Bool) {
+        state?.applyDetectedIndentStrategy()
+        invalidateLines()
+        layoutManager.setNeedsLayout()
+        setNeedsLayout()
+        if notify {
+            hasNotifiedSyntaxParse = true
+            delegate?.textInputViewDidFinishSyntaxParse(self)
+        }
+        ensureViewportSyntaxParse()
     }
 
     func syntaxNode(at location: Int) -> SyntaxNode? {
@@ -1569,7 +1751,7 @@ extension TextInputView {
         guard multiSelectionController.hasMultipleSelections else {
             return
         }
-        let documentLength = stringView.string.length
+        let documentLength = stringView.length
         let editRanges = multiSelectionController.selections.map { selection -> NSRange in
             let location = min(max(selection.location + relativeStartOffset, 0), documentLength)
             let clampedLength = min(max(length, 0), documentLength - location)
@@ -1751,7 +1933,7 @@ extension TextInputView {
             return
         }
         // If there is no marked range or selected range then we fallback to appending text to the end of our string.
-        let replacementRange = imeMarkedRange ?? selection ?? NSRange(location: stringView.string.length, length: 0)
+        let replacementRange = imeMarkedRange ?? selection ?? NSRange(location: stringView.length, length: 0)
         guard shouldChangeText(in: replacementRange, replacementText: preparedText) else {
             isRestoringPreviouslyDeletedText = false
             return
@@ -1905,7 +2087,13 @@ extension TextInputView {
         }
         let textEditHelper = TextEditHelper(stringView: stringView, lineManager: lineManager, lineEndings: lineEndings)
         let application = textEditHelper.apply(batchReplaceSet)
-        setStringWithUndoAction(application.newString, inverseReplacements: application.inverseReplacements)
+        registerBatchUndo(inverseReplacements: application.inverseReplacements)
+        invalidateLines()
+        layoutManager.setNeedsLayout()
+        setNeedsLayout()
+        contentSizeService.invalidateContentSize()
+        gutterWidthService.invalidateLineNumberWidth()
+        delegate?.textInputViewDidChange(self)
         if let oldLinePosition = oldLinePosition {
             // By restoring the selected range using the old line position we can better preserve the old selected language.
             moveCaret(to: oldLinePosition)
@@ -1928,6 +2116,21 @@ extension TextInputView {
     /// than a full-document snapshot — undoing replays it through `replaceText(in:)`, which
     /// computes its own inverse in turn, so redo/undo/redo... never holds more than one edit's
     /// worth of text per step, regardless of document size. See PERFORMANCE_AUDIT.md Phase 2 #7.
+    private func registerBatchUndo(inverseReplacements: [BatchReplaceSet.Replacement]) {
+        let isNestedInUndoOrRedo = timedUndoManager.isUndoing || timedUndoManager.isRedoing
+        if !isNestedInUndoOrRedo {
+            timedUndoManager.endUndoGrouping()
+            timedUndoManager.beginUndoGrouping()
+            timedUndoManager.setActionName(L10n.Undo.ActionName.replaceAll)
+        }
+        timedUndoManager.registerUndo(withTarget: self) { textInputView in
+            textInputView.replaceText(in: BatchReplaceSet(replacements: inverseReplacements))
+        }
+        if !isNestedInUndoOrRedo {
+            timedUndoManager.endUndoGrouping()
+        }
+    }
+
     private func setStringWithUndoAction(_ newString: NSString, inverseReplacements: [BatchReplaceSet.Replacement]) {
         guard newString != string else {
             return
@@ -2019,7 +2222,15 @@ extension TextInputView {
         let languageModeLineChangeSet = languageMode.textDidChange(textChange)
         lineChangeSet.union(with: languageModeLineChangeSet)
         applyLineChangesToLayoutManager(lineChangeSet)
+        restartSyntaxParseAfterCancelledEdit()
         let updatedTextEditResult = TextEditResult(textChange: textChange, lineChangeSet: lineChangeSet)
+        let change = TextContentChange(
+            range: range,
+            replacementText: newString,
+            start: TextLocation(textChange.startLinePosition),
+            oldEnd: TextLocation(textChange.oldEndLinePosition)
+        )
+        delegate?.textInputView(self, didChangeContent: change)
         delegate?.textInputViewDidChange(self)
         if updatedTextEditResult.didAddOrRemoveLines {
             delegate?.textInputViewDidInvalidateContentSize(self)
@@ -2290,7 +2501,7 @@ extension TextInputView {
     }
 
     private func safeSelectionRange(from range: NSRange) -> NSRange {
-        let stringLength = stringView.string.length
+        let stringLength = stringView.length
         let cappedLocation = min(max(range.location, 0), stringLength)
         let cappedLength = min(max(range.length, 0), stringLength - cappedLocation)
         return NSRange(location: cappedLocation, length: cappedLength)
@@ -2637,7 +2848,7 @@ extension TextInputView {
             let leftIndex = max(indexedPosition.index - 1, 0)
             return IndexedRange(location: leftIndex, length: indexedPosition.index - leftIndex)
         case .right, .down:
-            let rightIndex = min(indexedPosition.index + 1, stringView.string.length)
+            let rightIndex = min(indexedPosition.index + 1, stringView.length)
             return IndexedRange(location: indexedPosition.index, length: rightIndex - indexedPosition.index)
         @unknown default:
             return nil
@@ -2649,7 +2860,7 @@ extension TextInputView {
             return nil
         }
         let cappedIndex = max(index - 1, 0)
-        let range = stringView.string.customRangeOfComposedCharacterSequence(at: cappedIndex)
+        let range = stringView.rangeOfComposedCharacterSequence(at: cappedIndex)
         return IndexedRange(range)
     }
 
@@ -2752,12 +2963,12 @@ extension TextInputView {
 
 // MARK: - TreeSitterLanguageModeDeleage
 extension TextInputView: TreeSitterLanguageModeDelegate {
-    func treeSitterLanguageMode(_ languageMode: TreeSitterInternalLanguageMode, bytesAt byteIndex: ByteCount) -> TreeSitterTextProviderResult? {
-        guard byteIndex.value >= 0 && byteIndex < stringView.string.byteCount else {
+    nonisolated func treeSitterLanguageMode(_ languageMode: TreeSitterInternalLanguageMode, bytesAt byteIndex: ByteCount) -> TreeSitterTextProviderResult? {
+        guard byteIndex.value >= 0 && byteIndex < stringView.byteCount else {
             return nil
         }
         let targetByteCount: ByteCount = 4 * 1_024
-        let endByte = min(byteIndex + targetByteCount, stringView.string.byteCount)
+        let endByte = min(byteIndex + targetByteCount, stringView.byteCount)
         let byteRange = ByteRange(from: byteIndex, to: endByte)
         if let result = stringView.bytes(in: byteRange) {
             return TreeSitterTextProviderResult(bytes: result.bytes, length: UInt32(result.length.value))
@@ -2768,7 +2979,7 @@ extension TextInputView: TreeSitterLanguageModeDelegate {
 }
 
 // MARK: - LineControllerStorageDelegate
-extension TextInputView: LineControllerStorageDelegate {
+extension TextInputView: @preconcurrency LineControllerStorageDelegate {
     func lineControllerStorage(_ storage: LineControllerStorage, didCreate lineController: LineController) {
         lineController.delegate = self
         lineController.constrainingWidth = layoutManager.constrainingLineWidth
@@ -2781,7 +2992,7 @@ extension TextInputView: LineControllerStorageDelegate {
 }
 
 // MARK: - LineControllerDelegate
-extension TextInputView: LineControllerDelegate {
+extension TextInputView: @preconcurrency LineControllerDelegate {
     func lineSyntaxHighlighter(for lineController: LineController) -> LineSyntaxHighlighter? {
         languageMode.createLineSyntaxHighlighter()
     }

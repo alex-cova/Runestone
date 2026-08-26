@@ -18,7 +18,7 @@ final class EmphasisManagerTests: XCTestCase {
         XCTAssertEqual(highlightService.highlightedRanges, [userRange])
     }
 
-    func testFlashEmphasisIsRemovedAutomatically() {
+    func testFlashEmphasisIsRemovedAutomatically() async {
         let lineManager = LineManager(stringView: StringView(string: "abc"))
         let highlightService = HighlightService(lineManager: lineManager)
         let manager = EmphasisManager()
@@ -33,7 +33,7 @@ final class EmphasisManagerTests: XCTestCase {
                               for: EmphasisGroup.brackets,
                               color: .yellow)
         XCTAssertEqual(highlightService.highlightedRanges.count, 1)
-        waitForExpectations(timeout: 1.5)
+        await fulfillment(of: [expectation], timeout: 1.5)
     }
 }
 

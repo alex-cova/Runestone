@@ -1,4 +1,4 @@
-import AppKit
+@preconcurrency import AppKit
 import EditorIntelligence
 
 /// Native AppKit completion panel view that renders a `CompletionPanelModel`.

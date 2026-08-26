@@ -1,6 +1,7 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 
+@MainActor
 protocol EditMenuControllerDelegate: AnyObject {
     func editMenuController(_ controller: EditMenuController, highlightedRangeFor range: NSRange) -> HighlightedRange?
     func editMenuController(_ controller: EditMenuController, canReplaceTextIn highlightedRange: HighlightedRange) -> Bool
@@ -10,6 +11,7 @@ protocol EditMenuControllerDelegate: AnyObject {
     func editMenuControllerIsEditable(_ controller: EditMenuController) -> Bool
 }
 
+@MainActor
 final class EditMenuController: NSObject {
     weak var delegate: EditMenuControllerDelegate?
 

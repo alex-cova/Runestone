@@ -1,4 +1,4 @@
-import AppKit
+@preconcurrency import AppKit
 import Foundation
 
 public enum UITextInteractionMode { case editable, nonEditable }
@@ -63,13 +63,14 @@ public final class UIMenuItem: NSObject {
     public let action: Selector
     public init(title: String, action: Selector) { self.title = title; self.action = action; super.init() }
 }
-public final class UIMenuController: NSObject {
+public final class UIMenuController: NSObject, @unchecked Sendable {
     public static let shared = UIMenuController()
     public var menuItems: [UIMenuItem] = []
     public func showMenu(from view: UIView, rect: CGRect) {}
     public func hideMenu(from view: UIView) {}
 }
 
+@MainActor
 public protocol UIFindInteractionDelegate: AnyObject {
     func findInteraction(_ interaction: UIFindInteraction, sessionFor view: UIView) -> UIFindSession?
 }
@@ -82,6 +83,7 @@ public final class UITextSearchingFindSession: NSObject, UIFindSession {
     public init(searchableObject: AnyObject) { super.init() }
 }
 
+@MainActor
 public protocol UITextSearching: AnyObject {
     var supportsTextReplacement: Bool { get }
     var selectedTextRange: UITextRange? { get }
@@ -95,7 +97,7 @@ public protocol UITextSearching: AnyObject {
     func scrollRangeToVisible(_ range: UITextRange, inDocument: AnyHashable??)
 }
 
-public final class UITextSearchAggregator<Document> {
+public final class UITextSearchAggregator<Document>: @unchecked Sendable {
     public func foundRange(_ range: UITextRange, searchString: String, document: Document) {}
     public func finishedSearching() {}
 }

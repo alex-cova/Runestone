@@ -1,4 +1,4 @@
-import AppKit
+@preconcurrency import AppKit
 import EditorIntelligence
 
 /// Optional LSP and workspace services wired into ``EditorIntelligenceController``.
@@ -412,7 +412,7 @@ public final class EditorIntelligenceController {
 
     private func handleEditorEvent(_ event: EditorEvent) {
         switch event {
-        case .documentChanged:
+        case .documentChanged, .documentEdited:
             refreshDiagnostics()
             refreshOutline()
             if isCompletionVisible {
@@ -833,5 +833,13 @@ public final class EditorIntelligenceForwardingDelegate: TextViewDelegate {
             didChangeDistractionFreeChromeVisibility: isVisible,
             transitionDuration: transitionDuration
         )
+    }
+
+    public func textViewDidFinishSyntaxParse(_ textView: TextView) {
+        userDelegate?.textViewDidFinishSyntaxParse(textView)
+    }
+
+    public func textView(_ textView: TextView, didChangeContent change: TextContentChange) {
+        userDelegate?.textView(textView, didChangeContent: change)
     }
 }

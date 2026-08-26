@@ -14,8 +14,9 @@ final class DocumentLineNodeData {
     var lineHeight: CGFloat
     var totalLineHeight: CGFloat = 0
     var nodeTotalByteCount = ByteCount(0)
+    var cachedStartByte = ByteCount(0)
     var startByte: ByteCount {
-        node!.tree.startByte(of: node!)
+        cachedStartByte
     }
     var byteCount = ByteCount(0)
     var byteRange: ByteRange {
@@ -29,12 +30,6 @@ final class DocumentLineNodeData {
 
     init(lineHeight: CGFloat) {
         self.lineHeight = lineHeight
-    }
-}
-
-private extension DocumentLineTree {
-    func startByte(of node: Node) -> ByteCount {
-        offset(of: node, valueKeyPath: \.data.byteCount, totalValueKeyPath: \.data.nodeTotalByteCount, minimumValue: ByteCount(0))
     }
 }
 

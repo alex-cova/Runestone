@@ -1,4 +1,4 @@
-import AppKit
+@preconcurrency import AppKit
 import EditorIntelligence
 
 /// Native AppKit parameter hints view that renders a `ParameterHintsModel`.

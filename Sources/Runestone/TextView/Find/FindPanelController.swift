@@ -1,5 +1,5 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 
 /// Drives the find/replace panel via ``FindSession``/``FindSearchScheduler``/``FindSearchEngine``
 /// instead of `TextView.search(for:)`'s synchronous `SearchController` path — search-as-you-type
@@ -7,10 +7,10 @@ import AppKit
 /// find field (or editing the document while the panel is open) no longer blocks on a
 /// whole-document scan. See PERFORMANCE_AUDIT.md Phase 2 #5 / migration step 2.
 ///
-/// "Replace All" still goes through `target.search(for:replacingMatchesWith:)`
-/// (`TextView`/`SearchController`) rather than ``FindSearchEngine/replaceAll``, since it needs
-/// per-match ranges to build a ``BatchReplaceSet`` (preserving normal, delta-based undo) rather
-/// than ``FindSearchEngine``'s whole-new-`String` result.
+/// Replace All uses ``FindSearchEngine/replaceAllMatches(options:in:replacement:)`` to build a
+/// ``BatchReplaceSet`` (preserving delta undo) rather than ``FindSearchEngine/replaceAll``'s
+/// whole-new-`String` result. Documents at or above
+/// ``FindSearchEngine/offMainCharacterThreshold`` scan off the main actor.
 @MainActor
 final class FindPanelController {
     weak var target: FindPanelTarget?
@@ -22,6 +22,7 @@ final class FindPanelController {
     private let session = FindSession()
     private let scheduler = FindSearchScheduler()
     private var wrapAround = true
+    private var replaceAllTask: Task<Void, Never>?
 
     init(target: FindPanelTarget) {
         self.target = target
@@ -81,6 +82,7 @@ final class FindPanelController {
         }
         isVisible = false
         scheduler.cancel()
+        replaceAllTask?.cancel()
         panelView.isHidden = true
         emphasisManager?.removeEmphases(for: EmphasisGroup.find)
         target?.findPanelWillHide(panelHeight: panelHeight)
@@ -221,9 +223,58 @@ private extension FindPanelController {
         guard let target, !session.query.isEmpty else {
             return
         }
-        let query = session.searchOptions().searchQuery
-        let replacements = target.search(for: query, replacingMatchesWith: panelView.replaceText)
-        let batch = BatchReplaceSet(replacements: replacements.map { BatchReplaceSet.Replacement(range: $0.range, text: $0.replacementText) })
+        let options = session.searchOptions()
+        let replacement = panelView.replaceText
+        let text = target.textForFind
+        if (text as NSString).length < FindSearchEngine.offMainCharacterThreshold {
+            applyReplaceAll(options: options, in: text, replacement: replacement, to: target)
+            return
+        }
+        scheduler.cancel()
+        replaceAllTask?.cancel()
+        replaceAllTask = Task { @MainActor [weak self, weak target] in
+            let matches: [FindReplaceMatch]
+            do {
+                matches = try await Task.detached(priority: .userInitiated) {
+                    try FindSearchEngine.replaceAllMatches(
+                        options: options,
+                        in: text,
+                        replacement: replacement
+                    )
+                }.value
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, let self, self.isVisible, let target else {
+                return
+            }
+            self.applyReplaceAll(matches, to: target)
+        }
+    }
+
+    private func applyReplaceAll(
+        options: FindSearchOptions,
+        in text: String,
+        replacement: String,
+        to target: FindPanelTarget
+    ) {
+        let matches: [FindReplaceMatch]
+        do {
+            matches = try FindSearchEngine.replaceAllMatches(
+                options: options,
+                in: text,
+                replacement: replacement
+            )
+        } catch {
+            return
+        }
+        applyReplaceAll(matches, to: target)
+    }
+
+    private func applyReplaceAll(_ matches: [FindReplaceMatch], to target: FindPanelTarget) {
+        let batch = BatchReplaceSet(replacements: matches.map {
+            BatchReplaceSet.Replacement(range: $0.range, text: $0.replacementText)
+        })
         target.replaceText(in: batch)
         scheduleFind(immediate: true)
     }

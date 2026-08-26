@@ -5,6 +5,7 @@ import XCTest
 /// Covers multi-cursor-aware editing operations that used to be (or, for copy/cut/paste, still
 /// silently were) single-selection only: indent/outdent, move-line, newline insertion,
 /// copy/cut/paste, and that undo restores the whole caret set rather than collapsing to one.
+@MainActor
 final class MultiSelectionEditingTests: XCTestCase {
     private func performResponderAction(_ selectorName: String, on textView: TextView) {
         let selector = NSSelectorFromString(selectorName)

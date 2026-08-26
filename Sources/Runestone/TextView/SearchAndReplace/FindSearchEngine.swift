@@ -25,6 +25,17 @@ public struct FindSearchOutcome: Sendable, Equatable {
     )
 }
 
+/// Per-match replacement produced by ``FindSearchEngine/replaceAllMatches(options:in:replacement:)``.
+public struct FindReplaceMatch: Sendable, Equatable {
+    public let range: NSRange
+    public let replacementText: String
+
+    public init(range: NSRange, replacementText: String) {
+        self.range = range
+        self.replacementText = replacementText
+    }
+}
+
 /// Options for a ``FindSearchEngine`` search. Unlike ``SearchQuery``, which is bound to a live
 /// `TextView`, this is a plain value type — the search engine driven by it operates purely over
 /// `String`/`NSRange` and has no dependency on a text view.
@@ -151,6 +162,25 @@ public enum FindSearchEngine {
         )
     }
 
+    /// Per-match ranges and replacement strings for building a ``BatchReplaceSet``.
+    ///
+    /// Unlike ``replaceAll(options:in:replacement:)``, which returns a whole new `String` and
+    /// expands ICU `$n` templates, this keeps VS Code-style capture groups (`$0`, `$1`, `\u$1`,
+    /// …) so Replace All can apply the same edits as
+    /// ``TextView/search(for:replacingMatchesWith:)`` without replacing the entire buffer (and
+    /// without a whole-document undo snapshot).
+    public static func replaceAllMatches(
+        options: FindSearchOptions,
+        in text: String,
+        replacement: String
+    ) throws -> [FindReplaceMatch] {
+        guard !options.query.isEmpty else { return [] }
+        if options.useRegex || options.wholeWord {
+            return try regexReplaceAllMatches(options: options, in: text, replacement: replacement)
+        }
+        return try literalReplaceAllMatches(options: options, in: text, replacement: replacement)
+    }
+
     // MARK: - Literal
 
     private static func literalSearch(
@@ -257,6 +287,9 @@ public enum FindSearchEngine {
         var last: NSRange?
         var searchRange = NSRange(location: 0, length: min(location, ns.length))
         while searchRange.length > 0 {
+            if Task.isCancelled {
+                return nil
+            }
             let found = ns.range(of: options.query, options: compare, range: searchRange)
             guard found.location != NSNotFound else { break }
             last = found
@@ -370,11 +403,65 @@ public enum FindSearchEngine {
         let limit = min(location, (text as NSString).length)
         let full = NSRange(location: 0, length: limit)
         var last: NSRange?
-        regex.enumerateMatches(in: text, options: [], range: full) { result, _, _ in
+        regex.enumerateMatches(in: text, options: [], range: full) { result, _, stop in
+            if Task.isCancelled {
+                stop.pointee = true
+                return
+            }
             guard let range = result?.range, range.length > 0 else { return }
             last = range
         }
         return last
+    }
+
+    private static func literalReplaceAllMatches(
+        options: FindSearchOptions,
+        in text: String,
+        replacement: String
+    ) throws -> [FindReplaceMatch] {
+        let ns = text as NSString
+        let compare = NSString.CompareOptions(options.matchCase ? [] : [.caseInsensitive])
+        var matches: [FindReplaceMatch] = []
+        var searchRange = NSRange(location: 0, length: ns.length)
+        while searchRange.length > 0 {
+            if Task.isCancelled {
+                throw CancellationError()
+            }
+            let found = ns.range(of: options.query, options: compare, range: searchRange)
+            guard found.location != NSNotFound, found.length > 0 else { break }
+            matches.append(FindReplaceMatch(range: found, replacementText: replacement))
+            searchRange = NSRange(location: NSMaxRange(found), length: ns.length - NSMaxRange(found))
+        }
+        return matches
+    }
+
+    private static func regexReplaceAllMatches(
+        options: FindSearchOptions,
+        in text: String,
+        replacement: String
+    ) throws -> [FindReplaceMatch] {
+        let regex = try FindRegexCache.regex(pattern: regexPattern(for: options), options: regexOptions(for: options))
+        let ns = text as NSString
+        let full = NSRange(location: 0, length: ns.length)
+        let parsed = ReplacementStringParser(string: replacement).parse()
+        var matches: [FindReplaceMatch] = []
+        var wasCancelled = false
+        regex.enumerateMatches(in: text, options: [], range: full) { result, _, stop in
+            if Task.isCancelled {
+                wasCancelled = true
+                stop.pointee = true
+                return
+            }
+            guard let result, result.range.length > 0 else { return }
+            let replacementText = parsed.containsPlaceholder
+                ? parsed.string(byMatching: result, in: ns)
+                : replacement
+            matches.append(FindReplaceMatch(range: result.range, replacementText: replacementText))
+        }
+        if wasCancelled {
+            throw CancellationError()
+        }
+        return matches
     }
 
     private static func regexPattern(for options: FindSearchOptions) -> String {

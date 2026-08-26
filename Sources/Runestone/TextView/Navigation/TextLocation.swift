@@ -1,7 +1,7 @@
 import Foundation
 
 /// A location in the text.
-public struct TextLocation: Hashable, Equatable {
+public struct TextLocation: Hashable, Equatable, Sendable {
     /// Zero-based line number.
     public let lineNumber: Int
     /// Column in the line.

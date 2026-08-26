@@ -1,5 +1,5 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 
 enum TreeSitterSyntaxHighlighterError: LocalizedError {
     case cancelled
@@ -15,7 +15,7 @@ enum TreeSitterSyntaxHighlighterError: LocalizedError {
     }
 }
 
-final class TreeSitterSyntaxHighlighter: LineSyntaxHighlighter {
+final class TreeSitterSyntaxHighlighter: LineSyntaxHighlighter, @unchecked Sendable {
     var theme: Theme = DefaultTheme()
     var kern: CGFloat = 0
     var canHighlight: Bool {

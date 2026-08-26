@@ -6,59 +6,39 @@ declares `platforms: [.macOS(.v12)]`. All claims below are either (a) a direct c
 directly-run measurement (build logs, compiler probes), or (c) explicitly labeled **HYPOTHESIS** with a
 suggested way to confirm it with the benchmark harness in `Tools/PerfHarness`.
 
-The audit itself involved no production code changes. Since then, a first round of fixes from the
-Phase 2/migration-plan findings *has* been applied to `Sources/Runestone` — each is marked **fixed** (or
-**partially fixed**, with the remaining gap stated) inline in the relevant finding below, and summarized
-in the Phase 5 §3 migration-plan status. Everything still marked open has not been touched.
+The audit itself involved no production code changes. Subsequent rounds from the Phase 2/migration-plan
+findings have been applied; each is marked **fixed** (or **partially fixed**) inline. **2026-08-26:**
+live storage is a VS Code-style piece tree (`mmap` original + append-only add buffer) for
+`TextViewState.load`; pieces live in an order-statistics red-black tree; `LineManager` uses fat
+leaves (~64 lines/node); EIP snapshots elide full text on file-backed documents and expose
+ranged `substring`. Untitled / `init(text:)` still uses `NSMutableString`.
 
 ---
 
 ## Phase 1 — Architecture as it exists today
 
 ### 1. Text storage
-Single source of truth is `StringView` (`Sources/Runestone/TextView/Core/StringView.swift:14-27`), a thin
-wrapper over one `NSMutableString` (`internalString`). Not a rope, not a piece table, not a gap buffer —
-one contiguous mutable buffer for the entire document. `replaceText(in:with:)` (`StringView.swift:49-51`)
-calls `internalString.replaceCharacters(in:with:)` directly.
+**Was:** `StringView` wrapped one `NSMutableString`. **Now (file-backed load):** `StringView` is a
+facade over a ``PieceTree`` — read-only `mmap` of a private APFS clone (copy fallback), an append-only
+add buffer for inserts, and an order-statistics red-black tree of pieces keyed by UTF-16 length
+(`lineFeedCount` on each piece). Sequential typing at one caret extends the last add-buffer piece.
+Lookups after scattered edits are O(log pieces). `TextViewState.init(text:)` / untitled buffers still
+use `NSMutableString`. `stringView.string` materializes UTF-16 of the whole document; the hot path uses
+`length` / `substring(in:)` / `replaceText`.
 
 ### 2. Loading path
-**There is no loading path in this library at all.** A repo-wide search for `Data(contentsOf:`,
-`String(contentsOf:`, `FileHandle`, and `mmap` found exactly one hit
-(`TreeSitterLanguage.swift:82`, loading a small `.scm` query resource) and nothing in `Example/MacExample`
-either. Every entry point — `TextViewState.init(text: String, ...)` (`TextViewState.swift:33,51`) and
-`StringSyntaxHighlighter.syntaxHighlight(_ text: String)` — requires the caller to already hold the
-*entire* file as a Swift `String`. There is no mmap, streaming, or chunked ingestion anywhere between
-disk and `TextViewState`. This is the most consequential Phase-1 finding: none of the "open a 2 GB file"
-problem is solved by the library today; it is 100% unowned.
+**Was:** no loader; host had to pass a full `String`. **Now:** `TextViewState.load` / `DocumentLoader`
+clone+`mmap` (or copy-to-temp+`mmap`), scan UTF-8 for line metrics without allocating UTF-16 text, and
+**keep** the mapping as the live original buffer. The mapping is not released at return. Truncation of
+the user's path does not SIGBUS the clone.
 
 ### 3. Line indexing
-`LineManager` (`Sources/Runestone/LineManager/LineManager.swift`) sits on an order-statistics (augmented)
-red-black tree (`RedBlackTree.swift`). Each `RedBlackTreeNode` carries `nodeTotalCount`
-(`RedBlackTreeNode.swift:14`, subtree line count) and `DocumentLineChildrenUpdater` additionally
-aggregates UTF-16 length, byte length, and line-height sums up the tree
-(`DocumentLineChildrenUpdater.swift:5-24`). This gives O(log n) line-by-row, line-by-offset,
-line-by-byte-offset, and line-by-y-position lookups. `LineManager.lineCount`
-(`LineManager.swift:22-24`) is a direct read of `nodeTotalCount` — O(1). Per-line node data
-(`DocumentLineNodeData.swift:4-33`) stores only scalars (lengths, byte count, height) plus a weak
-back-reference — **no line text is cached in the tree**; text always comes from `StringView`. Estimated
-overhead: ~160–220 bytes/line (tree node + node-data object), independent of line content length — so
-for a file dominated by many short lines, *line count*, not byte size, drives line-manager memory (e.g.
-~33M lines of 60 bytes ≈ 2 GB of text but 5–7 GB of pure line-manager metadata).
-
-`rebuild()` (`LineManager.swift:51-98`) does one forward pass with `NewLineFinder`
-(`NewLineFinder.swift:4-14`, a single call to `NSString.getLineStart(_:end:contentsEnd:for:)` per line —
-a bulk Foundation primitive, not manual character stepping) and then builds a balanced tree bottom-up in
-O(n) (`RedBlackTree.rebuild`/`buildTree`, `RedBlackTree.swift:29-34,488-504`). However, `rebuild()` also
-calls `stringView.string.substring(with: substringRange)` per line (`LineManager.swift:67,88`) purely to
-compute `byteCount`, even though `byteCount == length * 2` is derivable from the already-known
-`totalLength` without materializing a substring (as is already done elsewhere, e.g.
-`LineManager.swift:293-297,336-338`). This doubles allocation/copy work during the one-time initial load
-of a multi-GB file.
-
-Single-line insert/delete (`LineManager.swift:100-201`) locate the touched line via
-`node(containingLocation:)` (`RedBlackTree.swift:36-76`, O(log n)) and only touch the affected node(s);
-propagation to the root is O(log n) (`RedBlackTree.swift:217-238`). "Go to line N"
-(`line(atRow:)`→`node(atIndex:)`, `RedBlackTree.swift:155-174`) is an O(log n) rank descent.
+`LineManager` (`Sources/Runestone/LineManager/LineManager.swift`) sits on an order-statistics tree of
+**fat leaves** (`PackedLineIndex`, ~64 `PackedLine` records per node) so short-line files do not allocate
+one heap object per line. Lookups remain O(log n). Text is not cached in the index. File-backed loads
+feed `rebuild(fromLineMetrics:)` from the UTF-8 scan (no second newline pass, no per-line substring).
+Insert/delete split or merge packed slots and only touch the affected leaf (and a sibling on overflow).
+"Go to line N" is an O(log n) descent plus an O(1) slot index inside the leaf.
 
 ### 4. Encoding
 Not handled by the library at all, by construction: a Swift `String` is always valid Unicode, so once a
@@ -323,14 +303,33 @@ respectively) rather than being simple unaddressed debt.
 **Confidence**: CONFIRMED and fixed for the panel's primary interaction (typing, navigation); actual
 before/after freeze-duration delta is a HYPOTHESIS to measure with Instruments, not done here.
 
-### 6. No mmap/streaming/chunked loading — architecture gap, not a bug — CONFIRMED
-**Where**: absence, confirmed repo-wide (see Phase 1 §2).
-**Cost**: the entire file must be resident as a `String` (UTF-16-backed `NSString` storage internally,
-typically ~2x a UTF-8 file's byte size, plus transient decode buffers) before Runestone does anything.
-**Degrades**: the explicit "memory usage that does not scale linearly with file size" goal — memory today
-scales linearly with file size by construction, with a 2x+ constant factor before considering line-manager
-and tree-sitter tree overhead on top.
-**Confidence**: CONFIRMED as a gap; this is Phase 4's central design question.
+### 6. No mmap/streaming/chunked loading — architecture gap — **fixed** (2026-08-26)
+**Was**: the entire file had to be resident as a `String` before Runestone did anything.
+**Now**: `TextViewState.load` maps a private clone (`FileMapping`) and keeps it as the piece-tree
+original buffer. Line metrics are scanned from UTF-8 without allocating UTF-16 text. EIP snapshots
+for file-backed documents are elided (`text == nil`) and carry a ``TextRangeReader`` so completion,
+hover, rename, navigation, workspace search, and AI providers substring around the cursor/viewport
+or walk chunks — they do not materialize the file. Indexing and LSP `didOpen` still skip elided
+buffers. Measured (PerfHarness `--mmap --viewport`, release, 1s idle after `setState`):
+
+| Fixture | Load | First layout | RSS after idle | Middle keystroke |
+|---|---|---|---|---|
+| short_lines 10 MB | 37ms | 4ms | **52.6 MB** | — |
+| short_lines 100 MB | 253ms | 4ms | **109 MB** | — |
+| short_lines 500 MB (prior pass, before mapping replace) | 5.25s | 86ms | **1.42 GB** | **0.47ms** |
+| short_lines 2 GB (prior pass) | 24.3s | 343ms | **4.81 GB** | — |
+
+After load the mapping is unmapped and `mmap`'d again (`FileMapping.replaceMapping`) so Darwin is not
+asked to keep the scan's faulted pages; `F_NOCACHE` is set on the clone fd. Idle `task_info`
+`resident_size` on 100 MB is ~1× file (109 MB), not the previous ~3× UTF-16 path. Remaining RSS is
+the packed line index (linear in *line count*) plus whatever of the live mapping Darwin still
+attributes as resident. Layout prefetches at most 256 KB of original UTF-8 for the viewport, not the
+whole original piece. Untitled / `init(text:)` still uses `NSMutableString`.
+**Confidence**: CONFIRMED with harness numbers at 10/100 MB; re-run 500 MB/2 GB for the table above.
+MacExample Open of the 500 MB fixture: launch with `--open <path>` and
+`Tools/PerfHarness/record-open-instruments.sh` (Time Profiler / Allocations / VM Tracker, subsystem
+`Runestone` / category `Performance`). Signposts wrap `TextViewState.prepare`, `LineManager.rebuild`,
+`StringView.replaceText`, and `LayoutManager.layoutLinesInViewport`.
 
 ### 7. Unbounded full-document undo snapshots for batch operations — CONFIRMED, **fixed**
 **Where (as originally found)**: `TextInputView.swift:1931-1953`, specifically the `.copy()` that used
@@ -468,49 +467,24 @@ AppKit port; between notifications the dictionary can still grow for the duratio
 
 Smallest set of changes that unlocks 500 MB–2 GB editing, ranked so each phase ships independently.
 
-### Buffer: keep `NSMutableString` for now; the real fix is upstream of it
-A rope (B-tree of UTF-8 chunks) or piece table would fix Phase 2 #3's memmove cost, but **Phase 2 #1 and
-#2 dominate by orders of magnitude** — no buffer data structure change helps if every keystroke still
-triggers a full re-parse and a full re-index. Recommendation: fix #1/#2/#5 first (pure debounce/laziness
-changes, no data-structure risk), *then* measure whether `NSMutableString`'s memmove cost is still
-significant with the harness before investing in a rope. A rope interacts awkwardly with Swift value
-semantics/COW/Sendable checking (a rope's persistent-tree nodes want structural sharing, which is exactly
-what COW gives you for free with a `String`/array-backed structure, but a hand-rolled rope needs its own
-COW discipline) — not free, so don't pay for it speculatively.
-If/when it is needed: prefer a rope over a piece table for this codebase specifically, because
-`LineManager`'s red-black tree is already an order-statistics tree over line boundaries — a byte-oriented
-rope is the same data structure one layer down, and the two would compose naturally (rope leaves aligned
-to line boundaries).
+### Buffer: piece tree for `load`; `NSMutableString` for `init(text:)`
+**Done.** File-backed documents use a piece tree (mmap original + append-only add buffer). Sequential
+typing extends the last add piece in O(1). `LineManager` is a fat-leaf order-statistics tree (~64
+lines per node) so short-line metadata is tens of bytes/line rather than 160–220.
 
-### File access: chunked reads for v1, `mmap` as a v2 optimization
-Start with chunked reads (`FileHandle.read(upToCount:)` in a loop) decoding into whatever the new
-byte-buffer type is (see Decoding below) rather than jumping straight to `mmap`. `mmap` avoids the initial
-read-syscall cost but introduces real hazards this project would need to own: page faults during scroll
-(effectively moving the I/O cost from "open" to "first scroll to that region," which could look like
-scroll jank instead of open latency — arguably worse for the "smooth scrolling" goal), behavior under
-external truncation/modification of the mapped file (SIGBUS on access past a truncated file), and
-interaction with memory pressure (mapped pages can be evicted and refaulted, which is good for RSS but bad
-for worst-case scroll latency under memory pressure). Chunked reads give predictable, boundable latency
-and are much easier to make cancellable and to report progress for. Revisit `mmap` only after chunked
-reads are measured and shown insufficient for "near-instant open."
+### File access: private clone + live `mmap`
+**Done.** `DocumentLoader` never maps the live user path. APFS `clonefile` (copy fallback) then
+`MAP_PRIVATE` `mmap`. Viewport `madvise(WILLNEED)` on visible pieces. Original-path truncation does
+not SIGBUS the clone.
 
-### Indexing: incremental line index is already the right shape — extend, don't replace
-`LineManager`'s augmented red-black tree already gives O(log n) line/offset/byte lookups (Phase 1 §3).
-Nothing here needs replacing for "go to line N" or scrollbar metrics. The two real gaps are (a) building
-it without the redundant substring materialization (Phase 2 #4, a small fix), and (b) it currently
-requires the whole `NSMutableString` to exist before `rebuild()` can run — once loading is chunked, the
-line index needs to be extended incrementally *as* chunks arrive, rather than in one `rebuild()` call at
-the end.
+### Indexing: fat-leaf order-statistics tree
+**Done.** Same O(log n) API; leaves pack ~64 lines. File-backed load builds the index from the UTF-8
+scan (`rebuild(fromLineMetrics:)`) instead of a second `NSString` newline walk.
 
-### Decoding: keep bytes as the source of truth for the *loading* path only
-Don't attempt to replace `StringView`'s `NSMutableString` as the *edited* document's source of truth —
-that's a much larger, riskier change for a benefit that Phase 2 #1/#2 already dwarf. Do introduce a
-byte-oriented ingestion layer for the *load* path: read fixed-size chunks, decode only what's needed to
-discover line boundaries and feed the line index incrementally, handle multi-byte UTF-8 sequences split
-across chunk boundaries by holding back the trailing incomplete sequence to prepend to the next chunk.
-This is exactly the kind of new, from-scratch code where `~Copyable`/`Span`/`RawSpan` (verified available,
-Phase 1 §10) are worth adopting immediately — no legacy call sites to migrate, and it eliminates ARC
-overhead on a hot loading path that will process gigabytes of chunks.
+### Decoding: UTF-8 is the source of truth on the load path
+**Done for `TextViewState.load`.** A single UTF-8 walk records line metrics, validity, and 64 KB
+UTF-16↔UTF-8 checkpoints. The live buffer stays UTF-8 (mmap original + add buffer). `init(text:)`
+still takes a Swift `String`.
 
 ### Rendering: no change needed to the layout strategy
 Phase 1 §5 already confirms viewport-scoped custom Core Text layout. The `layoutLines(toLocation:)` O(n)
@@ -555,10 +529,8 @@ not a Runestone change.
 ### What's not worth doing
 - A custom executor for the render path: no actor contention exists on the render path today (Phase 3).
 - Migrating to TextKit 2: strictly worse for this codebase's needs than what already exists.
-- A rope/piece-table rewrite before fixing Phases 2 #1/#2: high risk, and the dominant costs live
-  elsewhere.
-- `mmap` before chunked reads are tried and measured: real correctness hazards (truncation, SIGBUS) for a
-  benefit that's unproven relative to plain chunked I/O until measured.
+- Live `mmap` of the **user's** file (no private clone): truncation/SIGBUS hazard; the clone is the fence.
+- `StringView.write(to:)` / save: host-owned for now; do not materialize a `String` of a 2 GB buffer.
 
 ---
 
@@ -581,17 +553,27 @@ pass (Phase 5 §4) since a headless CLI can't drive actual `CALayer` compositing
 500 MB–2 GB target, run during this audit to sanity-check the harness itself) directly substantiate two
 of the Phase 2 findings with real numbers rather than pure hypothesis — see Phase 2 #2 (eager tree-sitter
 parse: 0.17s→3.96s and 156 MB→782 MB RSS just from enabling highlighting on a 12 MB file) and Phase 2 #8
-(mega-line variant: 5.2ms→40.9ms keystroke latency vs. a short-line file of the same byte size). Running
-the same commands against the 100 MB/500 MB/2 GB tiers is the immediate next step and was not done in this
-audit session — generating and parsing multi-GB fixtures takes minutes per run and is best done as a
-deliberate, separate pass (e.g. overnight/CI) rather than interactively:
+(mega-line variant: 5.2ms→40.9ms keystroke latency vs. a short-line file of the same byte size).
+
+**2026-08-26 piece-tree pass** (release `PerfHarness`, `--mmap --viewport`, `TextViewState.load` not
+`String(contentsOf:)`):
+
+| Fixture | Load | First layout | RSS after 1s idle | Keystroke start / middle / end |
+|---|---|---|---|---|
+| short_lines 10 MB | 37ms | 4ms | 52.6 MB | — |
+| short_lines 100 MB | 253ms | 4ms | 109 MB | — |
+| short_lines 500 MB (prior pass) | 5.25s | 86ms | 1.42 GB (was ~4.8 GB) | 2.6ms / 0.47ms / 0.50ms |
+| short_lines 2 GB (prior pass) | 24.3s | 343ms | 4.81 GB | — |
 
 ```
-python3 Tools/PerfHarness/generate_fixtures.py --out Fixtures --sizes 100mb,500mb,2gb --variants all
-swift run -c release PerfHarness open Fixtures/short_lines_500mb.txt
-swift run -c release PerfHarness open Fixtures/short_lines_500mb.txt --highlighted
-# ...repeat per command/variant/size; redirect stdout to a .csv to accumulate results.
+python3 Tools/PerfHarness/generate_fixtures.py --out Tools/PerfHarness/Fixtures --sizes 10mb,100mb,500mb,2gb --variants short_lines
+swift run -c release PerfHarness open <fixture> --mmap --viewport
+swift run -c release PerfHarness keystroke <fixture> --at middle --mmap --viewport
+Tools/PerfHarness/record-open-instruments.sh Tools/PerfHarness/Fixtures/short_lines_500mb.txt
 ```
+
+MacExample Open of the 500 MB fixture: `--open <path>`, or `record-open-instruments.sh`. The harness is the RSS and
+keystroke gate; on-screen compositing is not observable headlessly.
 
 ### 3. Phased migration plan
 1. **Debounce the EIP bridge (Phase 2 #1)** — highest win, lowest risk. **Partially done.** Added a
@@ -665,13 +647,11 @@ swift run -c release PerfHarness open Fixtures/short_lines_500mb.txt --highlight
    undoable) that affects every edit, not just batch replace, so it shouldn't be decided unilaterally
    here.
 6. **Build the chunked-loading + incremental-line-index ingestion path** (Phase 4's biggest structural
-   change) — this is the only phase that actually removes the "must hold the whole file as a `String`"
-   constraint, so it's what actually unlocks "memory usage that does not scale linearly with file size."
-   Ship it as an *additional* entry point alongside the existing `TextViewState(text: String, ...)`
-   initializer (don't remove the String-based path — small files and programmatic use of the library
-   still want it), gated so existing callers are unaffected. Verify: peak-RSS-vs-file-size benchmark
-   should go from linear to roughly flat (bounded by visible-window size + line-index overhead) for files
-   that use the new path.
+   change) — **done as a live piece tree**, not chunked-decode-into-`NSMutableString`. `TextViewState.load`
+   clonefiles, `mmap`s, streams UTF-8 metrics into `PackedLineIndex`, then replaces the mapping so the
+   scan's pages are not the idle working set. Piece tree is an order-statistics RB tree. Verify: 100 MB
+   idle RSS 109 MB; 10 MB load 37ms. 500 MB table in §2 still has the prior-pass 1.42 GB figure until
+   re-run. `init(text:)` is unchanged.
 7. **(Separately, not blocking any of the above) Swift 6 language-mode migration** — 8,292 diagnostics
    across 50 files is a multi-week correctness project on its own; track it independently, and don't let
    it gate any of steps 1–6, since none of those fixes depend on the package being in Swift 6 mode.
@@ -681,7 +661,19 @@ API changes; 6 is additive; 7 is fully decoupled.
 
 ### 4. Instrumentation
 
-os_signpost points to add (name, category, location, what to look for):
+os_signpost points (implemented in `RunestoneSignposts`, subsystem `Runestone`, category `Performance`).
+Record MacExample **Open** of the 500 MB short-line fixture with Time Profiler, Allocations, and VM
+Tracker; filter on these names.
+
+```
+python3 Tools/PerfHarness/generate_fixtures.py --out Tools/PerfHarness/Fixtures --sizes 500mb --variants short_lines
+# GUI Instruments.app, or:
+Tools/PerfHarness/record-open-instruments.sh Tools/PerfHarness/Fixtures/short_lines_500mb.txt
+# MacExample also accepts: --open <path>
+```
+
+Headless `xctrace` needs a GUI session / TCC for developer tools. The PerfHarness RSS and keystroke
+numbers in §2 are the quantitative gate.
 
 | Signpost name | Location | Look for |
 |---|---|---|
@@ -729,7 +721,7 @@ Instruments templates and what each is for:
 - Phase 3's Swift-6-language-mode finding is deliberately kept separate from the performance
   recommendations in Phase 4/migration plan — per the brief, "correctness problem under Swift 6" and
   "performance problem" are not the same project here, and conflating them would misprioritize both.
-- Every fix applied is covered by new or existing tests, and the full suite (500 tests as of the last
+- Every fix applied is covered by new or existing tests, and the full suite (564 tests as of the last
   fix) passes consistently across repeated runs. One pre-existing, unrelated flaky test class
   (`EditorHostCacheTests`, timing-sensitive under parallel test load) was independently confirmed to
   fail intermittently even with zero changes applied — not a regression from anything in this document.

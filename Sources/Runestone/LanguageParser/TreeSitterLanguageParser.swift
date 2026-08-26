@@ -17,8 +17,8 @@ public actor TreeSitterLanguageParser: LanguageParser {
     }
 
     public func parse(document: Document) async -> SyntaxTree {
-        let text = document.text as NSString
-        let tree = parser.parse(text)
-        return TreeSitterSyntaxTree(tree: tree, documentID: document.id, text: document.text)
+        let text = document.contentSnapshot.text ?? ""
+        let tree = parser.parse(text as NSString)
+        return TreeSitterSyntaxTree(tree: tree, documentID: document.id, text: text)
     }
 }

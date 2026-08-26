@@ -10,7 +10,7 @@ struct LineSyntaxHiglighterSetAttributesResult {
     let isSizingInvalid: Bool
 }
 
-final class LineSyntaxHighlighterInput {
+final class LineSyntaxHighlighterInput: @unchecked Sendable {
     let attributedString: NSMutableAttributedString
     let byteRange: ByteRange
 
@@ -21,7 +21,7 @@ final class LineSyntaxHighlighterInput {
 }
 
 protocol LineSyntaxHighlighter: AnyObject {
-    typealias AsyncCallback = (Result<Void, Error>) -> Void
+    typealias AsyncCallback = @Sendable (Result<Void, Error>) -> Void
     var theme: Theme { get set }
     var canHighlight: Bool { get }
     func syntaxHighlight(_ input: LineSyntaxHighlighterInput)

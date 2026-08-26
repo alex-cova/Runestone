@@ -1,7 +1,7 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 #if DEBUG
-private var previousUnrecognizedHighlightNames: [String] = []
+nonisolated(unsafe) private var previousUnrecognizedHighlightNames: [String] = []
 #endif
 
 enum HighlightName: String {

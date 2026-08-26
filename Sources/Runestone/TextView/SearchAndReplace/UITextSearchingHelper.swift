@@ -1,6 +1,7 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 
+@MainActor
 final class UITextSearchingHelper: NSObject {
     weak var textView: TextView?
     var isFindInteractionEnabled = false {
@@ -148,7 +149,7 @@ private extension UITextSearchingHelper {
         }
     }
 
-    private func performTextSearch(for queryString: String, options: UITextSearchOptions, completion: @escaping ([SearchResult]) -> Void) {
+    private func performTextSearch(for queryString: String, options: UITextSearchOptions, completion: @escaping @Sendable ([SearchResult]) -> Void) {
         queue.cancelAllOperations()
         let operation = BlockOperation()
         operation.addExecutionBlock { [weak self, weak operation] in
@@ -156,8 +157,11 @@ private extension UITextSearchingHelper {
                 return
             }
             let query = SearchQuery(queryString: queryString, options: options)
-            let searchResults = self._textView.search(for: query)
-            completion(searchResults)
+            Task { @MainActor in
+                guard !operation.isCancelled else { return }
+                let searchResults = self._textView.search(for: query)
+                completion(searchResults)
+            }
         }
         queue.addOperation(operation)
     }

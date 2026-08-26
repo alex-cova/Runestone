@@ -1,9 +1,11 @@
 import Foundation
 
+@MainActor
 protocol SearchControllerDelegate: AnyObject {
     func searchController(_ searchController: SearchController, linePositionAt location: Int) -> LinePosition?
 }
 
+@MainActor
 final class SearchController {
     weak var delegate: SearchControllerDelegate?
 
@@ -14,8 +16,10 @@ final class SearchController {
     }
 
     func search(for query: SearchQuery) -> [SearchResult] {
-        search(for: query) { textCheckingResult in
-            searchResult(in: textCheckingResult.range)
+        RunestoneSignposts.interval("SearchController.search") {
+            search(for: query) { textCheckingResult in
+                searchResult(in: textCheckingResult.range)
+            }
         }
     }
 

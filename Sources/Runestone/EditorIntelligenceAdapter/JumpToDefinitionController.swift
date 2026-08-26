@@ -1,4 +1,4 @@
-import AppKit
+@preconcurrency import AppKit
 import EditorIntelligence
 
 /// Handles cmd+click navigation to symbol definitions.

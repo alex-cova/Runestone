@@ -30,6 +30,6 @@ public actor AIHoverProvider: HoverProvider {
     }
 
     private func defaultPrompt(for context: HoverContext) -> String {
-        "Explain the following code at \(context.cursor.position):\n\n\(context.document.text)"
+        "Explain the following code at \(context.cursor.position):\n\n\(context.document.textAroundCursor())"
     }
 }

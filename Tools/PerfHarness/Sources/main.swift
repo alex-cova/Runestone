@@ -11,20 +11,23 @@ import Foundation
 //   swift run -c release PerfHarness save Fixtures/short_lines_500mb.txt
 //
 // Always run with `-c release` — debug builds of tree-sitter/CoreText-heavy code are not representative.
-// Add `--highlighted` to any command to route through TreeSitterLanguage.markdown instead of plain text,
-// to isolate the eager full-document parse cost called out in PERFORMANCE_AUDIT.md Phase 2 #2.
+// Add `--highlighted` to route through TreeSitterLanguage.markdown instead of plain text.
+// Add `--deferred` to skip eager parse in TextViewState (first paint without a syntax tree).
+// Add `--viewport` to parse only the visible window (SyntaxParsePolicy.viewport).
+// Add `--chunked` on `open` to load via TextViewState.load with FileHandle reads.
+// Add `--mmap` on `open` to load via TextViewState.load with MAP_PRIVATE ingest.
 // Output is CSV on stdout (one row per metric); progress/timing narration goes to stderr.
 
 func printUsageAndExit() -> Never {
     FileHandle.standardError.write("""
     Usage: PerfHarness <command> <path> [options]
     Commands:
-      open <path> [--highlighted]
-      scroll <path> [--frames N] [--highlighted]
-      keystroke <path> --at start|middle|end [--highlighted]
-      goto <path> --percent N [--highlighted]
-      search <path> --pattern TEXT [--regex] [--highlighted]
-      save <path> [--highlighted]
+      open <path> [--highlighted] [--deferred] [--viewport] [--chunked] [--mmap]
+      scroll <path> [--frames N] [--highlighted] [--deferred]
+      keystroke <path> --at start|middle|end [--highlighted] [--deferred]
+      goto <path> --percent N [--highlighted] [--deferred]
+      search <path> --pattern TEXT [--regex] [--highlighted] [--deferred]
+      save <path> [--highlighted] [--deferred]
 
     """.data(using: .utf8)!)
     exit(1)
@@ -45,7 +48,13 @@ guard arguments.count >= 2 else { printUsageAndExit() }
 let command = arguments[0]
 let path = arguments[1]
 let rest = Array(arguments.dropFirst(2))
-let options = Commands.Options(highlighted: hasFlag("--highlighted", in: rest))
+let options = Commands.Options(
+    highlighted: hasFlag("--highlighted", in: rest),
+    deferred: hasFlag("--deferred", in: rest),
+    chunked: hasFlag("--chunked", in: rest),
+    mmap: hasFlag("--mmap", in: rest),
+    viewport: hasFlag("--viewport", in: rest)
+)
 
 guard FileManager.default.fileExists(atPath: path) else {
     FileHandle.standardError.write("File not found: \(path)\n".data(using: .utf8)!)

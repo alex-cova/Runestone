@@ -15,6 +15,9 @@ final class TreeSitterLanguageLayer {
     private var childLanguageLayerStore = TreeSitterLanguageLayerStore()
     private weak var parentLanguageLayer: TreeSitterLanguageLayer?
     private let languageProvider: TreeSitterLanguageProvider?
+    /// Included ranges for the root language layer under ``SyntaxParsePolicy/viewport``.
+    /// Empty means parse the whole document. Child layers ignore this and use injection ranges.
+    private var rootIncludedRanges: [TreeSitterTextRange] = []
     private var isEmpty: Bool {
         if let rootNode = tree?.rootNode {
             return rootNode.endByte - rootNode.startByte <= ByteCount(0)
@@ -41,6 +44,50 @@ extension TreeSitterLanguageLayer {
     func parse(_ text: NSString) {
         let ranges = [tree?.rootNode.textRange].compactMap { $0 }
         parse(ranges, from: text)
+    }
+
+    /// Callback-based parse used after the language mode is attached to a ``TextInputView``.
+    /// Honors ``rootIncludedRanges`` so a viewport window does not copy or walk the whole buffer.
+    func parseUsingReader() {
+        prepareParser(toParse: [])
+        tree = parser.parse(oldTree: tree)
+        childLanguageLayerStore.removeAll()
+        guard let injectionsQuery = language.injectionsQuery, let node = tree?.rootNode else {
+            return
+        }
+        let queryCursor = TreeSitterQueryCursor(query: injectionsQuery, node: node)
+        queryCursor.execute()
+        let captures = queryCursor.validCaptures(in: stringView)
+        let injectedLanguages = injectedLanguages(from: captures)
+        for injectedLanguage in injectedLanguages {
+            if let childLanguageLayer = childLanguageLayer(withID: injectedLanguage.id, forLanguageNamed: injectedLanguage.languageName) {
+                childLanguageLayer.parseUsingReader(ranges: [injectedLanguage.textRange])
+            }
+        }
+    }
+
+    func restoreTree(_ tree: TreeSitterTree?) {
+        self.tree = tree
+    }
+
+    func setRootIncludedUTF16Range(_ range: NSRange?, stringLength: Int) {
+        guard parentLanguageLayer == nil else {
+            return
+        }
+        guard let range,
+              range.length > 0,
+              range != NSRange(location: 0, length: stringLength),
+              let textRange = ViewportParseWindow.textRange(for: range, lineManager: lineManager) else {
+            rootIncludedRanges = []
+            return
+        }
+        rootIncludedRanges = [textRange]
+    }
+
+    func invalidateTree() {
+        tree = nil
+        rootIncludedRanges = []
+        childLanguageLayerStore.removeAll()
     }
 
     func apply(_ edit: TreeSitterInputEdit) -> LineChangeSet {
@@ -90,10 +137,21 @@ extension TreeSitterLanguageLayer {
         return lineChangeSet
     }
 
+    private func parseUsingReader(ranges: [TreeSitterTextRange]) {
+        prepareParser(toParse: ranges)
+        tree = parser.parse(oldTree: tree)
+    }
+
     private func prepareParser(toParse ranges: [TreeSitterTextRange]) {
         parser.language = language.languagePointer
-        if !ranges.isEmpty && parentLanguageLayer != nil {
-            parser.setIncludedRanges(ranges)
+        if parentLanguageLayer != nil {
+            if !ranges.isEmpty {
+                parser.setIncludedRanges(ranges)
+            } else {
+                parser.removeAllIncludedRanges()
+            }
+        } else if !rootIncludedRanges.isEmpty {
+            parser.setIncludedRanges(rootIncludedRanges)
         } else {
             parser.removeAllIncludedRanges()
         }

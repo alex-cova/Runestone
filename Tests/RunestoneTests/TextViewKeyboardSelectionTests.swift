@@ -5,6 +5,7 @@ import XCTest
 /// Covers keyboard-driven caret movement and selection extension on `TextView`/`TextInputView`
 /// on macOS — in particular the shift-arrow "extension sticks after one step" regression, and
 /// that read-only (but selectable) editors still support navigation, selection and copy.
+@MainActor
 final class TextViewKeyboardSelectionTests: XCTestCase {
     private typealias KeyCode = TestKeyCode
 

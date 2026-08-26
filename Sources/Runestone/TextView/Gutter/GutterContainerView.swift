@@ -1,4 +1,4 @@
-import AppKit
+@preconcurrency import AppKit
 import Foundation
 
 /// `LayoutManager`'s container for the gutter's chrome (background, line numbers, folding ribbon).

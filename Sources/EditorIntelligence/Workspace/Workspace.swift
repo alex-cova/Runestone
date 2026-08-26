@@ -6,7 +6,7 @@ import Foundation
 /// `EditorEvent`s from an adapter and emits `WorkspaceEvent`s through an event bus.
 public actor Workspace {
     public let id: UUID
-    public let eventBus: EventBus<WorkspaceEvent>
+    public nonisolated let eventBus: EventBus<WorkspaceEvent>
 
     private var projects: [Project] = []
     private var openDocuments: [DocumentID: Document] = [:]
@@ -106,6 +106,21 @@ public actor Workspace {
                     languageIdentifier: document.languageIdentifier
                 )
                 updateDocument(updated)
+            }
+        case .documentEdited(let documentID, let edits, newSnapshot: let snapshot):
+            if let document = openDocuments[documentID] {
+                let updated = Document(
+                    id: document.id,
+                    url: document.url,
+                    displayName: document.displayName,
+                    contentSnapshot: snapshot,
+                    selection: document.selection,
+                    cursor: document.cursor,
+                    viewport: document.viewport,
+                    languageIdentifier: document.languageIdentifier
+                )
+                openDocuments[document.id] = updated
+                eventBus.send(.documentEdited(updated, edits))
             }
         case .selectionChanged(let documentID, let selection):
             if let document = openDocuments[documentID] {

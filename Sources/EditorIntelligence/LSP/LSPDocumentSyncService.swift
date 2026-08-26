@@ -6,11 +6,13 @@ public actor LSPDocumentSyncService {
         public let documentID: DocumentID
         public let range: LSPRange
         public let text: String
+        public let version: Int
 
-        public init(documentID: DocumentID, range: LSPRange, text: String) {
+        public init(documentID: DocumentID, range: LSPRange, text: String, version: Int = 0) {
             self.documentID = documentID
             self.range = range
             self.text = text
+            self.version = version
         }
     }
 
@@ -43,8 +45,8 @@ public actor LSPDocumentSyncService {
         await notifyOpened(document, languageID: languageID, version: version)
     }
 
-    public func enqueueChange(documentID: DocumentID, range: LSPRange, text: String) {
-        pending.append(DocumentChange(documentID: documentID, range: range, text: text))
+    public func enqueueChange(documentID: DocumentID, range: LSPRange, text: String, version: Int = 0) {
+        pending.append(DocumentChange(documentID: documentID, range: range, text: text, version: version))
         scheduleFlush()
     }
 

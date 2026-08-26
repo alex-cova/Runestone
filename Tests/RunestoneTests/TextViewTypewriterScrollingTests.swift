@@ -2,6 +2,7 @@ import AppKit
 import XCTest
 @testable import Runestone
 
+@MainActor
 final class TextViewTypewriterScrollingTests: XCTestCase {
     private func multilineText(lineCount: Int) -> String {
         (1...lineCount).map { "Line \($0)" }.joined(separator: "\n")

@@ -50,8 +50,13 @@ public actor LSPWorkspaceSyncBridge {
     }
 
     private func handle(_ event: WorkspaceEvent) async {
+        let signpost = EditorIntelligenceSignposts.performance.beginInterval("LSPWorkspaceSyncBridge.handle")
+        defer { EditorIntelligenceSignposts.performance.endInterval("LSPWorkspaceSyncBridge.handle", signpost) }
         switch event {
         case .documentOpened(let document):
+            if document.contentSnapshot.isElided {
+                break
+            }
             let version = bumpVersion(for: document.id)
             await syncService.notifyOpened(
                 document,
@@ -59,8 +64,21 @@ public actor LSPWorkspaceSyncBridge {
                 version: version
             )
         case .documentChanged(let document):
+            if document.contentSnapshot.isElided {
+                break
+            }
             let version = bumpVersion(for: document.id)
             await syncService.notifyFullChange(document, version: version)
+        case .documentEdited(let document, let edits):
+            let version = bumpVersion(for: document.id)
+            for edit in edits {
+                await syncService.enqueueChange(
+                    documentID: document.id,
+                    range: LSPRange(edit.range),
+                    text: edit.replacement,
+                    version: version
+                )
+            }
         case .documentClosed(let documentID):
             versions.removeValue(forKey: documentID)
             await syncService.documentClosed(documentID: documentID)

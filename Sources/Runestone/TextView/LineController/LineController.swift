@@ -10,7 +10,7 @@ protocol LineControllerDelegate: AnyObject {
     func lineControllerDidInvalidateLineWidthDuringAsyncSyntaxHighlight(_ lineController: LineController)
 }
 
-final class LineController {
+final class LineController: @unchecked Sendable {
     private enum TypesetAmount {
         case inRect(CGRect)
         case toLocation(Int)
@@ -163,7 +163,12 @@ final class LineController {
     }
 
     func lineFragmentNode(containingCharacterAt location: Int) -> LineFragmentNode? {
-        lineFragmentTree.node(containingLocation: location)
+        let total = lineFragmentTree.nodeTotalValue
+        guard total >= 0 else {
+            return nil
+        }
+        let clamped = min(max(location, 0), total)
+        return lineFragmentTree.node(containingLocation: clamped)
     }
 
     func lineFragmentNode(atIndex index: Int) -> LineFragmentNode {
@@ -282,13 +287,15 @@ private extension LineController {
         }
         if async {
             syntaxHighlighter.syntaxHighlight(input) { [weak self] result in
-                if case .success = result, let self = self {
-                    let oldWidth = self.lineWidth
-                    self.isSyntaxHighlightingInvalid = false
-                    self.isTypesetterInvalid = true
-                    self.redisplayLineFragments()
-                    if abs(self.lineWidth - oldWidth) > CGFloat.ulpOfOne {
-                        self.delegate?.lineControllerDidInvalidateLineWidthDuringAsyncSyntaxHighlight(self)
+                Task { @MainActor in
+                    if case .success = result, let self = self {
+                        let oldWidth = self.lineWidth
+                        self.isSyntaxHighlightingInvalid = false
+                        self.isTypesetterInvalid = true
+                        self.redisplayLineFragments()
+                        if abs(self.lineWidth - oldWidth) > CGFloat.ulpOfOne {
+                            self.delegate?.lineControllerDidInvalidateLineWidthDuringAsyncSyntaxHighlight(self)
+                        }
                     }
                 }
             }

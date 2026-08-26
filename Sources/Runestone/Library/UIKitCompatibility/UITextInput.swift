@@ -1,7 +1,7 @@
-import AppKit
+@preconcurrency import AppKit
 import Foundation
 
-public class UITextPosition: NSObject {}
+public class UITextPosition: NSObject, @unchecked Sendable {}
 open class UITextRange: NSObject {
     @objc open var start: UITextPosition { fatalError("override") }
     @objc open var end: UITextPosition { fatalError("override") }
@@ -27,6 +27,7 @@ open class UITextInputStringTokenizer: NSObject, UITextInputTokenizer {
     open func position(from position: UITextPosition, toBoundary granularity: UITextGranularity, inDirection direction: UITextDirection) -> UITextPosition? { nil }
 }
 
+@MainActor
 public protocol UITextInputDelegate: NSObjectProtocol {
     func selectionWillChange(_ textInput: UITextInput?)
     func selectionDidChange(_ textInput: UITextInput?)
@@ -34,6 +35,7 @@ public protocol UITextInputDelegate: NSObjectProtocol {
     func textDidChange(_ textInput: UITextInput?)
 }
 
+@MainActor
 public protocol UITextInput: AnyObject {
     var selectedTextRange: UITextRange? { get set }
     var markedTextRange: UITextRange? { get }

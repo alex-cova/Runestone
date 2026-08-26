@@ -1,4 +1,4 @@
-import AppKit
+@preconcurrency import AppKit
 
 /// Layout container that mounts a view without destroying it when re-mounted — pairs with
 /// ``EditorHostCache`` so a cached hosted view (e.g. a `TextView`) survives SwiftUI

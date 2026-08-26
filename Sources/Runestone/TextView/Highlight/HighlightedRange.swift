@@ -1,5 +1,5 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 
 /// Range of text to highlight.
 public final class HighlightedRange {

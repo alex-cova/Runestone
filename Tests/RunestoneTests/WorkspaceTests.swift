@@ -33,6 +33,48 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(updated?.text, "hello world")
         XCTAssertEqual(updated?.version, 1)
     }
+
+    func testHandleDocumentEditedEventUpdatesSnapshotWithoutFullDocumentChanged() async {
+        let workspace = Workspace()
+        let document = makeDocument(id: DocumentID(), text: "hello")
+        await workspace.openDocument(document)
+
+        let stream = workspace.eventBus.events
+        let task = Task { () -> (Document?, [TextEdit], Bool) in
+            var editedDocument: Document?
+            var editedEdits: [TextEdit] = []
+            var sawDocumentChangedAfterOpen = false
+            for await event in stream {
+                switch event {
+                case .documentEdited(let doc, let edits):
+                    editedDocument = doc
+                    editedEdits = edits
+                    return (editedDocument, editedEdits, sawDocumentChangedAfterOpen)
+                case .documentChanged:
+                    sawDocumentChangedAfterOpen = true
+                default:
+                    break
+                }
+            }
+            return (editedDocument, editedEdits, sawDocumentChangedAfterOpen)
+        }
+
+        let start = TextPosition(line: 0, column: 5, utf16Offset: 5)
+        let edit = TextEdit(
+            range: TextRange(start: start, end: start),
+            replacement: " world"
+        )
+        let newSnapshot = TextSnapshot(version: 1, text: "hello world")
+        await workspace.handleEditorEvent(.documentEdited(document.id, [edit], newSnapshot: newSnapshot))
+        let (editedDocument, editedEdits, sawDocumentChangedAfterOpen) = await task.value
+
+        let updated = await workspace.document(withID: document.id)
+        XCTAssertEqual(updated?.text, "hello world")
+        XCTAssertEqual(editedDocument?.text, "hello world")
+        XCTAssertEqual(editedEdits.count, 1)
+        XCTAssertEqual(editedEdits.first?.replacement, " world")
+        XCTAssertFalse(sawDocumentChangedAfterOpen)
+    }
 }
 
 private func makeDocument(id: DocumentID, text: String) -> Document {

@@ -1,3 +1,4 @@
 .build
 **/.build
 .idea
+Tools/PerfHarness/Fixtures/

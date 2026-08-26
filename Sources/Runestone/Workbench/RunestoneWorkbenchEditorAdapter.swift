@@ -2,7 +2,7 @@ import EditorIntelligence
 import Foundation
 
 /// ``EditorAdapter`` that aggregates open ``WorkbenchDocument``s and tracks the active pane's ``TextView``.
-public final class RunestoneWorkbenchEditorAdapter: EditorAdapter {
+public final class RunestoneWorkbenchEditorAdapter: EditorAdapter, @unchecked Sendable {
     public let id: EditorAdapterID
     public let context: EditorContext
     public var events: AsyncStream<EditorEvent> { eventBus.events }
@@ -16,6 +16,7 @@ public final class RunestoneWorkbenchEditorAdapter: EditorAdapter {
     private var liveDocumentID: DocumentID?
     private var cachedOpenDocuments: [Document] = []
     private var contentRefreshTask: Task<Void, Never>?
+    private var pendingContentChanges: [TextEdit] = []
     /// Matches ``LSPDocumentSyncService``'s default `batchInterval`. See
     /// PERFORMANCE_AUDIT.md Phase 2 #1 — `selected.text = textView.text` is an O(document size)
     /// bridge, and used to run on every keystroke.
@@ -137,7 +138,18 @@ public final class RunestoneWorkbenchEditorAdapter: EditorAdapter {
     }
 
     private func refreshLiveDocumentContent(from textView: TextView, for document: WorkbenchDocument) {
-        document.text = textView.text
+        if textView.isFileBacked {
+            document.text = ""
+            document.isFileBacked = true
+            if let snapshot = textView.pieceTreeContentSnapshot() {
+                document.rangeReader = TextRangeReader(utf16Length: snapshot.utf16Length) { offset, length in
+                    snapshot.substring(utf16Offset: offset, length: length)
+                }
+            }
+        } else {
+            document.text = textView.text
+            document.rangeReader = nil
+        }
         document.selectedRange = textView.selectedRange
         document.scrollOffset = textView.contentOffset
         let eipDocument = document.makeEIPDocument()
@@ -152,9 +164,18 @@ public final class RunestoneWorkbenchEditorAdapter: EditorAdapter {
                 liveDocumentID = document.documentID
             }
         }
-        eventBus.send(.documentChanged(eipDocument.id, eipDocument.contentSnapshot))
+        eventBus.send(editsEvent(for: eipDocument))
         eventBus.send(.selectionChanged(eipDocument.id, eipDocument.selection))
         eventBus.send(.cursorMoved(eipDocument.id, eipDocument.cursor))
+    }
+
+    private func editsEvent(for document: Document) -> EditorEvent {
+        let edits = pendingContentChanges
+        pendingContentChanges = []
+        if edits.isEmpty {
+            return .documentChanged(document.id, document.contentSnapshot)
+        }
+        return .documentEdited(document.id, edits, newSnapshot: document.contentSnapshot)
     }
 
     deinit {
@@ -168,6 +189,11 @@ extension RunestoneWorkbenchEditorAdapter: TextViewDelegate {
             scheduleContentRefresh(from: textView, for: selected)
         }
         forwardingDelegate?.textViewDidChange(textView)
+    }
+
+    public func textView(_ textView: TextView, didChangeContent change: TextContentChange) {
+        pendingContentChanges.append(change.asTextEdit)
+        forwardingDelegate?.textView(textView, didChangeContent: change)
     }
 
     public func textViewDidChangeSelection(_ textView: TextView) {
@@ -203,5 +229,9 @@ extension RunestoneWorkbenchEditorAdapter: TextViewDelegate {
             didChangeDistractionFreeChromeVisibility: isVisible,
             transitionDuration: transitionDuration
         )
+    }
+
+    public func textViewDidFinishSyntaxParse(_ textView: TextView) {
+        forwardingDelegate?.textViewDidFinishSyntaxParse(textView)
     }
 }

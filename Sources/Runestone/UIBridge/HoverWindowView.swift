@@ -1,4 +1,4 @@
-import AppKit
+@preconcurrency import AppKit
 import EditorIntelligence
 
 /// Native AppKit hover window view that renders a `HoverWindowModel`.

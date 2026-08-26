@@ -1,5 +1,6 @@
 import Foundation
 
+@MainActor
 protocol HighlightNavigationControllerDelegate: AnyObject {
     func highlightNavigationController(
         _ controller: HighlightNavigationController,
@@ -22,6 +23,7 @@ struct HighlightNavigationRange {
     }
 }
 
+@MainActor
 final class HighlightNavigationController {
     weak var delegate: HighlightNavigationControllerDelegate?
     var selectedRange: NSRange?

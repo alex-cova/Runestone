@@ -1,7 +1,7 @@
-import AppKit
+@preconcurrency import AppKit
 import Foundation
 
-public final class UIPasteboard {
+public final class UIPasteboard: @unchecked Sendable {
     public static let general = UIPasteboard()
     public var string: String? {
         get { NSPasteboard.general.string(forType: .string) }
@@ -15,7 +15,7 @@ public final class UIPasteboard {
     }
 }
 
-public final class UIScreen {
+public final class UIScreen: @unchecked Sendable {
     public static let main = UIScreen()
     public var scale: CGFloat { NSScreen.main?.backingScaleFactor ?? 2 }
 }

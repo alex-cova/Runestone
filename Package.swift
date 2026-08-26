@@ -1,7 +1,13 @@
-// swift-tools-version:5.5
+// swift-tools-version: 6.0
 // The swift-tools-version declares the minimum version of Swift required to build this package.
+//
+// Swift 6 language mode is enabled on library, test, harness, and example targets.
+// Do not set `defaultIsolation: MainActor` (SE-0476): EIP actors, background parse,
+// and off-main search must stay nonisolated by default.
 
 import PackageDescription
+
+let swift6: [SwiftSetting] = [.swiftLanguageMode(.v6)]
 
 let package = Package(
     name: "Runestone",
@@ -40,14 +46,15 @@ let package = Package(
                 .define("_DARWIN_C_SOURCE")
             ]
         ),
-        .target(name: "EditorIntelligence", dependencies: []),
+        .target(name: "EditorIntelligence", dependencies: [], swiftSettings: swift6),
         .target(
             name: "EditorIntelligenceLSP",
             dependencies: [
                 "EditorIntelligence",
                 .product(name: "LanguageClient", package: "LanguageClient"),
                 .product(name: "LanguageServerProtocol", package: "LanguageServerProtocol")
-            ]
+            ],
+            swiftSettings: swift6
         ),
         .target(name: "Runestone", dependencies: [
             "EditorIntelligence",
@@ -58,17 +65,19 @@ let package = Package(
         ], resources: [
             .copy("PrivacyInfo.xcprivacy"),
             .process("TextView/Appearance/Theme.xcassets")
-        ]),
-        .executableTarget(name: "SmokeTest", dependencies: ["Runestone"]),
+        ], swiftSettings: swift6),
+        .executableTarget(name: "SmokeTest", dependencies: ["Runestone"], swiftSettings: swift6),
         .executableTarget(
             name: "PerfHarness",
             dependencies: ["Runestone", "RunestoneMarkdownLanguage"],
-            path: "Tools/PerfHarness/Sources"
+            path: "Tools/PerfHarness/Sources",
+            swiftSettings: swift6
         ),
         .executableTarget(
             name: "MacExample",
             dependencies: ["Runestone", "TestTreeSitterLanguages"],
-            path: "Example/MacExample"
+            path: "Example/MacExample",
+            swiftSettings: swift6
         ),
         .target(name: "TestTreeSitterLanguages", cSettings: [
             .unsafeFlags(["-w"])
@@ -85,7 +94,8 @@ let package = Package(
             ],
             resources: [
                 .copy("highlights.scm")
-            ]
+            ],
+            swiftSettings: swift6
         ),
         .target(name: "TreeSitterMarkdown", exclude: ["LICENSE", "VERSION"], cSettings: [
             .headerSearchPath("src"),
@@ -104,7 +114,8 @@ let package = Package(
             ],
             resources: [
                 .copy("Queries")
-            ]
+            ],
+            swiftSettings: swift6
         ),
         .testTarget(name: "RunestoneTests", dependencies: [
             "Runestone",
@@ -113,6 +124,6 @@ let package = Package(
             "TestTreeSitterLanguages",
             "RunestoneGraphQLLanguage",
             "RunestoneMarkdownLanguage"
-        ])
+        ], swiftSettings: swift6)
     ]
 )

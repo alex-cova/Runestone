@@ -1,4 +1,4 @@
-import AppKit
+@preconcurrency import AppKit
 import Foundation
 
 /// A miniature overview of the document rendered along the trailing edge of the text view,

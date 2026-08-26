@@ -180,6 +180,17 @@ final class RedBlackTree<NodeID: RedBlackTreeNodeID, NodeValue: RedBlackTreeNode
         return newNode
     }
 
+    @discardableResult
+    func insertNode(value: NodeValue, data: NodeData, before existingNode: Node) -> Node {
+        let newNode = Node(tree: self, value: value, data: data)
+        if existingNode.left == nil {
+            insert(newNode, asLeftChildOf: existingNode)
+        } else {
+            insert(newNode, after: existingNode.left!.rightMost)
+        }
+        return newNode
+    }
+
     func remove(_ removedNode: Node) {
         if let removedNodeRight = removedNode.right, removedNode.left != nil {
             let leftMost = removedNodeRight.leftMost

@@ -174,7 +174,7 @@ final class FoldingController {
         if afterRow < lineManager.lineCount {
             return lineManager.line(atRow: afterRow).location
         }
-        return stringView.string.length
+        return stringView.length
     }
 
     /// When walking backward through the document, returns the end of the fold header if
@@ -233,8 +233,8 @@ private extension FoldingController {
         guard location >= 0 else {
             return nil
         }
-        let safeLocation = min(location, max(stringView.string.length - 1, 0))
-        guard stringView.string.length > 0 else {
+        let safeLocation = min(location, max(stringView.length - 1, 0))
+        guard stringView.length > 0 else {
             return nil
         }
         return lineManager.line(containingCharacterAt: safeLocation)
@@ -292,6 +292,7 @@ private extension FoldingController {
 
     // swiftlint:disable:next function_body_length
     private func recompute() {
+        RunestoneSignposts.interval("FoldingController.recompute") {
         let lineCount = lineManager.lineCount
         var newFolds: [FoldRange] = []
         var openFolds: [Int: Int] = [:] // depth -> starting row
@@ -326,6 +327,7 @@ private extension FoldingController {
         }
         newFolds.sort { $0.lineRange.lowerBound < $1.lineRange.lowerBound }
         applyRecomputedFolds(newFolds)
+        }
     }
 
     /// Reconciles freshly-recomputed (always-uncollapsed) folds against the previous collapse

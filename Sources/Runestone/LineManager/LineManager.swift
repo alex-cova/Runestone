@@ -1,10 +1,15 @@
 import CoreGraphics
 import Foundation
 
-struct DocumentLineNodeID: RedBlackTreeNodeID, Hashable {
-    let id = UUID()
+struct LineMetric {
+    var totalLength: Int
+    var delimiterLength: Int
+}
+
+struct DocumentLineNodeID: Hashable {
+    let value: UInt32
     var rawValue: String {
-        id.uuidString
+        String(value)
     }
 }
 
@@ -14,86 +19,134 @@ extension DocumentLineNodeID: CustomDebugStringConvertible {
     }
 }
 
-typealias DocumentLineTree = RedBlackTree<DocumentLineNodeID, Int, DocumentLineNodeData>
-typealias DocumentLineNode = RedBlackTreeNode<DocumentLineNodeID, Int, DocumentLineNodeData>
+/// Per-line handle into ``PackedLineIndex``. Identity is a stable ``DocumentLineNodeID``; `row` is
+/// refreshed when lines are inserted or removed above it.
+final class DocumentLineNode: Hashable {
+    let id: DocumentLineNodeID
+    var row: Int
+    unowned let lineManager: LineManager
+    let data: DocumentLineNodeData
+
+    var location: Int {
+        lineManager.location(ofRow: row)
+    }
+
+    var index: Int {
+        row
+    }
+
+    var yPosition: CGFloat {
+        lineManager.yPosition(ofRow: row)
+    }
+
+    var value: Int {
+        data.totalLength
+    }
+
+    var next: DocumentLineNode {
+        lineManager.line(atRow: min(row + 1, lineManager.lineCount - 1))
+    }
+
+    var previous: DocumentLineNode {
+        lineManager.line(atRow: max(row - 1, 0))
+    }
+
+    var range: ClosedRange<Int> {
+        let start = location
+        return start ... start + data.totalLength
+    }
+
+    init(id: DocumentLineNodeID, row: Int, lineManager: LineManager, data: DocumentLineNodeData) {
+        self.id = id
+        self.row = row
+        self.lineManager = lineManager
+        self.data = data
+        data.node = self
+    }
+
+    static func == (lhs: DocumentLineNode, rhs: DocumentLineNode) -> Bool {
+        lhs.id == rhs.id
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+    }
+}
+
+final class LineIterator: IteratorProtocol {
+    private let lineManager: LineManager
+    private var row = 0
+
+    init(lineManager: LineManager) {
+        self.lineManager = lineManager
+    }
+
+    func next() -> DocumentLineNode? {
+        guard row < lineManager.lineCount else {
+            return nil
+        }
+        defer { row += 1 }
+        return lineManager.line(atRow: row)
+    }
+}
 
 final class LineManager {
     var stringView: StringView
     var lineCount: Int {
-        documentLineTree.nodeTotalCount
+        packed.lineCount
     }
     var contentHeight: CGFloat {
-        let rightMost = documentLineTree.root.rightMost
-        return rightMost.yPosition + rightMost.data.lineHeight
+        packed.contentHeight
     }
-    var estimatedLineHeight: CGFloat = 12
+    var estimatedLineHeight: CGFloat = 12 {
+        didSet {
+            packed.estimatedLineHeight = estimatedLineHeight
+        }
+    }
     var firstLine: DocumentLineNode {
-        documentLineTree.root.leftMost
+        line(atRow: 0)
     }
     var lastLine: DocumentLineNode {
-        documentLineTree.root.rightMost
+        line(atRow: lineCount - 1)
     }
-    // When rebuilding, and only when rebuilding, the tree we keep track of the longest line.
-    // This helps the text editor to determine the width of the content. The "initial" in the name implies
-    // that the reference does not necessarily point to the longest line as the document is edited.
     private(set) weak var initialLongestLine: DocumentLineNode?
 
-    private let documentLineTree: DocumentLineTree
+    private let packed: PackedLineIndex
+    private var handles: [UInt32: DocumentLineNode] = [:]
 
-    init(stringView: StringView) {
+    init(stringView: StringView, packedIndex: PackedLineIndex? = nil) {
         self.stringView = stringView
-        let rootData = DocumentLineNodeData(lineHeight: estimatedLineHeight)
-        documentLineTree = DocumentLineTree(minimumValue: 0, rootValue: 0, rootData: rootData)
-        documentLineTree.childrenUpdater = DocumentLineChildrenUpdater()
-        rootData.node = documentLineTree.root
+        packed = packedIndex ?? PackedLineIndex(estimatedLineHeight: 12)
+        if packedIndex != nil, packed.lineCount > 0 {
+            initialLongestLine = line(atRow: packed.longestRow)
+        }
     }
 
     func rebuild() {
-        // Reset the tree so we only have a single line.
-        let rootData = DocumentLineNodeData(lineHeight: estimatedLineHeight)
-        documentLineTree.reset(rootValue: 0, rootData: rootData)
-        rootData.node = documentLineTree.root
-        initialLongestLine = nil
-        // Iterate over lines in the string.
-        var line = documentLineTree.node(atIndex: 0)
-        var workingNewLineRange = NewLineFinder.rangeOfNextNewLine(in: stringView.string, startingAt: 0)
-        var lines: [DocumentLineNode] = []
-        var lastDelimiterEnd = 0
-        var totalLineHeight: CGFloat = 0
-        var longestLineLength: Int = 0
-        while let newLineRange = workingNewLineRange {
-            let totalLength = newLineRange.location + newLineRange.length - lastDelimiterEnd
-            line.value = totalLength
-            line.data.totalLength = totalLength
-            line.data.delimiterLength = newLineRange.length
-            line.data.lineHeight = estimatedLineHeight
-            line.data.totalLineHeight = totalLineHeight
-            // Byte count is a pure function of the UTF-16 length (see setLength(of:to:newLine:)),
-            // so no need to materialize a substring just to measure it — this halved rebuild()'s
-            // allocation/copy work on initial load. See PERFORMANCE_AUDIT.md Phase 2 #4.
-            line.data.byteCount = ByteCount(totalLength * 2)
-            lastDelimiterEnd = newLineRange.location + newLineRange.length
-            lines.append(line)
-            if totalLength > longestLineLength {
-                longestLineLength = totalLength
-                initialLongestLine = line
+        RunestoneSignposts.interval("LineManager.rebuild") {
+            var metrics: [LineMetric] = []
+            var lastDelimiterEnd = 0
+            var workingNewLineRange = stringView.rangeOfNextNewLine(startingAt: 0)
+            while let newLineRange = workingNewLineRange {
+                let totalLength = newLineRange.location + newLineRange.length - lastDelimiterEnd
+                metrics.append(LineMetric(totalLength: totalLength, delimiterLength: newLineRange.length))
+                lastDelimiterEnd = newLineRange.location + newLineRange.length
+                workingNewLineRange = stringView.rangeOfNextNewLine(startingAt: lastDelimiterEnd)
             }
-            let data = DocumentLineNodeData(lineHeight: estimatedLineHeight)
-            line = DocumentLineNode(tree: documentLineTree, value: 0, data: data)
-            data.node = line
-            workingNewLineRange = NewLineFinder.rangeOfNextNewLine(in: stringView.string, startingAt: lastDelimiterEnd)
-            totalLineHeight += estimatedLineHeight
+            metrics.append(LineMetric(totalLength: stringView.length - lastDelimiterEnd, delimiterLength: 0))
+            rebuild(fromLineMetrics: metrics)
         }
-        let totalLength = stringView.string.length - lastDelimiterEnd
-        line.value = totalLength
-        line.data.totalLength = totalLength
-        line.data.byteCount = ByteCount(totalLength * 2)
-        lines.append(line)
-        if totalLength > longestLineLength {
-            longestLineLength = totalLength
-            initialLongestLine = line
+    }
+
+    /// Rebuilds the line tree from precomputed per-line UTF-16 lengths, skipping a second newline scan.
+    func rebuild(fromLineMetrics metrics: [LineMetric]) {
+        handles.removeAll(keepingCapacity: false)
+        packed.rebuild(from: metrics, estimatedLineHeight: estimatedLineHeight)
+        if packed.lineCount > 0 {
+            initialLongestLine = line(atRow: packed.longestRow)
+        } else {
+            initialLongestLine = nil
         }
-        documentLineTree.rebuild(from: lines)
     }
 
     @discardableResult
@@ -101,47 +154,40 @@ final class LineManager {
         guard range.length > 0 else {
             return LineChangeSet()
         }
-        guard let startLine = documentLineTree.node(containingLocation: range.location) else {
+        guard let startRow = packed.row(containingUTF16: range.location) else {
             return LineChangeSet()
         }
-        if range.location > Int(startLine.location) + startLine.data.length {
-            // Deleting starting in the middle of a delimiter.
+        let startLine = line(atRow: startRow)
+        let startLocation = startLine.location
+        if range.location > startLocation + startLine.data.length {
             let changeSet = LineChangeSet()
             let otherChangeSetA = setLength(of: startLine, to: startLine.value - 1)
             changeSet.union(with: otherChangeSetA)
             let otherChangeSetB = removeCharacters(in: NSRange(location: range.location, length: range.length - 1))
             changeSet.union(with: otherChangeSetB)
             return changeSet
-        } else if range.location + range.length < Int(startLine.location) + startLine.value {
-            // Removing a part of the start line.
+        } else if range.location + range.length < startLocation + startLine.value {
             return setLength(of: startLine, to: startLine.value - range.length)
         } else {
-            // Merge startLine with another line because the startLine's delimeter was deleted,
-            // possibly removing lines in between if multiple delimeters were deleted.
-            let charactersRemovedInStartLine = Int(startLine.location) + startLine.value - range.location
+            let charactersRemovedInStartLine = startLocation + startLine.value - range.location
             assert(charactersRemovedInStartLine > 0)
-            guard let endLine = documentLineTree.node(containingLocation: range.location + range.length) else {
+            guard let endRow = packed.row(containingUTF16: range.location + range.length) else {
                 return LineChangeSet()
             }
-            if endLine === startLine {
-                // Removing characters in the last line.
+            let endLine = line(atRow: endRow)
+            if endLine.id == startLine.id {
                 return setLength(of: startLine, to: startLine.value - range.length)
             } else {
                 let changeSet = LineChangeSet()
-                let charactersLeftInEndLine = Int(endLine.location) + endLine.value - (range.location + range.length)
-                // Remove all lines between startLine and endLine, excluding startLine but including endLine.
-                var tmp = startLine.next
-                var lineToRemove = tmp
-                repeat {
-                    lineToRemove = tmp
-                    tmp = tmp.next
-                    changeSet.markLineRemoved(lineToRemove)
-                    documentLineTree.remove(lineToRemove)
-                } while lineToRemove !== endLine
-                let newLength = startLine.value - charactersRemovedInStartLine + charactersLeftInEndLine
-                let otherChangeSet = setLength(of: startLine, to: newLength)
-                changeSet.union(with: otherChangeSet)
-                return changeSet
+                let charactersLeftInEndLine = endLine.location + endLine.value - (range.location + range.length)
+                return finishRemoveAcrossLines(
+                    startLine: startLine,
+                    startRow: startRow,
+                    endRow: endRow,
+                    charactersRemovedInStartLine: charactersRemovedInStartLine,
+                    charactersLeftInEndLine: charactersLeftInEndLine,
+                    changeSet: changeSet
+                )
             }
         }
     }
@@ -149,16 +195,15 @@ final class LineManager {
     @discardableResult
     func insert(_ string: NSString, at location: Int) -> LineChangeSet {
         let changeSet = LineChangeSet()
-        guard var line = documentLineTree.node(containingLocation: location) else {
+        guard packed.row(containingUTF16: location) != nil else {
             return LineChangeSet()
         }
-        var lineLocation = Int(line.location)
+        var line = self.line(containingCharacterAt: location)!
+        var lineLocation = line.location
         assert(location <= lineLocation + line.value)
         if location > lineLocation + line.data.length {
-            // Inserting in the middle of a delimiter.
             let otherChangeSetA = setLength(of: line, to: line.value - 1)
             changeSet.union(with: otherChangeSetA)
-            // Add new line.
             line = insertLine(ofLength: 1, after: line)
             changeSet.markLineInserted(line)
             let otherChangeSetB = setLength(of: line, to: 1, newLine: &line)
@@ -170,7 +215,7 @@ final class LineManager {
             var hasReachedEnd = false
             while !hasReachedEnd {
                 let lineBreakLocation = location + rangeOfNewLine.location + rangeOfNewLine.length
-                lineLocation = Int(line.location)
+                lineLocation = line.location
                 let lengthAfterInsertionPos = lineLocation + line.value - (location + lastDelimiterEnd)
                 let otherChangeSetA = setLength(of: line, to: lineBreakLocation - lineLocation, newLine: &line)
                 changeSet.union(with: otherChangeSetA)
@@ -186,13 +231,11 @@ final class LineManager {
                     hasReachedEnd = true
                 }
             }
-            // Insert rest of last delimiter.
             if lastDelimiterEnd != string.length {
                 let otherChangeSet = setLength(of: line, to: line.value + string.length - lastDelimiterEnd)
                 changeSet.union(with: otherChangeSet)
             }
         } else {
-            // No newline is being inserted. All the text is in a single line.
             let otherChangeSet = setLength(of: line, to: line.value + string.length)
             changeSet.union(with: otherChangeSet)
         }
@@ -209,40 +252,60 @@ final class LineManager {
     }
 
     func line(containingCharacterAt location: Int) -> DocumentLineNode? {
-        if location >= 0 && location <= Int(documentLineTree.nodeTotalValue) {
-            return documentLineTree.node(containingLocation: location)
-        } else {
+        guard let row = packed.row(containingUTF16: location) else {
             return nil
         }
+        return line(atRow: row)
     }
 
     func line(containingYOffset yOffset: CGFloat) -> DocumentLineNode? {
-        documentLineTree.node(containingLocation: yOffset,
-                              minimumValue: 0,
-                              valueKeyPath: \.data.lineHeight,
-                              totalValueKeyPath: \.data.totalLineHeight)
+        guard let row = packed.row(containingYOffset: yOffset) else {
+            return nil
+        }
+        return line(atRow: row)
     }
 
     func line(containingByteAt byteIndex: ByteCount) -> DocumentLineNode? {
-        documentLineTree.node(containingLocation: byteIndex,
-                              minimumValue: ByteCount(0),
-                              valueKeyPath: \.data.byteCount,
-                              totalValueKeyPath: \.data.nodeTotalByteCount)
+        guard let row = packed.row(containingByte: byteIndex) else {
+            return nil
+        }
+        return line(atRow: row)
     }
 
     func line(atRow row: Int) -> DocumentLineNode {
-        documentLineTree.node(atIndex: row)
+        let packedLine = packed.line(atRow: row)
+        if let existing = handles[packedLine.id] {
+            existing.row = row
+            refreshData(existing, row: row)
+            return existing
+        }
+        let location = packed.location(ofRow: row)
+        let data = packed.dataSnapshot(atRow: row, location: location, estimatedFallbackHeight: estimatedLineHeight)
+        let node = DocumentLineNode(
+            id: DocumentLineNodeID(value: packedLine.id),
+            row: row,
+            lineManager: self,
+            data: data
+        )
+        handles[packedLine.id] = node
+        return node
+    }
+
+    func location(ofRow row: Int) -> Int {
+        packed.location(ofRow: row)
+    }
+
+    func yPosition(ofRow row: Int) -> CGFloat {
+        packed.yPosition(ofRow: row)
     }
 
     @discardableResult
     func setHeight(of line: DocumentLineNode, to newHeight: CGFloat) -> Bool {
         if abs(newHeight - line.data.lineHeight) < CGFloat.ulpOfOne {
             return false
-        } else {
-            line.data.lineHeight = newHeight
-            documentLineTree.updateAfterChangingChildren(of: line)
-            return true
         }
+        line.data.lineHeight = newHeight
+        return packed.setHeight(row: line.row, to: newHeight)
     }
 
     func lines(in range: NSRange) -> [DocumentLineNode] {
@@ -250,9 +313,9 @@ final class LineManager {
             return []
         }
         var lines: [DocumentLineNode] = [firstLine]
-        if range.length > 0, let lastLine = line(containingCharacterAt: range.location + range.length), lastLine != firstLine {
-            let startLineIndex = firstLine.index + 1 // Skip the first line since we already have it
-            let endLineIndex = lastLine.index - 1 // Skip the last line since we already have it
+        if range.length > 0, let lastLine = line(containingCharacterAt: range.location + range.length), lastLine !== firstLine {
+            let startLineIndex = firstLine.index + 1
+            let endLineIndex = lastLine.index - 1
             if startLineIndex <= endLineIndex {
                 lines += (startLineIndex ... endLineIndex).map(line(atRow:))
             }
@@ -265,22 +328,43 @@ final class LineManager {
         if range.length == 0 {
             if let line = line(containingCharacterAt: range.lowerBound) {
                 return (line, line)
-            } else {
-                return nil
             }
-        } else if let startLine = line(containingCharacterAt: range.lowerBound), let endLine = line(containingCharacterAt: range.upperBound) {
-            return (startLine, endLine)
-        } else {
             return nil
+        } else if let startLine = line(containingCharacterAt: range.lowerBound),
+                  let endLine = line(containingCharacterAt: range.upperBound) {
+            return (startLine, endLine)
         }
+        return nil
     }
 
-    func createLineIterator() -> RedBlackTreeIterator<DocumentLineNodeID, Int, DocumentLineNodeData> {
-        RedBlackTreeIterator(tree: documentLineTree)
+    func createLineIterator() -> LineIterator {
+        LineIterator(lineManager: self)
     }
 }
 
 private extension LineManager {
+    private func finishRemoveAcrossLines(
+        startLine: DocumentLineNode,
+        startRow: Int,
+        endRow: Int,
+        charactersRemovedInStartLine: Int,
+        charactersLeftInEndLine: Int,
+        changeSet: LineChangeSet
+    ) -> LineChangeSet {
+        let linesToRemove = endRow - startRow
+        for _ in 0..<linesToRemove {
+            let row = startRow + 1
+            let removed = line(atRow: row)
+            changeSet.markLineRemoved(removed)
+            _ = packed.removeLine(atRow: row)
+            shiftHandlesAfterRemoval(atRow: row, removedID: removed.id.value)
+        }
+        let newLength = startLine.value - charactersRemovedInStartLine + charactersLeftInEndLine
+        let otherChangeSet = setLength(of: startLine, to: newLength)
+        changeSet.union(with: otherChangeSet)
+        return changeSet
+    }
+
     private func setLength(of line: DocumentLineNode, to newTotalLength: Int) -> LineChangeSet {
         var newLine: DocumentLineNode = line
         return setLength(of: line, to: newTotalLength, newLine: &newLine)
@@ -289,39 +373,38 @@ private extension LineManager {
     private func setLength(of line: DocumentLineNode, to newTotalLength: Int, newLine: inout DocumentLineNode) -> LineChangeSet {
         let changeSet = LineChangeSet()
         changeSet.markLineEdited(line)
-        // Byte count is a pure function of the UTF-16 length (String/NSString.byteCount is always
-        // `length * 2`), so it can be computed directly instead of materializing the line's
-        // substring just to measure it. This avoids an O(line length) allocation + copy on every
-        // edit.
         let newByteCount = ByteCount(newTotalLength * 2)
         if newTotalLength != line.value || newTotalLength != line.data.totalLength || newByteCount != line.data.byteCount {
-            line.value = newTotalLength
             line.data.totalLength = newTotalLength
             line.data.byteCount = newByteCount
-            documentLineTree.updateAfterChangingChildren(of: line)
+            packed.setLength(row: line.row, utf16Length: newTotalLength, delimiterLength: line.data.delimiterLength)
         }
-        // Determine new delimiter length.
         if newTotalLength == 0 {
             line.data.delimiterLength = 0
+            packed.setLength(row: line.row, utf16Length: 0, delimiterLength: 0)
         } else {
             let lastChar = getCharacter(at: Int(line.location) + newTotalLength - 1)
             if lastChar == Symbol.Character.carriageReturn {
                 line.data.delimiterLength = 1
+                packed.setLength(row: line.row, utf16Length: newTotalLength, delimiterLength: 1)
             } else if lastChar == Symbol.Character.lineFeed {
                 if newTotalLength >= 2 && getCharacter(at: Int(line.location) + newTotalLength - 2) == Symbol.Character.carriageReturn {
                     line.data.delimiterLength = 2
+                    packed.setLength(row: line.row, utf16Length: newTotalLength, delimiterLength: 2)
                 } else if newTotalLength == 1 && line.location > 0 && getCharacter(at: Int(line.location) - 1) == Symbol.Character.carriageReturn {
-                    // We need to join this line with the previous line.
                     let previousLine = line.previous
                     changeSet.markLineRemoved(line)
-                    documentLineTree.remove(line)
+                    _ = packed.removeLine(atRow: line.row)
+                    shiftHandlesAfterRemoval(atRow: line.row, removedID: line.id.value)
                     let otherChangeSet = setLength(of: previousLine, to: previousLine.value + 1, newLine: &newLine)
                     changeSet.union(with: otherChangeSet)
                 } else {
                     line.data.delimiterLength = 1
+                    packed.setLength(row: line.row, utf16Length: newTotalLength, delimiterLength: 1)
                 }
             } else {
                 line.data.delimiterLength = 0
+                packed.setLength(row: line.row, utf16Length: newTotalLength, delimiterLength: 0)
             }
         }
         newLine = line
@@ -330,49 +413,38 @@ private extension LineManager {
 
     @discardableResult
     private func insertLine(ofLength length: Int, after otherLine: DocumentLineNode) -> DocumentLineNode {
-        let data = DocumentLineNodeData(lineHeight: estimatedLineHeight)
-        let insertedLine = documentLineTree.insertNode(value: length, data: data, after: otherLine)
-        // See the comment in setLength(of:to:newLine:) — byteCount is derivable from the UTF-16
-        // length alone, no need to materialize the substring.
-        let byteCount = ByteCount(length * 2)
-        insertedLine.data.totalLength = length
-        insertedLine.data.byteCount = byteCount
-        insertedLine.data.nodeTotalByteCount = byteCount
-        insertedLine.data.node = insertedLine
-        // Call updateAfterChangingChildren(of:) to update the values of nodeTotalByteCount.
-        documentLineTree.updateAfterChangingChildren(of: insertedLine)
-        return insertedLine
+        let id = packed.insertLine(afterRow: otherLine.row, utf16Length: length, delimiterLength: 0)
+        shiftHandlesAfterInsert(atRow: otherLine.row + 1)
+        let inserted = line(atRow: otherLine.row + 1)
+        inserted.data.totalLength = length
+        inserted.data.byteCount = ByteCount(length * 2)
+        _ = id
+        return inserted
     }
 
     private func getCharacter(at location: Int) -> Character? {
         stringView.character(at: location)
     }
-}
 
-extension DocumentLineTree {
-    func yPosition(of node: DocumentLineNode) -> CGFloat {
-        var yPosition = node.left?.data.totalLineHeight ?? 0
-        var workingNode = node
-        while let parentNode = workingNode.parent {
-            if workingNode === workingNode.parent?.right {
-                if let leftNode = workingNode.parent?.left {
-                    yPosition += leftNode.data.totalLineHeight
-                }
-                yPosition += parentNode.data.lineHeight
-            }
-            workingNode = parentNode
+    private func refreshData(_ node: DocumentLineNode, row: Int) {
+        let packedLine = packed.line(atRow: row)
+        node.data.totalLength = Int(packedLine.utf16Length)
+        node.data.delimiterLength = Int(packedLine.delimiterLength)
+        node.data.lineHeight = CGFloat(packedLine.height)
+        node.data.byteCount = ByteCount(utf16Length: Int(packedLine.utf16Length))
+        node.data.cachedStartByte = packed.startByte(ofRow: row)
+    }
+
+    private func shiftHandlesAfterInsert(atRow row: Int) {
+        for handle in handles.values where handle.row >= row {
+            handle.row += 1
         }
-        return yPosition
-    }
-}
-
-extension DocumentLineNode {
-    var yPosition: CGFloat {
-        tree.yPosition(of: self)
     }
 
-    var range: ClosedRange<Int> {
-        let _location = location
-        return _location ... _location + data.totalLength
+    private func shiftHandlesAfterRemoval(atRow row: Int, removedID: UInt32) {
+        handles.removeValue(forKey: removedID)
+        for handle in handles.values where handle.row > row {
+            handle.row -= 1
+        }
     }
 }

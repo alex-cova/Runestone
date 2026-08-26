@@ -1,5 +1,5 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 
 /// Defines how a highlighted range is drawn in the text view.
 public enum HighlightStyle: Equatable {

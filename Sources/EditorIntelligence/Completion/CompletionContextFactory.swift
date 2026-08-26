@@ -8,7 +8,10 @@ import Foundation
 public func makeCompletionContext(document: Document, trigger: RequestTrigger) -> CompletionContext {
     let cursor = document.cursor
     let offset = cursor.position.utf16Offset
-    let (prefix, startOffset) = extractPrefixAndStart(before: offset, in: document.text)
+    let windowStart = max(0, offset - 256)
+    let source = document.substring(utf16Offset: windowStart, length: max(0, offset - windowStart))
+    let (prefix, localStart) = extractPrefixAndStart(before: (source as NSString).length, in: source)
+    let startOffset = windowStart + localStart
     let start = TextPosition(
         line: cursor.position.line,
         column: max(0, cursor.position.column - prefix.count),

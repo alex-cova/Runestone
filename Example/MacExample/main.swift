@@ -5,6 +5,7 @@ import TestTreeSitterLanguages
 /// Multi-tab, split-pane demo for the Runestone workbench module.
 @main
 struct MacExampleApp {
+    @MainActor
     static func main() {
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
@@ -14,6 +15,7 @@ struct MacExampleApp {
     }
 }
 
+@MainActor
 final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
     private var workbench = EditorWorkbench()
@@ -76,6 +78,12 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
 
         window.contentView = root
         window.makeKeyAndOrderFront(nil)
+
+        if let index = CommandLine.arguments.firstIndex(of: "--open"),
+           index + 1 < CommandLine.arguments.count {
+            let url = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+            Task { await self.openDocument(from: url) }
+        }
         NSApplication.shared.activate(ignoringOtherApps: true)
 
         Task {
@@ -92,6 +100,8 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
 
         let splitRight = NSButton(title: "Split Right", target: self, action: #selector(splitRight))
         splitRight.bezelStyle = .rounded
+        let openFile = NSButton(title: "Open…", target: self, action: #selector(openFile))
+        openFile.bezelStyle = .rounded
         let splitDown = NSButton(title: "Split Down", target: self, action: #selector(splitDown))
         splitDown.bezelStyle = .rounded
         let closePane = NSButton(title: "Close Pane", target: self, action: #selector(closeActivePane))
@@ -114,6 +124,7 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
         distractionFree.bezelStyle = .rounded
         distractionFree.setButtonType(.toggle)
 
+        stack.addArrangedSubview(openFile)
         stack.addArrangedSubview(splitRight)
         stack.addArrangedSubview(splitDown)
         stack.addArrangedSubview(closePane)
@@ -147,6 +158,35 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleDistractionFreeMode(_ sender: NSButton) {
         adapter.textView?.isDistractionFreeModeEnabled = sender.state == .on
+    }
+
+    @objc private func openFile() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.begin { [weak self] result in
+            guard result == .OK, let url = panel.url, let self else { return }
+            Task { await self.openDocument(from: url) }
+        }
+    }
+
+    private func openDocument(from url: URL) async {
+        do {
+            let language = url.pathExtension == "js" || url.pathExtension == "mjs" ? makeJavaScriptLanguage() : nil
+            let document = try await WorkbenchDocument.load(
+                contentsOf: url,
+                language: language,
+                languageIdentifier: language == nil ? nil : "javascript"
+            )
+            workbench.openDocument(document)
+            rebuildLayoutHosts()
+            activatePane(workbench.activePaneID)
+            await workspaceBridge.syncWorkbench(workbench)
+        } catch {
+            let alert = NSAlert(error: error)
+            alert.runModal()
+        }
     }
 
     @objc private func splitRight() {
@@ -231,6 +271,20 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
     ) {
         guard let document = pane.selectedDocument else { return }
         if reloadOnlyIfNeeded, host.loadedDocumentID == document.id {
+            return
+        }
+        if let state = document.pendingState {
+            document.pendingState = nil
+            host.applyGate.bump()
+            host.textView.setState(state)
+            host.textView.selectedRange = document.selectedRange
+            if document.scrollOffset != .zero {
+                host.textView.contentOffset = document.scrollOffset
+            }
+            host.loadedDocumentID = document.id
+            if pane.id == workbench.activePaneID {
+                adapter.refreshCachedDocuments()
+            }
             return
         }
         let generation = host.applyGate.bump()

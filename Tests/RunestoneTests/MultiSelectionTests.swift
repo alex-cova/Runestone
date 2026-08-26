@@ -2,6 +2,7 @@ import AppKit
 import XCTest
 @testable import Runestone
 
+@MainActor
 final class MultiSelectionTests: XCTestCase {
     func testInsertTextAtMultipleCarets() {
         let textView = makeFocusedTextView(text: "ab ab ab")

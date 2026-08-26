@@ -2,10 +2,10 @@ import Foundation
 import TreeSitter
 
 protocol TreeSitterLanguageModeDelegate: AnyObject {
-    func treeSitterLanguageMode(_ languageMode: TreeSitterInternalLanguageMode, bytesAt byteIndex: ByteCount) -> TreeSitterTextProviderResult?
+    nonisolated func treeSitterLanguageMode(_ languageMode: TreeSitterInternalLanguageMode, bytesAt byteIndex: ByteCount) -> TreeSitterTextProviderResult?
 }
 
-final class TreeSitterInternalLanguageMode: InternalLanguageMode {
+final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sendable {
     weak var delegate: TreeSitterLanguageModeDelegate?
     var canHighlight: Bool {
         rootLanguageLayer.canHighlight
@@ -17,12 +17,21 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode {
     private let rootLanguageLayer: TreeSitterLanguageLayer
     private let operationQueue = OperationQueue()
     private let parseLock = NSLock()
+    private var hasCompletedInitialParse = false
+    /// True while a background parse is running *outside* `parseLock`. Edits bump `parseEpoch`
+    /// instead of waiting for that work to finish.
+    private var parseInFlight = false
+    /// Invalidates an in-flight parse so it cannot publish a tree built against a stale buffer.
+    private var parseEpoch: UInt = 0
+    /// UTF-16 window currently fed to `ts_parser_set_included_ranges`. `nil` means a full-document tree.
+    private(set) var parsedUTF16Range: NSRange?
 
     init(language: TreeSitterInternalLanguage, languageProvider: TreeSitterLanguageProvider?, stringView: StringView, lineManager: LineManager) {
         self.stringView = stringView
         self.lineManager = lineManager
         operationQueue.name = "TreeSitterLanguageMode"
         operationQueue.qualityOfService = .default
+        operationQueue.maxConcurrentOperationCount = 1
         parser = TreeSitterParser(encoding: .treeSitterUTF16)
         rootLanguageLayer = TreeSitterLanguageLayer(
             language: language,
@@ -33,35 +42,147 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode {
         parser.delegate = self
     }
 
+    var isSyntaxTreeReady: Bool {
+        parseLock.withLock { hasCompletedInitialParse }
+    }
+
     deinit {
         operationQueue.cancelAllOperations()
     }
 
-    func parse(_ text: NSString) {
+    func cancelParse() {
+        operationQueue.cancelAllOperations()
+    }
+
+    func invalidateSyntaxTree() {
+        cancelParse()
         parseLock.withLock {
-            rootLanguageLayer.parse(text)
+            parseEpoch += 1
+            hasCompletedInitialParse = false
+            parsedUTF16Range = nil
+            if !parseInFlight {
+                rootLanguageLayer.invalidateTree()
+            }
         }
     }
 
-    func parse(_ text: NSString, completion: @escaping ((Bool) -> Void)) {
+    func parse(_ text: NSString) {
+        parseFromBuffer()
+    }
+
+    func parseFromBuffer() {
+        parseLock.withLock {
+            rootLanguageLayer.parseUsingReader()
+            hasCompletedInitialParse = true
+            parsedUTF16Range = NSRange(location: 0, length: stringView.length)
+        }
+    }
+
+    func parse(_ text: NSString, completion: @escaping @MainActor @Sendable (Bool) -> Void) {
         operationQueue.cancelAllOperations()
         let operation = BlockOperation()
         operation.addExecutionBlock { [weak operation, weak self] in
-            if let self = self, let operation = operation, !operation.isCancelled {
-                self.parse(text)
-                DispatchQueue.main.async {
-                    completion(!operation.isCancelled)
-                }
-            } else {
+            guard let self = self, let operation = operation, !operation.isCancelled else {
                 DispatchQueue.main.async {
                     completion(false)
                 }
+                return
+            }
+            self.parseUsingReader(
+                coveringUTF16Range: NSRange(location: 0, length: self.stringView.length),
+                isCancelled: { operation.isCancelled }
+            )
+            DispatchQueue.main.async {
+                completion(!operation.isCancelled && self.isSyntaxTreeReady)
             }
         }
         operationQueue.addOperation(operation)
     }
 
+    func parse(coveringUTF16Range range: NSRange, completion: @escaping @MainActor @Sendable (Bool) -> Void) {
+        operationQueue.cancelAllOperations()
+        let operation = BlockOperation()
+        operation.addExecutionBlock { [weak operation, weak self] in
+            guard let self = self, let operation = operation, !operation.isCancelled else {
+                DispatchQueue.main.async {
+                    completion(false)
+                }
+                return
+            }
+            self.parseUsingReader(coveringUTF16Range: range, isCancelled: { operation.isCancelled })
+            DispatchQueue.main.async {
+                completion(!operation.isCancelled && self.isSyntaxTreeReady)
+            }
+        }
+        operationQueue.addOperation(operation)
+    }
+
+    func parsedRangeContains(_ utf16Range: NSRange) -> Bool {
+        parseLock.withLock {
+            guard let parsedUTF16Range else {
+                return false
+            }
+            return parsedUTF16Range.containsUTF16Range(utf16Range)
+        }
+    }
+
+    private func parse(_ text: NSString, isCancelled: (() -> Bool)?) {
+        guard isCancelled != nil else {
+            parseLock.withLock {
+                rootLanguageLayer.parse(text)
+                hasCompletedInitialParse = true
+                parsedUTF16Range = NSRange(location: 0, length: text.length)
+            }
+            return
+        }
+        runBackgroundParse(isCancelled: isCancelled) {
+            self.rootLanguageLayer.parse(text)
+        } publish: {
+            NSRange(location: 0, length: text.length)
+        }
+    }
+
+    private func parseUsingReader(coveringUTF16Range range: NSRange, isCancelled: (() -> Bool)?) {
+        runBackgroundParse(isCancelled: isCancelled) {
+            self.rootLanguageLayer.setRootIncludedUTF16Range(range, stringLength: self.stringView.length)
+            self.rootLanguageLayer.parseUsingReader()
+        } publish: {
+            range
+        }
+    }
+
+    /// Runs tree-sitter off `parseLock` so a keystroke can invalidate the work (via `parseEpoch`)
+    /// instead of waiting for it. The tree is only published if the epoch still matches.
+    private func runBackgroundParse(
+        isCancelled: (() -> Bool)?,
+        work: () -> Void,
+        publish: () -> NSRange
+    ) {
+        parseLock.lock()
+        let epoch = parseEpoch
+        parser.shouldCancel = isCancelled
+        parseInFlight = true
+        parseLock.unlock()
+
+        work()
+
+        parseLock.lock()
+        parseInFlight = false
+        parser.shouldCancel = nil
+        if isCancelled?() == true || epoch != parseEpoch {
+            parser.reset()
+            rootLanguageLayer.invalidateTree()
+            hasCompletedInitialParse = false
+            parsedUTF16Range = nil
+        } else {
+            hasCompletedInitialParse = true
+            parsedUTF16Range = publish()
+        }
+        parseLock.unlock()
+    }
+
     func textDidChange(_ change: TextChange) -> LineChangeSet {
+        cancelParse()
         let bytesRemoved = change.byteRange.length
         let bytesAdded = change.bytesAdded
         let edit = TreeSitterInputEdit(
@@ -76,13 +197,38 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode {
         // TreeSitterLanguageLayer tree, so they must be mutually exclusive — otherwise this is a
         // data race on the `tree` property itself, not just a logically-stale read.
         return parseLock.withLock {
-            rootLanguageLayer.apply(edit)
+            if parseInFlight || rootLanguageLayer.tree == nil {
+                // Do not wait for the in-flight parse: bump the epoch so its result is discarded
+                // and let the caller reschedule against the edited buffer.
+                parseEpoch += 1
+                hasCompletedInitialParse = false
+                if rootLanguageLayer.tree == nil {
+                    parsedUTF16Range = nil
+                }
+                return LineChangeSet()
+            }
+            if var range = parsedUTF16Range {
+                range = ViewportParseWindow.shift(
+                    range,
+                    utf16Location: change.byteRange.location.utf16Length,
+                    oldLength: change.byteRange.length.utf16Length,
+                    newLength: change.bytesAdded.utf16Length
+                )
+                let stringLength = stringView.length
+                range = NSIntersectionRange(range, NSRange(location: 0, length: stringLength))
+                parsedUTF16Range = range
+                rootLanguageLayer.setRootIncludedUTF16Range(range, stringLength: stringLength)
+            }
+            return rootLanguageLayer.apply(edit)
         }
     }
 
     func captures(in range: ByteRange) -> [TreeSitterCapture] {
         parseLock.withLock {
-            rootLanguageLayer.captures(in: range)
+            if parseInFlight {
+                return []
+            }
+            return rootLanguageLayer.captures(in: range)
         }
     }
 
@@ -119,6 +265,14 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode {
     }
 
     func syntaxNode(at linePosition: LinePosition) -> SyntaxNode? {
+        let parsed = parseLock.withLock { parseInFlight ? nil : parsedUTF16Range }
+        if let parsed, parsed.length < stringView.length {
+            let line = lineManager.line(atRow: linePosition.row)
+            let location = Int(line.location) + linePosition.column
+            if !NSLocationInRange(location, parsed) {
+                return nil
+            }
+        }
         if let node = rootLanguageLayer.layerAndNode(at: linePosition)?.node, let type = node.type {
             let startLocation = TextLocation(LinePosition(node.startPoint))
             let endLocation = TextLocation(LinePosition(node.endPoint))
@@ -144,6 +298,22 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode {
 
 extension TreeSitterInternalLanguageMode: TreeSitterParserDelegate {
     func parser(_ parser: TreeSitterParser, bytesAt byteIndex: ByteCount) -> TreeSitterTextProviderResult? {
-        delegate?.treeSitterLanguageMode(self, bytesAt: byteIndex)
+        if let result = delegate?.treeSitterLanguageMode(self, bytesAt: byteIndex) {
+            return result
+        }
+        return readBytes(at: byteIndex)
+    }
+
+    private func readBytes(at byteIndex: ByteCount) -> TreeSitterTextProviderResult? {
+        guard byteIndex.value >= 0 && byteIndex < stringView.byteCount else {
+            return nil
+        }
+        let targetByteCount: ByteCount = 4 * 1_024
+        let endByte = min(byteIndex + targetByteCount, stringView.byteCount)
+        let byteRange = ByteRange(from: byteIndex, to: endByte)
+        if let result = stringView.bytes(in: byteRange) {
+            return TreeSitterTextProviderResult(bytes: result.bytes, length: UInt32(result.length.value))
+        }
+        return nil
     }
 }

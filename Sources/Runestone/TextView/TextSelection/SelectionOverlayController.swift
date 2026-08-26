@@ -1,6 +1,7 @@
-import AppKit
+@preconcurrency import AppKit
 import Foundation
 
+@MainActor
 final class SelectionOverlayController {
     private let textInputView: TextInputView
     private let caretRectService: CaretRectService

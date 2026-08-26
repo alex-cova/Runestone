@@ -1,10 +1,11 @@
-import AppKit
+@preconcurrency import AppKit
 import Foundation
 
 public enum UIGestureRecognizerState: Int {
     case possible, began, changed, ended, cancelled, failed
 }
 
+@MainActor
 public protocol UIGestureRecognizerDelegate: AnyObject {
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool

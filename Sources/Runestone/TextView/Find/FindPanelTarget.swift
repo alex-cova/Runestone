@@ -1,6 +1,7 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 
+@MainActor
 protocol FindPanelTarget: AnyObject {
     var findPanelTargetView: NSView { get }
     var findSelection: NSRange? { get }

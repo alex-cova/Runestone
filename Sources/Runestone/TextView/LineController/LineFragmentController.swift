@@ -1,5 +1,5 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 
 protocol LineFragmentControllerDelegate: AnyObject {
     func string(in controller: LineFragmentController) -> String?

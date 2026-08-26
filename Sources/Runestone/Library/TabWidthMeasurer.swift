@@ -1,5 +1,5 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 
 enum TabWidthMeasurer {
     static func tabWidth(tabLength: Int, font: UIFont) -> CGFloat {

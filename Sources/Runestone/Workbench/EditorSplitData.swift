@@ -1,7 +1,7 @@
 import Foundation
 
 /// Children of a horizontal or vertical split in an ``EditorLayout`` tree.
-public final class EditorSplitData {
+public final class EditorSplitData: @unchecked Sendable {
     public let axis: EditorLayoutAxis
     public var children: [EditorLayout]
 

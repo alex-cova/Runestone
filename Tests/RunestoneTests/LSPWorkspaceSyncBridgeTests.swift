@@ -60,6 +60,57 @@ final class LSPWorkspaceSyncBridgeTests: XCTestCase {
         }
         XCTAssertEqual(closed.value, document.id)
     }
+
+    func testRangedEditUsesIncrementalSyncInsteadOfFullChange() async {
+        let incremental = LockedBox<[LSPDocumentSyncService.DocumentChange]>()
+        let fullChanges = LockedBox<Int>(0)
+        let barrier = HandlerBarrier(expected: 2)
+
+        let handlers = LSPDocumentSyncHandlers(
+            onIncrementalChanges: { changes in
+                incremental.value = changes
+                await barrier.signal()
+            },
+            onOpen: { _, _, _ in
+                await barrier.signal()
+            },
+            onFullChange: { _, _ in
+                fullChanges.value = (fullChanges.value ?? 0) + 1
+            }
+        )
+
+        let bridge = LSPWorkspaceSyncBridge(
+            handlers: handlers,
+            batchInterval: 0.05,
+            languageResolver: { _ in "swift" }
+        )
+        let workspace = Workspace()
+        await bridge.connect(to: workspace)
+
+        let document = makeDocument(text: "let a = 1")
+        async let handlersComplete = barrier.wait()
+        await workspace.openDocument(document)
+
+        let start = TextPosition(line: 0, column: 8, utf16Offset: 8)
+        let end = TextPosition(line: 0, column: 9, utf16Offset: 9)
+        let edit = TextEdit(range: TextRange(start: start, end: end), replacement: "2")
+        await workspace.handleEditorEvent(
+            .documentEdited(
+                document.id,
+                [edit],
+                newSnapshot: TextSnapshot(version: 1, text: "let a = 2")
+            )
+        )
+        await handlersComplete
+
+        XCTAssertEqual(fullChanges.value, 0)
+        let changes = incremental.value ?? []
+        XCTAssertEqual(changes.count, 1)
+        XCTAssertEqual(changes.first?.text, "2")
+        XCTAssertEqual(changes.first?.range.start.character, 8)
+        XCTAssertEqual(changes.first?.range.end.character, 9)
+        XCTAssertEqual(changes.first?.version, 2)
+    }
 }
 
 private actor HandlerBarrier {

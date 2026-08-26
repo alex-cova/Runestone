@@ -1,6 +1,7 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 
+@MainActor
 final class PageGuideController {
     let guideView = PageGuideView()
     var font: UIFont = .systemFont(ofSize: 14) {

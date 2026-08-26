@@ -51,6 +51,8 @@ public struct WorkspaceSearchResult: Sendable, Hashable, Identifiable {
 
 /// Searches text across all open documents in a workspace.
 public actor WorkspaceSearchEngine {
+    private static let chunkUTF16 = 64 * 1024
+
     public init() {}
 
     public func search(_ query: WorkspaceSearchQuery, in workspace: Workspace) async -> [WorkspaceSearchResult] {
@@ -71,8 +73,8 @@ public actor WorkspaceSearchEngine {
     }
 
     private func search(_ query: WorkspaceSearchQuery, in document: Document) -> [WorkspaceSearchResult] {
-        let text = document.text as NSString
-        guard text.length > 0 else {
+        let length = document.contentSnapshot.utf16Length
+        guard length > 0 else {
             return []
         }
         let pattern = regexPattern(for: query)
@@ -80,30 +82,62 @@ public actor WorkspaceSearchEngine {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else {
             return []
         }
-        let matches = regex.matches(in: text as String, range: NSRange(location: 0, length: text.length))
-        return matches.map { match in
-            let lineRange = text.lineRange(for: match.range)
-            let lineNumber = text.lineNumber(for: lineRange.location)
-            let preview = text.substring(with: lineRange).trimmingCharacters(in: .newlines)
-            let start = TextPosition(
-                line: lineNumber,
-                column: match.range.location - lineRange.location,
-                utf16Offset: match.range.location
-            )
-            let end = TextPosition(
-                line: lineNumber,
-                column: match.range.location + match.range.length - lineRange.location,
-                utf16Offset: match.range.location + match.range.length
-            )
-            return WorkspaceSearchResult(
-                documentID: document.id,
-                documentName: document.displayName,
-                line: lineNumber,
-                column: start.column,
-                preview: preview,
-                range: TextRange(start: start, end: end)
-            )
+        let overlap = max((query.text as NSString).length + 16, 256)
+        var results: [WorkspaceSearchResult] = []
+        var offset = 0
+        var lineNumber = 0
+        var consumedThrough = 0
+        while offset < length {
+            let take = min(Self.chunkUTF16, length - offset)
+            let slice = document.substring(utf16Offset: offset, length: take) as NSString
+            let matches = regex.matches(in: slice as String, range: NSRange(location: 0, length: slice.length))
+            for match in matches {
+                let absolute = match.range.location + offset
+                if absolute < consumedThrough {
+                    continue
+                }
+                let lineRange = slice.lineRange(for: match.range)
+                let newlinesBefore = newlineCount(in: slice, upTo: match.range.location)
+                let startColumn = match.range.location - lineRange.location
+                let start = TextPosition(
+                    line: lineNumber + newlinesBefore,
+                    column: startColumn,
+                    utf16Offset: absolute
+                )
+                let end = TextPosition(
+                    line: lineNumber + newlinesBefore,
+                    column: startColumn + match.range.length,
+                    utf16Offset: absolute + match.range.length
+                )
+                let preview = slice.substring(with: lineRange).trimmingCharacters(in: .newlines)
+                results.append(WorkspaceSearchResult(
+                    documentID: document.id,
+                    documentName: document.displayName,
+                    line: start.line,
+                    column: start.column,
+                    preview: preview,
+                    range: TextRange(start: start, end: end)
+                ))
+            }
+            let unique = offset + take < length ? max(take - overlap, 1) : take
+            lineNumber += newlineCount(in: slice, upTo: unique)
+            consumedThrough = offset + unique
+            offset += unique
         }
+        return results
+    }
+
+    private func newlineCount(in text: NSString, upTo limit: Int) -> Int {
+        var line = 0
+        var index = 0
+        let end = min(limit, text.length)
+        while index < end {
+            if text.character(at: index) == 10 {
+                line += 1
+            }
+            index += 1
+        }
+        return line
     }
 
     private func regexPattern(for query: WorkspaceSearchQuery) -> String {
@@ -115,19 +149,5 @@ public actor WorkspaceSearchEngine {
             return "\\b\(escaped)\\b"
         }
         return escaped
-    }
-}
-
-private extension NSString {
-    func lineNumber(for location: Int) -> Int {
-        var line = 0
-        var index = 0
-        while index < location, index < length {
-            if character(at: index) == 10 {
-                line += 1
-            }
-            index += 1
-        }
-        return line
     }
 }

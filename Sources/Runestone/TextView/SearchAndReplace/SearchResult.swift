@@ -1,7 +1,7 @@
 import Foundation
 
 /// A match returned by performing a search query.
-public struct SearchResult: Hashable, Equatable {
+public struct SearchResult: Hashable, Equatable, Sendable {
     /// Unique identifier of the result.
     public let id: String = UUID().uuidString
     /// Range of the matched text.

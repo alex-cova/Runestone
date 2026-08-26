@@ -1,5 +1,5 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 
 final class CaretRectService {
     var stringView: StringView
@@ -30,7 +30,7 @@ final class CaretRectService {
 
     func caretRect(at location: Int, allowMovingCaretToNextLineFragment: Bool) -> CGRect {
         let adjustedLocation = foldingController?.visibleCaretLocation(for: location) ?? location
-        let safeLocation = min(max(adjustedLocation, 0), stringView.string.length)
+        let safeLocation = min(max(adjustedLocation, 0), stringView.length)
         guard let line = lineManager.line(containingCharacterAt: safeLocation) else {
             return CGRect(x: leadingLineSpacing, y: textContainerInset.top, width: 0, height: 0)
         }

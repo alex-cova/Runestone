@@ -53,6 +53,21 @@ final class WorkbenchTests: XCTestCase {
         XCTAssertEqual(bench.allDocuments().count, 1)
     }
 
+    func testWorkbenchDocumentLoadReusesPendingState() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try "line one\nline two\n".write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let document = try await WorkbenchDocument.load(contentsOf: url)
+        XCTAssertEqual(document.displayName, url.lastPathComponent)
+        XCTAssertTrue(document.isFileBacked)
+        XCTAssertEqual(document.text, "")
+        XCTAssertEqual(document.pendingState?.stringView.string as String?, "line one\nline two\n")
+        XCTAssertEqual(document.url, url)
+        XCTAssertNotNil(document.pendingState)
+        XCTAssertEqual(document.pendingState?.parsePolicy, .viewport)
+        XCTAssertGreaterThan(document.pendingState?.lineManager.lineCount ?? 0, 1)
+    }
+
     func testWorkbenchAdapterReportsOpenDocuments() {
         let bench = EditorWorkbench()
         let doc = WorkbenchDocument(displayName: "one", text: "hello")

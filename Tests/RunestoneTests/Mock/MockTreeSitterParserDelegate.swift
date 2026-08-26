@@ -14,7 +14,7 @@ final class MockTreeSitterParserDelegate: TreeSitterParserDelegate {
     private let stringView = StringView()
 
     func parser(_ parser: TreeSitterParser, bytesAt byteIndex: ByteCount) -> TreeSitterTextProviderResult? {
-        let maxLength = stringView.string.byteCount - byteIndex
+        let maxLength = stringView.byteCount - byteIndex
         let length = min(2_048, maxLength)
         let byteRange = ByteRange(location: byteIndex, length: length)
         if let result = stringView.bytes(in: byteRange) {

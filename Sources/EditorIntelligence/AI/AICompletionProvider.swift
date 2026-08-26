@@ -33,6 +33,6 @@ public actor AICompletionProvider: CompletionProvider {
     }
 
     private func defaultPrompt(for context: CompletionContext) -> String {
-        "Complete the following code at cursor position \(context.cursor.position):\n\n\(context.document.text)"
+        "Complete the following code at cursor position \(context.cursor.position):\n\n\(context.document.textAroundCursor())"
     }
 }

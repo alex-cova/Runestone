@@ -1,5 +1,5 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 
 final class LineNumberView: UIView, ReusableView {
     var textColor: UIColor {

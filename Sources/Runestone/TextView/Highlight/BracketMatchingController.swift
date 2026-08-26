@@ -18,7 +18,7 @@ final class BracketMatchingController {
             return
         }
         emphasisManager.removeEmphases(for: EmphasisGroup.brackets)
-        guard location > 0, location <= stringView.string.length else {
+        guard location > 0, location <= stringView.length else {
             return
         }
         guard let precedingCharacter = stringView.substring(in: NSRange(location: location - 1, length: 1)) else {
@@ -40,7 +40,7 @@ final class BracketMatchingController {
 
 private extension BracketMatchingController {
     private func emphasizeForward(open: String, close: String, caretLocation: Int, style: BracketPairEmphasis) {
-        let limit = min(caretLocation + searchLimit, stringView.string.length)
+        let limit = min(caretLocation + searchLimit, stringView.length)
         guard let matchLocation = findClosingPair(close: close, open: open, from: caretLocation, limit: limit, reverse: false) else {
             return
         }
@@ -97,7 +97,7 @@ private extension BracketMatchingController {
         }
         var closeCount = 0
         var matchLocation: Int?
-        stringView.string.enumerateSubstrings(in: searchRange, options: options) { substring, range, _, stop in
+        stringView.enumerateSubstrings(in: searchRange, options: options) { substring, range, _, stop in
             if substring == close {
                 closeCount += 1
             } else if substring == open {

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Back/forward stack of selected document IDs (most recent at index 0).
-public final class EditorTabHistory {
+public final class EditorTabHistory: @unchecked Sendable {
     private var entries: [UUID] = []
     private var offset = 0
     private var suppressRecording = false

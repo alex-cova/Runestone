@@ -4,7 +4,10 @@ import Foundation
 ///
 /// Producers call `send(_:)` to broadcast events. Consumers iterate over the `events` stream.
 /// The bus supports multiple concurrent subscribers and delivers events in FIFO order.
-public final class EventBus<Event: Sendable> {
+///
+/// Continuations are guarded by `lock`. `@unchecked Sendable` lets actor-isolated owners expose
+/// the bus as `nonisolated let` without hopping for subscribe/send.
+public final class EventBus<Event: Sendable>: @unchecked Sendable {
     private var continuations: [AsyncStream<Event>.Continuation] = []
     private let lock = NSLock()
 

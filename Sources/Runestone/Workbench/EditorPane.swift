@@ -1,7 +1,7 @@
 import Foundation
 
 /// One editor pane's tab group (tabs, selection, preview tab, navigation history).
-public final class EditorPane: Identifiable {
+public final class EditorPane: Identifiable, @unchecked Sendable {
     public let id: UUID
     public var documents: [WorkbenchDocument]
     public var selectedDocumentID: UUID?

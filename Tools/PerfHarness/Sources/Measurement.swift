@@ -58,7 +58,7 @@ enum Measurement {
 
 /// Minimal CSV-row emitter so results can be piped into a spreadsheet or plotting script.
 enum ResultLog {
-    static var didPrintHeader = false
+    nonisolated(unsafe) static var didPrintHeader = false
 
     static func row(_ metric: String, file: String, sizeBytes: UInt64, seconds: Double, extra: String = "") {
         if !didPrintHeader {

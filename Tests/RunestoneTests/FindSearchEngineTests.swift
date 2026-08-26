@@ -140,6 +140,55 @@ final class FindSearchEngineTests: XCTestCase {
         XCTAssertThrowsError(try FindSearchEngine.replaceAll(options: options, in: "text", replacement: "x"))
     }
 
+    func testReplaceAllMatchesLiteralReturnsPerMatchRanges() throws {
+        let options = FindSearchOptions(query: "foo")
+        let matches = try FindSearchEngine.replaceAllMatches(options: options, in: "foo bar foo", replacement: "baz")
+        XCTAssertEqual(matches, [
+            FindReplaceMatch(range: NSRange(location: 0, length: 3), replacementText: "baz"),
+            FindReplaceMatch(range: NSRange(location: 8, length: 3), replacementText: "baz")
+        ])
+    }
+
+    func testReplaceAllMatchesExpandsVSCodeCaptureGroups() throws {
+        let options = FindSearchOptions(query: "(\\w+)@(\\w+)", useRegex: true)
+        let matches = try FindSearchEngine.replaceAllMatches(
+            options: options,
+            in: "user@host",
+            replacement: "$2:$1"
+        )
+        XCTAssertEqual(matches, [
+            FindReplaceMatch(range: NSRange(location: 0, length: 9), replacementText: "host:user")
+        ])
+    }
+
+    func testReplaceAllMatchesAppliesUppercaseModifier() throws {
+        let options = FindSearchOptions(query: "hello (world)", useRegex: true)
+        let matches = try FindSearchEngine.replaceAllMatches(
+            options: options,
+            in: "hello world",
+            replacement: #"\u$1"#
+        )
+        XCTAssertEqual(matches, [
+            FindReplaceMatch(range: NSRange(location: 0, length: 11), replacementText: "World")
+        ])
+    }
+
+    func testReplaceAllMatchesStopsScanningOnceCancelled() async {
+        let text = String(repeating: "needle ", count: 100_000)
+        let options = FindSearchOptions(query: "needle")
+        let task = Task {
+            try FindSearchEngine.replaceAllMatches(options: options, in: text, replacement: "x")
+        }
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("cancelled replace-all should throw CancellationError")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
     // MARK: - SearchQuery bridging
 
     func testFindSearchOptionsFromSearchQueryMapsFullWordAndRegularExpression() {

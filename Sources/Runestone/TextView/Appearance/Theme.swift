@@ -1,5 +1,5 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 
 /// Fonts and colors to be used by a `TextView`.
 public protocol Theme: AnyObject {

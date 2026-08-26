@@ -30,6 +30,11 @@ public actor IndexingService {
 
     /// Manually index a single document. Useful for seeding the index outside of workspace events.
     public func indexDocument(_ document: Document) async {
+        let signpost = EditorIntelligenceSignposts.performance.beginInterval("IndexingService.indexDocument")
+        defer { EditorIntelligenceSignposts.performance.endInterval("IndexingService.indexDocument", signpost) }
+        if document.contentSnapshot.isElided {
+            return
+        }
         let tree = await parser.parse(document: document)
         var symbols = tree.symbols
         let wordSymbols = tree.words.map { word in
@@ -57,6 +62,8 @@ public actor IndexingService {
     private func handleWorkspaceEvent(_ event: WorkspaceEvent) async {
         switch event {
         case .documentOpened(let document), .documentChanged(let document):
+            await indexDocument(document)
+        case .documentEdited(let document, _):
             await indexDocument(document)
         case .documentClosed(let documentID):
             await index.remove(documentID: documentID)

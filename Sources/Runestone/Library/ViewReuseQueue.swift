@@ -1,6 +1,7 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 
+@MainActor
 protocol ReusableView {
     func prepareForReuse()
 }

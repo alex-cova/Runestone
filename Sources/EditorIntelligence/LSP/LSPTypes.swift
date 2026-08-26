@@ -25,6 +25,13 @@ public struct LSPRange: Sendable, Hashable, CustomStringConvertible {
         self.end = end
     }
 
+    public init(_ range: TextRange) {
+        self.init(
+            start: LSPPosition(line: range.start.line, character: range.start.column),
+            end: LSPPosition(line: range.end.line, character: range.end.column)
+        )
+    }
+
     public var description: String {
         "\(start)-\(end)"
     }

@@ -163,6 +163,18 @@ final class FindPanelControllerTests: XCTestCase {
         XCTAssertEqual(target.text as String, "BAZ bar BAZ")
     }
 
+    func testReplaceAllExpandsRegexCaptureGroups() async {
+        let target = FakeFindTarget(text: "user@host other@box")
+        let controller = FindPanelController(target: target)
+        controller.panelView.onUsesRegularExpressionChanged?(true)
+        controller.show(initialQuery: #"(\w+)@(\w+)"#)
+        await waitForImmediateSearch()
+        controller.panelView.replaceField.stringValue = "$2:$1"
+
+        controller.panelView.onReplaceAll?()
+        XCTAssertEqual(target.text as String, "host:user box:other")
+    }
+
     func testHidingCancelsInFlightSearch() async {
         let target = FakeFindTarget(text: "needle hay needle")
         let controller = FindPanelController(target: target)

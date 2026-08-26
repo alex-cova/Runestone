@@ -1,6 +1,6 @@
 import Foundation
 import CoreText
-import AppKit
+@preconcurrency import AppKit
 
 protocol LineFragmentRendererDelegate: AnyObject {
     func string(in lineFragmentRenderer: LineFragmentRenderer) -> String?

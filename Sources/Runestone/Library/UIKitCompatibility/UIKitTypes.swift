@@ -1,4 +1,4 @@
-import AppKit
+@preconcurrency import AppKit
 import Foundation
 
 public typealias UIColor = NSColor
@@ -17,7 +17,7 @@ extension NSEdgeInsets: @retroactive Equatable {
     }
 }
 
-public struct RectCorner: OptionSet {
+public struct RectCorner: OptionSet, Sendable {
     public let rawValue: Int
     public init(rawValue: Int) { self.rawValue = rawValue }
     public static let topLeft = RectCorner(rawValue: 1 << 0)
@@ -56,8 +56,8 @@ public enum UIKeyboardHIDUsage: UInt {
     case keyboardEscape = 0x29
 }
 
-public struct UITextSearchOptions {
-    public enum WordMatchMethod { case contains, startsWith, fullWord }
+public struct UITextSearchOptions: Sendable {
+    public enum WordMatchMethod: Sendable { case contains, startsWith, fullWord }
     public var wordMatchMethod: WordMatchMethod = .contains
     public var stringCompareOptions: NSString.CompareOptions = []
     public init() {}

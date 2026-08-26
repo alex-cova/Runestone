@@ -1,5 +1,5 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 
 /// How matching bracket pairs are emphasized in the editor.
 public enum BracketPairEmphasis: Equatable {

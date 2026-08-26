@@ -12,7 +12,7 @@ public enum FileSystemEvent: Hashable, Sendable {
 /// Implementations are platform-specific. The bundled `PollingFileSystemWatcher` is a simple
 /// polling-based implementation suitable for the foundation; it should be replaced with a native
 /// FSEvents/DispatchSource watcher as the platform matures.
-public protocol FileSystemWatcher: AnyObject {
+public protocol FileSystemWatcher: AnyObject, Sendable {
     var events: AsyncStream<FileSystemEvent> { get }
     func start() async
     func stop() async

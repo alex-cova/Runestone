@@ -1,4 +1,4 @@
-import AppKit
+@preconcurrency import AppKit
 import EditorIntelligence
 
 /// Horizontal breadcrumb bar showing enclosing symbols at the cursor.

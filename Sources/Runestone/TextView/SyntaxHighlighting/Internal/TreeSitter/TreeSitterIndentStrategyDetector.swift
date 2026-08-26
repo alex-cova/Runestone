@@ -66,7 +66,7 @@ private extension TreeSitterIndentStrategyDetector {
         var range = NSRange(location: lineLocation, length: 1)
         var character = stringView.substring(in: range)
         var spaceCount = 0
-        let stringLength = stringView.string.length
+        let stringLength = stringView.length
         while spaceCount < line.data.totalLength
                 && character == Symbol.space
                 && spaceCount < lowestSpaceCount

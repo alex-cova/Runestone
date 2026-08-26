@@ -1,11 +1,13 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 // swiftlint:disable file_length
 
+@MainActor
 protocol LayoutManagerDelegate: AnyObject {
     func layoutManager(_ layoutManager: LayoutManager, didProposeContentOffsetAdjustment contentOffsetAdjustment: CGPoint)
 }
 
+@MainActor
 final class LayoutManager {
     weak var delegate: LayoutManagerDelegate?
     weak var gutterParentView: UIView? {
@@ -306,7 +308,7 @@ extension LayoutManager {
             if adjustedPoint.y >= lastLine.yPosition, let lineController = lineControllerStorage[lastLine.id] {
                 return closestIndex(to: adjustedPoint, in: lineController)
             } else {
-                return stringView.string.length
+                return stringView.length
             }
         }
     }
@@ -454,7 +456,7 @@ extension LayoutManager {
     /// already does, as those lines are eventually measured. This trade-off is what makes
     /// jump-to-location navigation on a large document O(log n) instead of O(location).
     func prepareLineForDisplay(atLocation location: Int) {
-        let safeLocation = min(max(location, 0), stringView.string.length)
+        let safeLocation = min(max(location, 0), stringView.length)
         guard let line = lineManager.line(containingCharacterAt: safeLocation) else {
             return
         }
@@ -468,7 +470,7 @@ extension LayoutManager {
 
     /// Vertical center of the visual line fragment containing `location`, in content coordinates.
     func lineAnchorY(at location: Int) -> CGFloat? {
-        let safeLocation = min(max(location, 0), stringView.string.length)
+        let safeLocation = min(max(location, 0), stringView.length)
         guard let line = lineManager.line(containingCharacterAt: safeLocation) else {
             return nil
         }
@@ -484,6 +486,8 @@ extension LayoutManager {
 
     // swiftlint:disable:next function_body_length
     private func layoutLinesInViewport() {
+        let signpost = RunestoneSignposts.performance.beginInterval("LayoutManager.layoutLinesInViewport")
+        defer { RunestoneSignposts.performance.endInterval("LayoutManager.layoutLinesInViewport", signpost) }
         // Immediately bail out from generating lines in a viewport of zero size.
         guard viewport.size.width > 0 && viewport.size.height > 0 else {
             return
@@ -494,6 +498,12 @@ extension LayoutManager {
         // view already have their fragments and views prepared (see verticalLayoutPadding).
         let layoutBounds = paddedInsetViewport
         var nextLine = lineManager.line(containingYOffset: layoutBounds.minY)
+        if let startLine = nextLine {
+            let endLine = lineManager.line(containingYOffset: layoutBounds.maxY) ?? lineManager.lastLine
+            let start = startLine.location
+            let end = endLine.location + endLine.data.totalLength
+            stringView.prefetch(utf16Range: NSRange(location: start, length: max(0, end - start)))
+        }
         var appearedLineIDs: Set<DocumentLineNodeID> = []
         var appearedLineFragmentIDs: Set<LineFragmentID> = []
         var maxY = layoutBounds.minY

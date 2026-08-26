@@ -1,4 +1,4 @@
-import AppKit
+@preconcurrency import AppKit
 import EditorIntelligence
 
 /// Applies EIP text edits to a live `TextView`, preserving offsets by applying from end to start.

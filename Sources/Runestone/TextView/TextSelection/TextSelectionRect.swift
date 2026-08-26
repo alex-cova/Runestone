@@ -1,5 +1,5 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 
 final class TextSelectionRect: UITextSelectionRect {
     override var rect: CGRect {

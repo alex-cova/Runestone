@@ -1,6 +1,7 @@
 import XCTest
 @testable import Runestone
 
+@MainActor
 final class DistractionFreeControllerTests: XCTestCase {
     func testTypingHidesChromeAndIdleRestoresIt() {
         let scheduler = TestScheduler()

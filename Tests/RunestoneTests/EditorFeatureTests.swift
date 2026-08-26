@@ -40,6 +40,33 @@ final class WorkspaceSearchEngineTests: XCTestCase {
         XCTAssertTrue(results.contains(where: { $0.documentName == "A.swift" }))
         XCTAssertTrue(results.contains(where: { $0.documentName == "B.swift" }))
     }
+
+    func testSearchesElidedDocumentWithoutFullText() async {
+        let prefix = String(repeating: "aaaa\n", count: 200)
+        let text = prefix + "NEEDLE\n" + String(repeating: "bbbb\n", count: 200)
+        let utf16Length = (text as NSString).length
+        let reader = TextRangeReader(utf16Length: utf16Length) { offset, length in
+            let ns = text as NSString
+            return ns.substring(with: NSRange(location: offset, length: min(length, ns.length - offset)))
+        }
+        let snapshot = TextSnapshot(version: 0, utf16Length: utf16Length, text: nil, rangeReader: reader)
+        let document = Document(
+            displayName: "big.txt",
+            contentSnapshot: snapshot,
+            selection: Selection(range: makeRange(start: 0, end: 0)),
+            cursor: Cursor(position: TextPosition(line: 0, column: 0, utf16Offset: 0)),
+            viewport: Viewport(x: 0, y: 0, width: 800, height: 600)
+        )
+        XCTAssertTrue(document.contentSnapshot.isElided)
+        XCTAssertEqual(document.text, "")
+        let workspace = Workspace()
+        await workspace.openDocument(document)
+        let engine = WorkspaceSearchEngine()
+        let results = await engine.search(WorkspaceSearchQuery(text: "NEEDLE"), in: workspace)
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results.first?.preview, "NEEDLE")
+        XCTAssertEqual(results.first?.documentName, "big.txt")
+    }
 }
 
 @MainActor

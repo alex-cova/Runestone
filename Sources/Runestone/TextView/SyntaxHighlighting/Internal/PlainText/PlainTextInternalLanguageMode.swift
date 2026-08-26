@@ -3,8 +3,12 @@ import Foundation
 final class PlainTextInternalLanguageMode: InternalLanguageMode {
     func parse(_ text: NSString) {}
 
-    func parse(_ text: NSString, completion: @escaping ((Bool) -> Void)) {
-        completion(true)
+    func parseFromBuffer() {}
+
+    func parse(_ text: NSString, completion: @escaping @MainActor @Sendable (Bool) -> Void) {
+        Task { @MainActor in
+            completion(true)
+        }
     }
 
     func textDidChange(_ change: TextChange) -> LineChangeSet {

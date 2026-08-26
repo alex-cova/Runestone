@@ -1,5 +1,5 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 
 enum Caret {
     static let width: CGFloat = 2

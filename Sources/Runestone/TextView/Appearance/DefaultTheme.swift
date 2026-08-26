@@ -1,5 +1,5 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 
 /// Default theme used by Runestone when no other theme has been set.
 public final class DefaultTheme: Runestone.Theme {

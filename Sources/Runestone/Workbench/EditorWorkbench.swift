@@ -1,7 +1,7 @@
 import Foundation
 
 /// Coordinates split editor layout and per-pane tab groups.
-public final class EditorWorkbench: Identifiable {
+public final class EditorWorkbench: Identifiable, @unchecked Sendable {
     public let id: UUID
     public var layout: EditorLayout
     public var activePaneID: UUID

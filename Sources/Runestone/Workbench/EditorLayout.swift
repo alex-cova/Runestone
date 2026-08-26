@@ -1,7 +1,7 @@
 import Foundation
 
 /// Recursive layout of editor panes and split containers.
-public enum EditorLayout: Equatable {
+public enum EditorLayout: Equatable, Sendable {
     case pane(EditorPane)
     case vertical(EditorSplitData)
     case horizontal(EditorSplitData)

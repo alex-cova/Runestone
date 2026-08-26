@@ -4,7 +4,7 @@ final class TreeSitterTextPredicatesEvaluator {
     private let match: TreeSitterQueryMatch
     private let stringView: StringView
 #if DEBUG
-    static var previousUnsupportedPredicateNames: [String] = []
+    nonisolated(unsafe) static var previousUnsupportedPredicateNames: [String] = []
 #endif
 
     init(match: TreeSitterQueryMatch, stringView: StringView) {

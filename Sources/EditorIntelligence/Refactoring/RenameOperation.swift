@@ -9,12 +9,12 @@ public actor RenameOperation: RefactoringOperation {
     public init() {}
 
     public func canApply(context: RefactoringContext) async -> Bool {
-        let target = word(at: context.cursor.position.utf16Offset, in: context.document.text)
+        let target = context.document.wordAtCursor()
         return !target.isEmpty
     }
 
     public func apply(context: RefactoringContext, parameters: [String: String]) async -> RefactoringResult {
-        let oldName = word(at: context.cursor.position.utf16Offset, in: context.document.text)
+        let oldName = context.document.wordAtCursor()
         let newName = parameters["newName"] ?? oldName
         guard !oldName.isEmpty else {
             return RefactoringResult(

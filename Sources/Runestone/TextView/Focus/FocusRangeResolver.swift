@@ -28,14 +28,14 @@ final class TextSegmenter {
                 allRanges += sentenceRanges(for: selection, lineManager: lineManager, stringView: stringView)
             }
         }
-        let documentRange = NSRange(location: 0, length: stringView.string.length)
+        let documentRange = NSRange(location: 0, length: stringView.length)
         return MultiSelectionController.normalize(allRanges).map { $0.capped(to: documentRange) }
     }
 
     private func paragraphRanges(for selection: NSRange,
                                  lineManager: LineManager,
                                  stringView: StringView) -> [NSRange] {
-        let documentLength = stringView.string.length
+        let documentLength = stringView.length
         guard lineManager.lineCount > 0 else {
             return []
         }

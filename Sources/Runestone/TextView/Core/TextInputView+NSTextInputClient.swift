@@ -1,7 +1,7 @@
-import AppKit
+@preconcurrency import AppKit
 import Foundation
 
-extension TextInputView: NSTextInputClient {
+extension TextInputView: @preconcurrency NSTextInputClient {
     func insertText(_ string: Any, replacementRange: NSRange) {
         applyReplacementRange(replacementRange)
         insertText(Self.text(from: string))

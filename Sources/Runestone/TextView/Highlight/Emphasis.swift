@@ -1,5 +1,5 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 
 /// A single emphasized range in the document.
 public struct Emphasis: Equatable {
