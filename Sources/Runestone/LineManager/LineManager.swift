@@ -6,6 +6,14 @@ struct LineMetric {
     var delimiterLength: Int
 }
 
+/// Stable identity for a line within a document's lifetime.
+///
+/// This is a plain `UInt32` counter minted by ``PackedLineIndex`` (it used to be a `UUID`). The
+/// counter is monotonic for the life of a `PackedLineIndex` and is **not** reset by
+/// `LineManager.rebuild()`, so an id issued before a rebuild can never collide with one issued
+/// after. Code that caches per-line data keyed by this id across a wholesale line rebuild
+/// (`TextView.text =`, `setState`) must still drop those caches explicitly — see the `string`
+/// setter in `TextInputView` and `ContentSizeService.reset()`.
 struct DocumentLineNodeID: Hashable {
     let value: UInt32
     var rawValue: String {

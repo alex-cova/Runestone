@@ -22,9 +22,7 @@ final class ContentSizeService {
     var lineManager: LineManager {
         didSet {
             if lineManager !== oldValue {
-                lineWidths = [:]
-                invalidateContentSize()
-                storeWidthOfInitiallyLongestLine()
+                reset()
             }
         }
     }
@@ -127,6 +125,18 @@ final class ContentSizeService {
     func invalidateContentSize() {
         _longestLineWidth = nil
         _totalLinesHeight = nil
+    }
+
+    /// Discards every per-line measurement, not just the derived totals `invalidateContentSize()`
+    /// clears. Use this whenever the document's lines are rebuilt wholesale (`TextView.text =`,
+    /// `setState`): `DocumentLineNodeID`s are recycled by `LineManager.rebuild()`, so a stale
+    /// `lineWidths` / `lineIDTrackingWidth` entry keyed by an old id would otherwise be read back
+    /// as the width of an unrelated new line and skew `contentWidth`.
+    func reset() {
+        lineWidths = [:]
+        lineIDTrackingWidth = nil
+        invalidateContentSize()
+        storeWidthOfInitiallyLongestLine()
     }
 
     func removeLine(withID lineID: DocumentLineNodeID) {

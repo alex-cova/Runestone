@@ -113,7 +113,14 @@ final class PackedLineIndex {
 
     func prepareStreamingRebuild(estimatedLineHeight: CGFloat) {
         self.estimatedLineHeight = estimatedLineHeight
-        nextID = 1
+        // `nextID` is deliberately NOT reset here. `DocumentLineNodeID` is a bare `UInt32` counter
+        // (not the UUID it once was), and callers key long-lived caches on it — `LineController`s,
+        // cached line widths, reused line-number / line-fragment views. If a rebuild handed out
+        // `1, 2, 3, …` again, those caches would resurrect the previous document's lines. Keeping
+        // the counter monotonic for the life of this index guarantees a rebuilt line never
+        // collides with one from before the rebuild. (`&+` wraps after 2^32 lines' worth of
+        // rebuilds, astronomically beyond any session; the wrapped value is still internally
+        // consistent.)
         longestRow = 0
         longestUTF16DuringStream = 0
         streamingRow = 0

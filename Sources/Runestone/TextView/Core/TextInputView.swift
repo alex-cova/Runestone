@@ -545,7 +545,14 @@ final class TextInputView: UIView, UITextInput {
                     selection = safeSelectionRange(from: oldSelectedRange)
                     inputDelegate?.selectionDidChange(self)
                 }
-                contentSizeService.invalidateContentSize()
+                // `rebuild()` recycles `DocumentLineNodeID`s (they restart at 1), and this setter
+                // mutates `stringView` / `lineManager` in place rather than swapping in fresh
+                // objects the way `setState` does — so the identity-triggered didSets that would
+                // normally drop these caches never fire. Clear them explicitly, or a recycled id
+                // resurrects the previous document's typeset line (stale `attributedString`,
+                // line fragments, height), which paints old glyphs at the new lines' positions.
+                lineControllerStorage.removeAllLineControllers()
+                contentSizeService.reset()
                 gutterWidthService.invalidateLineNumberWidth()
                 invalidateLines()
                 layoutManager.setNeedsLayout()

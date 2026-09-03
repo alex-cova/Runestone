@@ -76,4 +76,21 @@ final class ContentSizeServiceTests: XCTestCase {
         service.setSize(of: line2, to: CGSize(width: 60, height: 20))
         XCTAssertEqual(service.contentWidth, 200, accuracy: 0.01)
     }
+
+    /// `reset()` (called from `TextInputView.string`'s setter and `ContentSizeService`'s
+    /// `lineManager` didSet) drops every cached per-line width, not just the derived totals
+    /// `invalidateContentSize()` clears. After a wholesale line rebuild `DocumentLineNodeID`s
+    /// are reissued, so a lingering `lineWidths` entry keyed by an old id would otherwise be
+    /// read back as the width of an unrelated new line and inflate `contentWidth`.
+    func testResetDropsCachedLineWidths() {
+        let (service, lineManager) = makeContentSizeService(text: "aaaaaaaaaa\nb")
+        service.setSize(of: lineManager.line(atRow: 0), to: CGSize(width: 500, height: 20))
+        XCTAssertEqual(service.contentWidth, 500, accuracy: 0.01)
+
+        service.reset()
+
+        // With the cache cleared, width falls back to a real re-measurement of the longest line
+        // (~10 glyphs), never the stale 500pt entry.
+        XCTAssertLessThan(service.contentWidth, 500)
+    }
 }
