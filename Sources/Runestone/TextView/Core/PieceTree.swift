@@ -53,6 +53,10 @@ struct PieceTreeContentSnapshot: Sendable, FindTextSource {
 
     var contiguousNSString: NSString? { nil }
 
+    var utf8Length: Int {
+        pieces.reduce(0) { $0 + $1.utf8Length }
+    }
+
     func substring(utf16Offset: Int, length: Int) -> String {
         let location = max(0, utf16Offset)
         let take = max(0, min(length, utf16Length - location))
@@ -210,16 +214,16 @@ struct PieceTreeContentSnapshot: Sendable, FindTextSource {
         return originalCheckpoints[index]
     }
 
-    private func withUTF8<T>(of piece: PieceCopy, _ body: (UnsafeRawBufferPointer) -> T) -> T {
+    func withUTF8<T>(of piece: PieceCopy, _ body: (UnsafeRawBufferPointer) throws -> T) rethrows -> T {
         if piece.sourceIsOriginal {
             guard let original, let base = original.baseAddress else {
-                return body(UnsafeRawBufferPointer(start: nil, count: 0))
+                return try body(UnsafeRawBufferPointer(start: nil, count: 0))
             }
-            return body(UnsafeRawBufferPointer(start: base + piece.utf8Offset, count: piece.utf8Length))
+            return try body(UnsafeRawBufferPointer(start: base + piece.utf8Offset, count: piece.utf8Length))
         }
-        return addBuffer.withUnsafeBytes { raw in
+        return try addBuffer.withUnsafeBytes { raw in
             let start = raw.baseAddress.map { $0 + piece.utf8Offset }
-            return body(UnsafeRawBufferPointer(start: start, count: piece.utf8Length))
+            return try body(UnsafeRawBufferPointer(start: start, count: piece.utf8Length))
         }
     }
 }
@@ -851,17 +855,17 @@ final class PieceTree {
         return originalCheckpoints[index]
     }
 
-    private func withUTF8<T>(of piece: Piece, _ body: (UnsafeRawBufferPointer) -> T) -> T {
+    func withUTF8<T>(of piece: Piece, _ body: (UnsafeRawBufferPointer) throws -> T) rethrows -> T {
         switch piece.source {
         case .original:
             guard let original, let base = original.baseAddress else {
-                return body(UnsafeRawBufferPointer(start: nil, count: 0))
+                return try body(UnsafeRawBufferPointer(start: nil, count: 0))
             }
-            return body(UnsafeRawBufferPointer(start: base + piece.utf8Offset, count: piece.utf8Length))
+            return try body(UnsafeRawBufferPointer(start: base + piece.utf8Offset, count: piece.utf8Length))
         case .add:
-            return addBuffer.withUnsafeBytes { raw in
+            return try addBuffer.withUnsafeBytes { raw in
                 let start = raw.baseAddress.map { $0 + piece.utf8Offset }
-                return body(UnsafeRawBufferPointer(start: start, count: piece.utf8Length))
+                return try body(UnsafeRawBufferPointer(start: start, count: piece.utf8Length))
             }
         }
     }

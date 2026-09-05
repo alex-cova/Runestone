@@ -21,6 +21,9 @@ final class StringView {
 
     private var storage: Storage
 
+    /// Increments on every storage mutation (`replaceText` and the `string` setter). Compact does not bump this.
+    private(set) var contentGeneration: UInt64 = 0
+
     /// UTF-16 length. Prefer this over ``string``.length so file-backed documents do not materialize.
     var length: Int {
         switch storage {
@@ -54,6 +57,7 @@ final class StringView {
         }
         set {
             storage = .contiguous(NSMutableString(string: newValue))
+            contentGeneration &+= 1
         }
     }
 
@@ -104,6 +108,7 @@ final class StringView {
             case .pieceTree(let tree):
                 tree.replaceText(in: range, with: string)
             }
+            contentGeneration &+= 1
         }
     }
 
