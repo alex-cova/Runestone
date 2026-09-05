@@ -26,6 +26,14 @@ final class TimedUndoManager: UndoManager {
         }
     }
 
+    /// Closes a coalesced typing group if one is open, then opens a fresh group.
+    /// Multi-caret and other batch edits must use this so `endUndoGrouping()` does not
+    /// close the in-progress 1s typing group.
+    func beginIsolatedUndoGrouping() {
+        endUndoGrouping()
+        beginUndoGrouping()
+    }
+
     override func endUndoGrouping() {
         cancelTimer()
         if hasOpenGroup {

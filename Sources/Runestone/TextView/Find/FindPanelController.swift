@@ -183,7 +183,7 @@ private extension FindPanelController {
         // latter is only updated once the async refresh below completes, so a second Next/
         // Previous click arriving before that lands would otherwise re-anchor on a stale range
         // and fail to advance.
-        let after = target.findSelection.map(NSMaxRange) ?? 0
+        let after = target.findSelection.map { $0.location + max($0.length, 1) } ?? 0
         let next = FindSearchEngine.findNext(options: options, in: text, after: after)
             ?? (wrapAround ? FindSearchEngine.findNext(options: options, in: text, after: 0) : nil)
         guard let next else {
@@ -215,7 +215,18 @@ private extension FindPanelController {
         guard let target, let currentRange = session.currentRange else {
             return
         }
-        target.replace(currentRange, withText: panelView.replaceText)
+        let replacement: String
+        do {
+            replacement = try FindSearchEngine.replacementText(
+                options: session.searchOptions(),
+                in: target.textForFind,
+                matching: currentRange,
+                replacement: panelView.replaceText
+            )
+        } catch {
+            replacement = panelView.replaceText
+        }
+        target.replace(currentRange, withText: replacement)
         scheduleFind(immediate: true)
     }
 

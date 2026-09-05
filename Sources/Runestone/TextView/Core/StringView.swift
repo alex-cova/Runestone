@@ -142,6 +142,22 @@ final class StringView {
         }
     }
 
+    func rangeOfComposedCharacterSequences(for range: NSRange) -> NSRange {
+        switch storage {
+        case .contiguous(let string):
+            return string.customRangeOfComposedCharacterSequences(for: range)
+        case .pieceTree:
+            guard range.length > 0 else {
+                return rangeOfComposedCharacterSequence(at: range.location)
+            }
+            let start = rangeOfComposedCharacterSequence(at: range.location)
+            let last = max(range.location, range.upperBound - 1)
+            let end = rangeOfComposedCharacterSequence(at: last)
+            let location = min(start.location, end.location)
+            return NSRange(location: location, length: NSMaxRange(end) - location)
+        }
+    }
+
     func enumerateSubstrings(
         in range: NSRange,
         options: NSString.EnumerationOptions,

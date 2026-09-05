@@ -288,6 +288,12 @@ private extension FoldingController {
             let headerLine = lineManager.line(atRow: fold.lineRange.lowerBound)
             collapsedFoldByHeaderLineID.removeValue(forKey: headerLine.id)
         }
+        for nested in folds where nested.isCollapsed
+            && nested.id != fold.id
+            && fold.lineRange.lowerBound <= nested.lineRange.lowerBound
+            && nested.lineRange.upperBound <= fold.lineRange.upperBound {
+            hide(nested)
+        }
     }
 
     // swiftlint:disable:next function_body_length

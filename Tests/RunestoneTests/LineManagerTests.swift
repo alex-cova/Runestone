@@ -46,6 +46,15 @@ final class LineManagerTests: XCTestCase {
         XCTAssertEqual(lineManager.line(atRow: 0).data.totalLength, 6)
     }
 
+    func testLinesInRangeDoesNotIncludeTheFollowingLineWhenSelectionEndsOnNewline() {
+        let lineManager = makeLineManager("foo\nbar")
+        let lines = lineManager.lines(in: NSRange(location: 0, length: 4))
+        XCTAssertEqual(lines.map(\.index), [0])
+        let startAndEnd = lineManager.startAndEndLine(in: NSRange(location: 0, length: 4))
+        XCTAssertEqual(startAndEnd?.startLine.index, 0)
+        XCTAssertEqual(startAndEnd?.endLine.index, 0)
+    }
+
     func testRebuildManyShortLinesUsesFatLeaves() {
         let text = Array(repeating: "x", count: 200).joined(separator: "\n")
         let lineManager = makeLineManager(text)

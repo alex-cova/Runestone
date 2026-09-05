@@ -22,6 +22,39 @@ final class WorkbenchTests: XCTestCase {
         XCTAssertTrue(pane.isTemporary(pane.documents[0]))
     }
 
+    func testTemporaryTabDoesNotReuseADirtySlot() {
+        let pane = EditorPane()
+        let first = WorkbenchDocument(displayName: "a.txt", text: "a")
+        first.isDirty = true
+        let second = WorkbenchDocument(displayName: "b.txt", text: "b")
+        pane.openDocument(first, asTemporary: true)
+        pane.openDocument(second, asTemporary: true)
+        XCTAssertEqual(pane.documents.count, 2)
+        XCTAssertEqual(pane.documents[0].displayName, "a.txt")
+        XCTAssertEqual(pane.selectedDocument?.displayName, "b.txt")
+    }
+
+    func testTemporaryTabReuseCopiesFileBackedState() async throws {
+        let firstURL = FileManager.default.temporaryDirectory.appendingPathComponent("first-\(UUID().uuidString).txt")
+        let secondURL = FileManager.default.temporaryDirectory.appendingPathComponent("second-\(UUID().uuidString).txt")
+        try "first body\n".write(to: firstURL, atomically: true, encoding: .utf8)
+        try "second body\n".write(to: secondURL, atomically: true, encoding: .utf8)
+        defer {
+            try? FileManager.default.removeItem(at: firstURL)
+            try? FileManager.default.removeItem(at: secondURL)
+        }
+        let first = try await WorkbenchDocument.load(contentsOf: firstURL)
+        let second = try await WorkbenchDocument.load(contentsOf: secondURL)
+        let pane = EditorPane()
+        pane.openDocument(first, asTemporary: true)
+        let reused = pane.openDocument(second, asTemporary: true)
+        XCTAssertEqual(pane.documents.count, 1)
+        XCTAssertEqual(reused.displayName, secondURL.lastPathComponent)
+        XCTAssertTrue(reused.isFileBacked)
+        XCTAssertNotNil(reused.pendingState)
+        XCTAssertNotNil(reused.rangeReader)
+    }
+
     func testTabListEngineSelectionAfterClose() {
         XCTAssertEqual(TabListEngine.selectionIndexAfterClose(closing: 1, selected: 1, count: 3), 1)
     }

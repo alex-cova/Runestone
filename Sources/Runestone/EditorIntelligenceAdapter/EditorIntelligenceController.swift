@@ -196,7 +196,7 @@ public final class EditorIntelligenceController {
             let report = await diagnosticEngine.diagnostics(for: document)
             await MainActor.run {
                 self.latestDiagnostics = report.diagnostics
-                textView.diagnostics = report.diagnostics.map(TextViewDiagnostic.init)
+                textView.diagnostics = report.diagnostics.map { TextViewDiagnostic($0, in: textView) }
             }
         }
     }

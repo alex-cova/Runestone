@@ -28,8 +28,17 @@ public final class SemanticTokenStorage: @unchecked Sendable {
     public func applyDelta(_ delta: LSPSemanticTokensDelta) -> [LSPSemanticToken] {
         lock.withLock {
             resultId = delta.resultId
-            if !delta.data.isEmpty {
-                compressedData.append(contentsOf: delta.data)
+            if !delta.edits.isEmpty {
+                var buffer = compressedData
+                for edit in delta.edits.sorted(by: { $0.start > $1.start }) {
+                    let start = min(max(edit.start, 0), buffer.count)
+                    let end = min(start + max(edit.deleteCount, 0), buffer.count)
+                    buffer.replaceSubrange(start..<end, with: edit.data)
+                }
+                compressedData = buffer
+                tokens = LSPSemanticTokenDecoder.decode(compressedData)
+            } else if !delta.data.isEmpty {
+                compressedData = delta.data
                 tokens = LSPSemanticTokenDecoder.decode(compressedData)
             }
             return tokens

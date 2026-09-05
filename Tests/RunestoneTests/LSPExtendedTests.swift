@@ -16,6 +16,13 @@ final class LSPExtendedTests: XCTestCase {
         storage.setData(LSPSemanticTokens(resultId: "1", data: [0, 0, 2, 1, 0]))
         XCTAssertTrue(storage.hasReceivedData)
         XCTAssertEqual(storage.allTokens().count, 1)
+        storage.applyDelta(LSPSemanticTokensDelta(
+            resultId: "2",
+            data: [],
+            edits: [LSPSemanticTokensEdit(start: 0, deleteCount: 5, data: [0, 0, 4, 1, 0])]
+        ))
+        XCTAssertEqual(storage.allTokens().count, 1)
+        XCTAssertEqual(storage.allTokens().first?.length, 4)
     }
 
     func testLSPDefinitionProviderUsesClient() async {

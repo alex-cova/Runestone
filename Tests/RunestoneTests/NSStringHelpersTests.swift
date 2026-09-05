@@ -45,4 +45,10 @@ final class NSStringHelpersTests: XCTestCase {
         let range = str.customRangeOfComposedCharacterSequence(at: 6)
         XCTAssertEqual(range, NSRange(location: 5, length: 2))
     }
+
+    func testComposedCharacterSequenceOfCRInCRLFLooksForward() {
+        let str = "Hello\r\nWorld" as NSString
+        let range = str.customRangeOfComposedCharacterSequence(at: 5)
+        XCTAssertEqual(range, NSRange(location: 5, length: 2))
+    }
 }

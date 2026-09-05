@@ -122,4 +122,10 @@ final class FindSessionTests: XCTestCase {
     func testFindRangesThrowsOnInvalidRegex() {
         XCTAssertThrowsError(try FindSession.findRanges(query: "(unclosed", in: "text", matchCase: false, wholeWord: false, useRegex: true))
     }
+
+    func testFindRangesWithZeroLengthRegexTerminates() throws {
+        let ranges = try FindSession.findRanges(query: "a*", in: "bbb", matchCase: false, wholeWord: false, useRegex: true)
+        XCTAssertFalse(ranges.isEmpty)
+        XCTAssertEqual(Set(ranges.map(\.location)).count, ranges.count)
+    }
 }

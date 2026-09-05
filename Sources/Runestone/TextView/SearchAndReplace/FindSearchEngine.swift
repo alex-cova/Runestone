@@ -162,6 +162,31 @@ public enum FindSearchEngine {
         )
     }
 
+    /// Expands a replacement string for a single match range (VS Code `$0`/`$1` placeholders).
+    public static func replacementText(
+        options: FindSearchOptions,
+        in text: String,
+        matching range: NSRange,
+        replacement: String
+    ) throws -> String {
+        guard options.useRegex || options.wholeWord else {
+            return replacement
+        }
+        let ns = text as NSString
+        guard range.location != NSNotFound, NSMaxRange(range) <= ns.length else {
+            return replacement
+        }
+        let parsed = ReplacementStringParser(string: replacement).parse()
+        guard parsed.containsPlaceholder else {
+            return replacement
+        }
+        let regex = try FindRegexCache.regex(pattern: regexPattern(for: options), options: regexOptions(for: options))
+        guard let result = regex.firstMatch(in: text, options: [], range: range), result.range == range else {
+            return replacement
+        }
+        return parsed.string(byMatching: result, in: ns)
+    }
+
     /// Per-match ranges and replacement strings for building a ``BatchReplaceSet``.
     ///
     /// Unlike ``replaceAll(options:in:replacement:)``, which returns a whole new `String` and
@@ -321,7 +346,7 @@ public enum FindSearchEngine {
                 stop.pointee = true
                 return
             }
-            guard let range = result?.range, range.length > 0 else { return }
+            guard let range = result?.range, range.location != NSNotFound else { return }
             let index = matchCount
             matchCount += 1
             if currentIndex == nil, range.location >= anchorLocation {
@@ -377,7 +402,7 @@ public enum FindSearchEngine {
                 stop.pointee = true
                 return
             }
-            guard let range = result?.range, range.length > 0 else { return }
+            guard let range = result?.range, range.location != NSNotFound else { return }
             if matchIndex >= endIndex {
                 stop.pointee = true
                 return
@@ -408,7 +433,7 @@ public enum FindSearchEngine {
                 stop.pointee = true
                 return
             }
-            guard let range = result?.range, range.length > 0 else { return }
+            guard let range = result?.range, range.location != NSNotFound else { return }
             last = range
         }
         return last
@@ -452,7 +477,7 @@ public enum FindSearchEngine {
                 stop.pointee = true
                 return
             }
-            guard let result, result.range.length > 0 else { return }
+            guard let result, result.range.location != NSNotFound else { return }
             let replacementText = parsed.containsPlaceholder
                 ? parsed.string(byMatching: result, in: ns)
                 : replacement
@@ -476,7 +501,11 @@ public enum FindSearchEngine {
     }
 
     private static func regexOptions(for options: FindSearchOptions) -> NSRegularExpression.Options {
-        options.matchCase ? [] : [.caseInsensitive]
+        var regexOptions: NSRegularExpression.Options = [.anchorsMatchLines]
+        if !options.matchCase {
+            regexOptions.insert(.caseInsensitive)
+        }
+        return regexOptions
     }
 }
 

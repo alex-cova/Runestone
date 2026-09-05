@@ -1196,6 +1196,11 @@ import CoreText
         }
     }
 
+    /// UTF-16 offset closest to `point` in the text view's coordinate space.
+    public func characterIndex(at point: CGPoint) -> Int? {
+        textInputView.characterIndex(at: textInputView.convert(point, from: self))
+    }
+
     /// Returns the character location at the specified row and column.
     /// - Parameter textLocation: The row and column in the text.
     /// - Returns: The location if the input row and column could be found in the text, otherwise nil.
@@ -2113,7 +2118,7 @@ extension TextView: FindPanelTarget {
         guard let range = textInputView.selection, range.length > 0 else {
             return nil
         }
-        return textInputView.string.substring(with: range)
+        return textInputView.text(in: range)
     }
 
     func setSelectedRange(_ range: NSRange) {

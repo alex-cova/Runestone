@@ -61,7 +61,7 @@ private extension TreeSitterTextPredicatesEvaluator {
         guard let lhsCapture = match.capture(forIndex: parameters.lhsCaptureIndex) else {
             return false
         }
-        guard let rhsCapture = match.capture(forIndex: parameters.lhsCaptureIndex) else {
+        guard let rhsCapture = match.capture(forIndex: parameters.rhsCaptureIndex) else {
             return false
         }
         let lhsByteRange = lhsCapture.byteRange

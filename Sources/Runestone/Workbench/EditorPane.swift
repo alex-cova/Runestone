@@ -90,6 +90,9 @@ public final class EditorPane: Identifiable, @unchecked Sendable {
             slot.isDirty = false
             slot.selectedRange = document.selectedRange
             slot.scrollOffset = document.scrollOffset
+            slot.pendingState = document.pendingState
+            slot.isFileBacked = document.isFileBacked
+            slot.rangeReader = document.rangeReader
             temporaryDocumentID = slot.id
             selectDocument(slot.id)
             return slot

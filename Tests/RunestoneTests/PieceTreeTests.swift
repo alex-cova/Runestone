@@ -114,6 +114,16 @@ final class PieceTreeTests: XCTestCase {
         XCTAssertLessThanOrEqual(view.lastPrefetchByteCount, PieceTree.prefetchByteCap)
     }
 
+    func testComposedCharacterSequenceCoversFamilyEmoji() throws {
+        let emoji = "👨‍👩‍👧‍👦"
+        let url = try writeTemp(emoji)
+        let view = try awaitLoad(url)
+        let expected = (emoji as NSString).length
+        XCTAssertEqual(view.rangeOfComposedCharacterSequence(at: 0).length, expected)
+        XCTAssertEqual(view.rangeOfComposedCharacterSequence(at: 5).length, expected)
+        XCTAssertEqual(view.rangeOfComposedCharacterSequence(at: expected - 1).length, expected)
+    }
+
     func testScatteredInsertsStayEquivalent() throws {
         let url = try writeTemp(String(repeating: "0123456789", count: 20))
         let view = try awaitLoad(url)

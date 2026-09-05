@@ -10,6 +10,12 @@ final class TextEditHelperTests: XCTestCase {
         return (helper, stringView)
     }
 
+    func testReplaceTextClampsOutOfBoundsRangeOnEmptyDocument() {
+        let (helper, stringView) = makeHelper(text: "")
+        _ = helper.replaceText(in: NSRange(location: 0, length: 1), with: "")
+        XCTAssertEqual(stringView.length, 0)
+    }
+
     func testApplyProducesTheSameStringAsStringByApplying() {
         let (helper, _) = makeHelper(text: "aaa bbb ccc")
         let batch = BatchReplaceSet(replacements: [

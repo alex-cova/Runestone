@@ -49,7 +49,7 @@ private extension SearchController {
         }
         let matches = query.matches(in: stringView.string)
         return matches.compactMap { textCheckingResult in
-            if textCheckingResult.range.length > 0, let mappedValue = mapper(textCheckingResult) {
+            if textCheckingResult.range.location != NSNotFound, let mappedValue = mapper(textCheckingResult) {
                 return mappedValue
             } else {
                 return nil

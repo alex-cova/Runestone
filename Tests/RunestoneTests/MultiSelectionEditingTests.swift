@@ -58,6 +58,24 @@ final class MultiSelectionEditingTests: XCTestCase {
 
     // MARK: - Move Lines
 
+    func testMoveLinesDownOntoCRLFFileWithoutTrailingNewlineKeepsMovedText() {
+        let textView = makeFocusedTextView(text: "foo\r\nbar\r\nbaz")
+        textView.lineEndings = .crlf
+        // Select the "bar" line including its CRLF (location 5, length 5: bar\r\n).
+        textView.selectedRange = NSRange(location: 5, length: 5)
+        textView.moveSelectedLinesDown()
+        let normalized = (textView.text as String).replacingOccurrences(of: "\r\n", with: "\n")
+        XCTAssertEqual(normalized, "foo\nbaz\nbar")
+    }
+
+    func testShiftRightOnFullLineDoesNotIndentTheFollowingLine() {
+        let textView = makeFocusedTextView(text: "foo\nbar")
+        textView.indentStrategy = .space(length: 4)
+        textView.selectedRange = NSRange(location: 0, length: 4)
+        textView.shiftRight()
+        XCTAssertEqual(textView.text as String, "    foo\nbar")
+    }
+
     func testMoveSelectedLinesDownWithTwoNonAdjacentCaretGroups() {
         let textView = makeFocusedTextView(text: "a\nb\nc\nd\ne")
         textView.selectedRanges = [

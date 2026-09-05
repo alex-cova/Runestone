@@ -124,8 +124,12 @@ extension TreeSitterLanguageLayer {
         if let oldTree = oldTree, let newTree = tree {
             let changedRanges = oldTree.rangesChanged(comparingTo: newTree)
             for changedRange in changedRanges {
-                let startRow = Int(changedRange.startPoint.row)
-                let endRow = Int(changedRange.endPoint.row)
+                let lastRow = max(lineManager.lineCount - 1, 0)
+                let startRow = min(max(Int(changedRange.startPoint.row), 0), lastRow)
+                let endRow = min(max(Int(changedRange.endPoint.row), 0), lastRow)
+                guard startRow <= endRow else {
+                    continue
+                }
                 for row in startRow ... endRow {
                     let line = lineManager.line(atRow: row)
                     lineChangeSet.markLineEdited(line)

@@ -58,10 +58,7 @@ public final class JumpToDefinitionController {
         guard let textView else {
             return
         }
-        let range = NSRange(
-            location: location.range.start.utf16Offset,
-            length: location.range.end.utf16Offset - location.range.start.utf16Offset
-        )
+        let range = TextEditApplicator.nsRange(for: location.range, in: textView)
         textView.selectedRanges = [range]
         textView.scrollRangeToVisible(range)
     }
@@ -72,6 +69,19 @@ public final class JumpToDefinitionController {
     }
 
     @objc private func handleClick(_ gesture: NSClickGestureRecognizer) {
+        guard let textView else {
+            return
+        }
+        let point = gesture.location(in: textView)
+        if let index = textView.characterIndex(at: point),
+           let textLocation = textView.textLocation(at: index) {
+            jumpToDefinition(at: TextPosition(
+                line: textLocation.lineNumber,
+                column: textLocation.column,
+                utf16Offset: index
+            ))
+            return
+        }
         guard let document = adapter.currentDocument else {
             return
         }

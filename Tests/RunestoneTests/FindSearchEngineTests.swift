@@ -85,11 +85,22 @@ final class FindSearchEngineTests: XCTestCase {
         XCTAssertEqual(outcome.currentRange, NSRange(location: 4, length: 3))
     }
 
-    func testRegexSearchSkipsZeroLengthMatches() {
-        let options = FindSearchOptions(query: "x*", useRegex: true)
-        let outcome = FindSearchEngine.search(options: options, in: "xx  xx", anchorLocation: 0)
-        // Only the two non-empty "xx" runs should count, not the zero-length matches elsewhere.
-        XCTAssertEqual(outcome.matchCount, 2)
+    func testRegexCaretMatchesEachLine() {
+        let options = FindSearchOptions(query: "^", useRegex: true)
+        let outcome = FindSearchEngine.search(options: options, in: "a\nb\nc", anchorLocation: 0)
+        XCTAssertEqual(outcome.matchCount, 3)
+        XCTAssertEqual(outcome.currentRange, NSRange(location: 0, length: 0))
+    }
+
+    func testReplacementTextExpandsCaptureGroups() throws {
+        let options = FindSearchOptions(query: #"(\w+)=(\w+)"#, useRegex: true)
+        let text = try FindSearchEngine.replacementText(
+            options: options,
+            in: "a=b",
+            matching: NSRange(location: 0, length: 3),
+            replacement: "$2=$1"
+        )
+        XCTAssertEqual(text, "b=a")
     }
 
     func testInvalidRegexSurfacesAnErrorMessageInsteadOfCrashingOrSilentlyEmpty() {

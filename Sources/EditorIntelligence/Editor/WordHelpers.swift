@@ -10,7 +10,15 @@ public func word(at offset: Int, in text: String) -> String {
     guard let index = utf16.index(utf16.startIndex, offsetBy: clampedOffset, limitedBy: utf16.endIndex) else {
         return ""
     }
-    let stringIndex = index.samePosition(in: text) ?? text.index(text.startIndex, offsetBy: clampedOffset)
+    let stringIndex: String.Index
+    if let aligned = index.samePosition(in: text) {
+        stringIndex = aligned
+    } else if index > utf16.startIndex {
+        let previous = utf16.index(before: index)
+        stringIndex = previous.samePosition(in: text) ?? text.startIndex
+    } else {
+        stringIndex = text.startIndex
+    }
     var start = stringIndex
     var end = stringIndex
     while start > text.startIndex, text[text.index(before: start)].isWordCharacter {

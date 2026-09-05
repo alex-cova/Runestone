@@ -124,7 +124,7 @@ public actor Workspace {
             }
         case .selectionChanged(let documentID, let selection):
             if let document = openDocuments[documentID] {
-                let updated = Document(
+                openDocuments[documentID] = Document(
                     id: document.id,
                     url: document.url,
                     displayName: document.displayName,
@@ -134,11 +134,10 @@ public actor Workspace {
                     viewport: document.viewport,
                     languageIdentifier: document.languageIdentifier
                 )
-                updateDocument(updated)
             }
         case .cursorMoved(let documentID, let cursor):
             if let document = openDocuments[documentID] {
-                let updated = Document(
+                openDocuments[documentID] = Document(
                     id: document.id,
                     url: document.url,
                     displayName: document.displayName,
@@ -148,11 +147,10 @@ public actor Workspace {
                     viewport: document.viewport,
                     languageIdentifier: document.languageIdentifier
                 )
-                updateDocument(updated)
             }
         case .viewportChanged(let documentID, let viewport):
             if let document = openDocuments[documentID] {
-                let updated = Document(
+                openDocuments[documentID] = Document(
                     id: document.id,
                     url: document.url,
                     displayName: document.displayName,
@@ -162,7 +160,6 @@ public actor Workspace {
                     viewport: viewport,
                     languageIdentifier: document.languageIdentifier
                 )
-                updateDocument(updated)
             }
         case .documentActivated(let documentID):
             activateDocument(documentID)

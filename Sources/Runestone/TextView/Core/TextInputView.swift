@@ -100,11 +100,11 @@ final class TextInputView: UIView, UITextInput {
         IndexedPosition(index: 0)
     }
     var endOfDocument: UITextPosition {
-        IndexedPosition(index: string.length)
+        IndexedPosition(index: stringView.length)
     }
     weak var inputDelegate: UITextInputDelegate?
     var hasText: Bool {
-        string.length > 0
+        stringView.length > 0
     }
     var tokenizer: UITextInputTokenizer {
         customTokenizer
@@ -1025,7 +1025,7 @@ final class TextInputView: UIView, UITextInput {
 
     @objc override func selectAll(_ sender: Any?) {
         notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
-        selection = NSRange(location: 0, length: string.length)
+        selection = NSRange(location: 0, length: stringView.length)
     }
 
     /// When autocorrection is enabled and the user tap on a misspelled word, UITextInteraction will present
@@ -1296,7 +1296,7 @@ final class TextInputView: UIView, UITextInput {
     ) -> NSRange {
         ViewportParseWindow.utf16Range(
             lineManager: lineManager,
-            stringLength: string.length,
+            stringLength: stringView.length,
             viewport: viewport,
             overscanScreens: overscanScreens
         )
@@ -1981,7 +1981,7 @@ extension TextInputView {
             guard currentSelection.location > 0 else {
                 return
             }
-            let characterRange = string.customRangeOfComposedCharacterSequence(at: currentSelection.location - 1)
+            let characterRange = stringView.rangeOfComposedCharacterSequence(at: currentSelection.location - 1)
             deleteSelection = NSRange(location: characterRange.location, length: currentSelection.location - characterRange.location)
         } else {
             deleteSelection = currentSelection
@@ -2041,10 +2041,10 @@ extension TextInputView {
         }
         let range: NSRange
         if currentSelection.length == 0 {
-            guard currentSelection.location < string.length else {
+            guard currentSelection.location < stringView.length else {
                 return
             }
-            range = string.customRangeOfComposedCharacterSequence(at: currentSelection.location)
+            range = stringView.rangeOfComposedCharacterSequence(at: currentSelection.location)
         } else {
             range = currentSelection
         }
@@ -2180,7 +2180,7 @@ extension TextInputView {
         if range.length == 1, let indentRange = indentController.indentRangeInFrontOfLocation(range.upperBound) {
             resultingRange = indentRange
         } else {
-            resultingRange = string.customRangeOfComposedCharacterSequences(for: range)
+            resultingRange = stringView.rangeOfComposedCharacterSequences(for: range)
         }
         // If deleting the leading component of a character pair we may also expand the range to delete the trailing component.
         if characterPairTrailingComponentDeletionMode == .immediatelyFollowingLeadingComponent
@@ -2280,6 +2280,7 @@ extension TextInputView {
         timedUndoManager.beginUndoGrouping()
         timedUndoManager.setActionName(actionName)
         timedUndoManager.registerUndo(withTarget: self) { textInputView in
+            textInputView.imeMarkedRange = nil
             textInputView.inputDelegate?.selectionWillChange(textInputView)
             textInputView.replaceText(in: range, with: text)
             // A multi-range restore target (captured once, before a whole batch of edits) takes
@@ -2325,7 +2326,7 @@ extension TextInputView {
             return
         }
         imeMarkedRange = nil
-        timedUndoManager.beginUndoGrouping()
+        timedUndoManager.beginIsolatedUndoGrouping()
         let primaryIndex = multiSelectionController.primaryIndex
         var newSelections: [NSRange] = []
         for range in editRanges {
@@ -2357,7 +2358,7 @@ extension TextInputView {
             return
         }
         imeMarkedRange = nil
-        timedUndoManager.beginUndoGrouping()
+        timedUndoManager.beginIsolatedUndoGrouping()
         pendingMultiSelectionUndoRestore = (selections, multiSelectionController.primaryIndex)
         var newSelections: [NSRange] = []
         for selection in selections {
@@ -2389,7 +2390,7 @@ extension TextInputView {
             return
         }
         imeMarkedRange = nil
-        timedUndoManager.beginUndoGrouping()
+        timedUndoManager.beginIsolatedUndoGrouping()
         let restoreRanges = multiSelectionController.selections
         let primaryIndex = multiSelectionController.primaryIndex
         var newSelections: [NSRange] = []
@@ -2422,7 +2423,7 @@ extension TextInputView {
             guard selection.location > 0 else {
                 continue
             }
-            let characterRange = string.customRangeOfComposedCharacterSequence(at: selection.location - 1)
+            let characterRange = stringView.rangeOfComposedCharacterSequence(at: selection.location - 1)
             let deleteRange = NSRange(location: characterRange.location, length: selection.location - characterRange.location)
             deleteOperations.append((deleteRange, deleteRange.location))
         }
@@ -2432,7 +2433,7 @@ extension TextInputView {
         guard deleteOperations.allSatisfy({ shouldChangeText(in: $0.deleteRange, replacementText: "") }) else {
             return
         }
-        timedUndoManager.beginUndoGrouping()
+        timedUndoManager.beginIsolatedUndoGrouping()
         let primaryIndex = multiSelectionController.primaryIndex
         var newSelections: [NSRange] = []
         for operation in deleteOperations {
@@ -2464,10 +2465,10 @@ extension TextInputView {
                 deleteOperations.append((selection, selection.location))
                 continue
             }
-            guard selection.location < string.length else {
+            guard selection.location < stringView.length else {
                 continue
             }
-            let deleteRange = string.customRangeOfComposedCharacterSequence(at: selection.location)
+            let deleteRange = stringView.rangeOfComposedCharacterSequence(at: selection.location)
             deleteOperations.append((deleteRange, selection.location))
         }
         guard !deleteOperations.isEmpty else {
@@ -2476,7 +2477,7 @@ extension TextInputView {
         guard deleteOperations.allSatisfy({ shouldChangeText(in: $0.deleteRange, replacementText: "") }) else {
             return
         }
-        timedUndoManager.beginUndoGrouping()
+        timedUndoManager.beginIsolatedUndoGrouping()
         let primaryIndex = multiSelectionController.primaryIndex
         var newSelections: [NSRange] = []
         for operation in deleteOperations {
@@ -2588,7 +2589,7 @@ extension TextInputView {
         var deltaByRow: [Int: Int] = [:]
         let primaryIndex = multiSelectionController.primaryIndex
         inputDelegate?.textWillChange(self)
-        timedUndoManager.beginUndoGrouping()
+        timedUndoManager.beginIsolatedUndoGrouping()
         // Descending row order: an edit at one row's start never shifts the location of a row
         // above it, so rows still to be processed are unaffected by ones already done.
         for row in rows.sorted(by: >) {
@@ -2905,7 +2906,7 @@ extension TextInputView {
             return nil
         }
         let newPosition = indexedPosition.index + offset
-        guard newPosition >= 0 && newPosition <= string.length else {
+        guard newPosition >= 0 && newPosition <= stringView.length else {
             return nil
         }
         return IndexedPosition(index: newPosition)

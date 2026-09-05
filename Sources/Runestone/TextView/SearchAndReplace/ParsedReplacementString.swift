@@ -52,6 +52,9 @@ struct ParsedReplacementString: Equatable {
             case .placeholder(let parameters):
                 if parameters.index < textCheckingResult.numberOfRanges {
                     let range = textCheckingResult.range(at: parameters.index)
+                    guard range.location != NSNotFound, NSMaxRange(range) <= string.length else {
+                        continue
+                    }
                     let substring = string.substring(with: range)
                     if parameters.index == 0 {
                         // Visual Studio Code doesn't apply modifiers to capture groups with index 0 (i.e. the entire match).

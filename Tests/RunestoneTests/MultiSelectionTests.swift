@@ -155,12 +155,12 @@ final class MultiSelectionTests: XCTestCase {
 
     func testUndoLastCaretChangeAfterAddSelectionsOnEachLine() {
         let textView = makeFocusedTextView(text: "one\ntwo\nthree")
-        textView.selectedRange = NSRange(location: 0, length: 4)
+        textView.selectedRange = NSRange(location: 0, length: 8)
         XCTAssertFalse(textView.isMultiCursorActive)
         textView.addSelectionsOnEachLine()
         XCTAssertEqual(textView.selectedRanges.count, 2)
         textView.undoLastCaretChange()
-        XCTAssertEqual(textView.selectedRange, NSRange(location: 0, length: 4))
+        XCTAssertEqual(textView.selectedRange, NSRange(location: 0, length: 8))
         XCTAssertFalse(textView.isMultiCursorActive)
     }
 

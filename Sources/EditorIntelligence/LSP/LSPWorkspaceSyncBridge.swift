@@ -70,6 +70,9 @@ public actor LSPWorkspaceSyncBridge {
             let version = bumpVersion(for: document.id)
             await syncService.notifyFullChange(document, version: version)
         case .documentEdited(let document, let edits):
+            if document.contentSnapshot.isElided {
+                break
+            }
             let version = bumpVersion(for: document.id)
             for edit in edits {
                 await syncService.enqueueChange(

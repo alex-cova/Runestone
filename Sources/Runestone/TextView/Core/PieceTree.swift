@@ -354,15 +354,26 @@ final class PieceTree {
 
     func rangeOfComposedCharacterSequence(at location: Int) -> NSRange {
         let capped = min(max(location, 0), max(utf16Length - 1, 0))
-        let windowStart = max(0, capped - 8)
-        let windowEnd = min(utf16Length, capped + 8)
-        let window = NSRange(location: windowStart, length: max(windowEnd - windowStart, 0))
-        guard window.length > 0, let text = substring(in: window) else {
-            return NSRange(location: capped, length: utf16Length > 0 ? 1 : 0)
+        guard utf16Length > 0 else {
+            return NSRange(location: 0, length: 0)
         }
-        let local = capped - windowStart
-        let composed = (text as NSString).customRangeOfComposedCharacterSequence(at: local)
-        return NSRange(location: windowStart + composed.location, length: composed.length)
+        var radius = 16
+        while true {
+            let windowStart = max(0, capped - radius)
+            let windowEnd = min(utf16Length, capped + radius)
+            let window = NSRange(location: windowStart, length: max(windowEnd - windowStart, 0))
+            guard window.length > 0, let text = substring(in: window) else {
+                return NSRange(location: capped, length: 1)
+            }
+            let local = capped - windowStart
+            let composed = (text as NSString).customRangeOfComposedCharacterSequence(at: local)
+            let hitsStart = composed.location == 0 && windowStart > 0
+            let hitsEnd = NSMaxRange(composed) == window.length && windowEnd < utf16Length
+            if (!hitsStart && !hitsEnd) || radius >= utf16Length {
+                return NSRange(location: windowStart + composed.location, length: composed.length)
+            }
+            radius *= 2
+        }
     }
 
     func enumerateSubstrings(

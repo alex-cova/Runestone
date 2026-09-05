@@ -55,12 +55,14 @@ final class MoveLinesService {
         if isMovingDown && targetLine.data.delimiterLength == 0 {
             if lastLine.data.delimiterLength > 0 {
                 // We're moving to a line with no line break so we'll remove the last line break from the text we're moving.
-                // This behavior matches the one of Nova.
-                text.removeLast(lastLine.data.delimiterLength)
+                // This behavior matches the one of Nova. `delimiterLength` is UTF-16; `\r\n` is one Character.
+                let nsText = text as NSString
+                let strip = min(lastLine.data.delimiterLength, nsText.length)
+                text = nsText.substring(to: nsText.length - strip)
             }
             // Since the line we're moving to has no line break, we should add one in the beginning of the text.
             text = lineEndingSymbol + text
-            locationOffset += lineEndingSymbol.count
+            locationOffset += (lineEndingSymbol as NSString).length
         } else if !isMovingDown && lastLine.data.delimiterLength == 0 {
             // The last line we're moving has no line break, so we'll add one.
             text += lineEndingSymbol

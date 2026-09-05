@@ -106,7 +106,7 @@ public final class FindSession {
     public func selectNext(in text: String) {
         guard matchCount > 0 else { return }
         let options = searchOptions()
-        let after = currentRange.map { NSMaxRange($0) } ?? 0
+        let after = currentRange.map { $0.location + max($0.length, 1) } ?? 0
         if let next = FindSearchEngine.findNext(options: options, in: text, after: after) {
             currentRange = next
             currentIndex = ((currentIndex ?? -1) + 1) % matchCount
@@ -236,8 +236,8 @@ public final class FindSession {
                 break
             }
             ranges.append(next)
-            location = NSMaxRange(next)
-            if location >= nsLength { break }
+            location = next.location + max(next.length, 1)
+            if location > nsLength { break }
         }
         return ranges
     }

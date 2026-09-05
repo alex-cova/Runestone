@@ -14,7 +14,7 @@ public func makeCompletionContext(document: Document, trigger: RequestTrigger) -
     let startOffset = windowStart + localStart
     let start = TextPosition(
         line: cursor.position.line,
-        column: max(0, cursor.position.column - prefix.count),
+        column: max(0, cursor.position.column - (prefix as NSString).length),
         utf16Offset: startOffset
     )
     let range = TextRange(start: start, end: cursor.position)

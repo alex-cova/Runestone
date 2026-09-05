@@ -66,6 +66,28 @@ final class FoldingControllerTests: XCTestCase {
         XCTAssertGreaterThan(hiddenLine2.data.lineHeight, 0)
     }
 
+    func testExpandingOuterFoldKeepsCollapsedInnerFoldHidden() {
+        let (foldingController, lineManager, _) = makeFoldingController(text: """
+        func outer() {
+            func inner() {
+                let x = 1
+            }
+        }
+        """)
+        foldingController.isEnabled = true
+        foldingController.recomputeIfNeeded()
+        XCTAssertGreaterThanOrEqual(foldingController.folds.count, 2)
+        let inner = foldingController.folds.max(by: { $0.depth < $1.depth })!
+        foldingController.toggleCollapse(inner)
+        let outer = foldingController.folds.min(by: { $0.depth < $1.depth })!
+        foldingController.toggleCollapse(outer)
+        let expandedOuter = foldingController.folds.min(by: { $0.depth < $1.depth })!
+        foldingController.toggleCollapse(expandedOuter)
+        let innerBody = lineManager.line(atRow: 2)
+        XCTAssertTrue(foldingController.isLineHidden(innerBody.id))
+        XCTAssertEqual(innerBody.data.lineHeight, 0)
+    }
+
     func testDisablingFoldingExpandsEverything() {
         let (foldingController, lineManager, _) = makeFoldingController(text: """
         func foo() {

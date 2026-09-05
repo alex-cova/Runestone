@@ -174,13 +174,14 @@ public actor LanguageServerClient: LSPClient {
         case .optionA(let tokens):
             return EditorIntelligence.LSPSemanticTokensDelta(resultId: tokens.resultId, data: tokens.data)
         case .optionB(let delta):
-            var merged: [UInt32] = []
-            for edit in delta.edits {
-                if let data = edit.data {
-                    merged.append(contentsOf: data)
-                }
+            let edits = delta.edits.map { edit in
+                EditorIntelligence.LSPSemanticTokensEdit(
+                    start: Int(edit.start),
+                    deleteCount: Int(edit.deleteCount),
+                    data: edit.data ?? []
+                )
             }
-            return EditorIntelligence.LSPSemanticTokensDelta(resultId: delta.resultId, data: merged)
+            return EditorIntelligence.LSPSemanticTokensDelta(resultId: delta.resultId, data: [], edits: edits)
         }
     }
 

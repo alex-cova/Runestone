@@ -260,7 +260,7 @@ final class LayoutManager {
         let minimumLocation = firstLine.location
         let maximumLocation = lastLine.location + lastLine.data.length
         let startLocation = max(needleRange.location - peekLength, minimumLocation)
-        let endLocation = min(needleRange.location + needleRange.location + peekLength, maximumLocation)
+        let endLocation = min(NSMaxRange(needleRange) + peekLength, maximumLocation)
         let previewLength = endLocation - startLocation
         let previewRange = NSRange(location: startLocation, length: previewLength)
         let lineControllers = lines.map { lineControllerStorage.getOrCreateLineController(for: $0) }

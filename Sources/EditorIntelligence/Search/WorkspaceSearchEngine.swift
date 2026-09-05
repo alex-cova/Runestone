@@ -132,8 +132,14 @@ public actor WorkspaceSearchEngine {
         var index = 0
         let end = min(limit, text.length)
         while index < end {
-            if text.character(at: index) == 10 {
+            let unit = text.character(at: index)
+            if unit == 0x000A || unit == 0x0085 || unit == 0x2028 || unit == 0x2029 {
                 line += 1
+            } else if unit == 0x000D {
+                line += 1
+                if index + 1 < end && text.character(at: index + 1) == 0x000A {
+                    index += 1
+                }
             }
             index += 1
         }

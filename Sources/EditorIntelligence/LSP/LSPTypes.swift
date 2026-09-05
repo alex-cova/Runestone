@@ -158,14 +158,31 @@ public struct LSPSemanticTokens: Sendable {
     }
 }
 
+/// One edit from `textDocument/semanticTokens/full/delta`.
+public struct LSPSemanticTokensEdit: Sendable, Hashable {
+    public let start: Int
+    public let deleteCount: Int
+    public let data: [UInt32]
+
+    public init(start: Int, deleteCount: Int, data: [UInt32] = []) {
+        self.start = start
+        self.deleteCount = deleteCount
+        self.data = data
+    }
+}
+
 /// Semantic token delta returned by `textDocument/semanticTokens/full/delta`.
 public struct LSPSemanticTokensDelta: Sendable {
     public let resultId: String?
+    /// Full token array when the server returns `SemanticTokens` instead of a delta.
     public let data: [UInt32]
+    /// LSP delta edits against the previous `data` array. Applied in reverse start order.
+    public let edits: [LSPSemanticTokensEdit]
 
-    public init(resultId: String?, data: [UInt32]) {
+    public init(resultId: String?, data: [UInt32], edits: [LSPSemanticTokensEdit] = []) {
         self.resultId = resultId
         self.data = data
+        self.edits = edits
     }
 }
 

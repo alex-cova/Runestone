@@ -58,11 +58,8 @@ public final class RunestoneWorkbenchEditorAdapter: EditorAdapter, @unchecked Se
         guard document(withID: documentID) != nil else {
             throw RunestoneEditorAdapterError.unknownDocumentID(documentID)
         }
-        let range = NSRange(
-            location: edit.range.start.utf16Offset,
-            length: edit.range.end.utf16Offset - edit.range.start.utf16Offset
-        )
         await MainActor.run {
+            let range = TextEditApplicator.nsRange(for: edit.range, in: textView)
             textView.replace(range, withText: edit.replacement)
         }
     }
@@ -74,11 +71,8 @@ public final class RunestoneWorkbenchEditorAdapter: EditorAdapter, @unchecked Se
         guard let textView = textView else {
             throw RunestoneEditorAdapterError.textViewDeallocated
         }
-        let nsRange = NSRange(
-            location: range.start.utf16Offset,
-            length: range.end.utf16Offset - range.start.utf16Offset
-        )
         await MainActor.run {
+            let nsRange = TextEditApplicator.nsRange(for: range, in: textView)
             textView.selectedRanges = [nsRange]
         }
     }
@@ -186,6 +180,7 @@ public final class RunestoneWorkbenchEditorAdapter: EditorAdapter, @unchecked Se
 extension RunestoneWorkbenchEditorAdapter: TextViewDelegate {
     public func textViewDidChange(_ textView: TextView) {
         if let selected = workbench.activePane.selectedDocument {
+            selected.isDirty = true
             scheduleContentRefresh(from: textView, for: selected)
         }
         forwardingDelegate?.textViewDidChange(textView)

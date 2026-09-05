@@ -58,11 +58,8 @@ public final class RunestoneEditorAdapter: EditorAdapter, @unchecked Sendable {
         guard let textView = textView else {
             throw RunestoneEditorAdapterError.textViewDeallocated
         }
-        let range = NSRange(
-            location: edit.range.start.utf16Offset,
-            length: edit.range.end.utf16Offset - edit.range.start.utf16Offset
-        )
         await MainActor.run {
+            let range = TextEditApplicator.nsRange(for: edit.range, in: textView)
             textView.replace(range, withText: edit.replacement)
         }
     }
@@ -74,11 +71,8 @@ public final class RunestoneEditorAdapter: EditorAdapter, @unchecked Sendable {
         guard let textView = textView else {
             throw RunestoneEditorAdapterError.textViewDeallocated
         }
-        let nsRange = NSRange(
-            location: range.start.utf16Offset,
-            length: range.end.utf16Offset - range.start.utf16Offset
-        )
         await MainActor.run {
+            let nsRange = TextEditApplicator.nsRange(for: range, in: textView)
             textView.selectedRanges = [nsRange]
         }
     }

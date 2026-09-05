@@ -321,7 +321,7 @@ final class LineManager {
             return []
         }
         var lines: [DocumentLineNode] = [firstLine]
-        if range.length > 0, let lastLine = line(containingCharacterAt: range.location + range.length), lastLine !== firstLine {
+        if range.length > 0, let lastLine = line(containingCharacterAt: range.location + range.length - 1), lastLine !== firstLine {
             let startLineIndex = firstLine.index + 1
             let endLineIndex = lastLine.index - 1
             if startLineIndex <= endLineIndex {
@@ -339,7 +339,7 @@ final class LineManager {
             }
             return nil
         } else if let startLine = line(containingCharacterAt: range.lowerBound),
-                  let endLine = line(containingCharacterAt: range.upperBound) {
+                  let endLine = line(containingCharacterAt: range.upperBound - 1) {
             return (startLine, endLine)
         }
         return nil

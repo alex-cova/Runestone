@@ -22,17 +22,25 @@ final class TextEditHelper {
     }
 
     func replaceText(in range: NSRange, with newString: String) -> TextEditResult {
+        let documentLength = stringView.length
+        let location = min(max(range.location, 0), documentLength)
+        let clampedLength = min(max(range.length, 0), documentLength - location)
+        let range = NSRange(location: location, length: clampedLength)
         let nsNewString = newString as NSString
         let byteRange = ByteRange(utf16Range: range)
-        let oldEndLinePosition = lineManager.linePosition(at: range.location + range.length)!
+        let oldEndLinePosition = lineManager.linePosition(at: range.location + range.length)
+            ?? lineManager.linePosition(at: documentLength)
+            ?? LinePosition(row: 0, column: 0)
         stringView.replaceText(in: range, with: newString)
         let lineChangeSet = LineChangeSet()
         let lineChangeSetFromRemovingCharacters = lineManager.removeCharacters(in: range)
         lineChangeSet.union(with: lineChangeSetFromRemovingCharacters)
         let lineChangeSetFromInsertingCharacters = lineManager.insert(nsNewString, at: range.location)
         lineChangeSet.union(with: lineChangeSetFromInsertingCharacters)
-        let startLinePosition = lineManager.linePosition(at: range.location)!
-        let newEndLinePosition = lineManager.linePosition(at: range.location + nsNewString.length)!
+        let startLinePosition = lineManager.linePosition(at: range.location)
+            ?? LinePosition(row: 0, column: 0)
+        let newEndLinePosition = lineManager.linePosition(at: range.location + nsNewString.length)
+            ?? startLinePosition
         let textChange = TextChange(byteRange: byteRange,
                                     bytesAdded: newString.byteCount,
                                     oldEndLinePosition: oldEndLinePosition,

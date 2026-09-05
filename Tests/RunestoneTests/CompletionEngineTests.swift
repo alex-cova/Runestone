@@ -2,6 +2,12 @@ import XCTest
 import EditorIntelligence
 
 final class CompletionEngineTests: XCTestCase {
+    func testWordAtUTF16OffsetInsideEmojiDoesNotTrap() {
+        let text = String(repeating: "👨‍👩‍👧‍👦", count: 10)
+        let extracted = word(at: 50, in: text)
+        XCTAssertTrue(extracted.isEmpty || extracted == "👨‍👩‍👧‍👦")
+    }
+
     func testRunsProvidersAndRanks() async throws {
         let provider = MockCompletionProvider(
             name: "Test",
