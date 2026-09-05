@@ -228,4 +228,86 @@ final class FindSearchEngineTests: XCTestCase {
         XCTAssertEqual(query.matchMethod, .fullWord)
         XCTAssertTrue(query.isCaseSensitive)
     }
+
+    func testLiteralWindowConstants() {
+        XCTAssertEqual(FindSearchEngine.literalWindowUTF16, 64 * 1024)
+        XCTAssertEqual(FindSearchEngine.regexWindowUTF16, 1_048_576)
+        XCTAssertEqual(FindSearchEngine.regexOverlapUTF16, 64 * 1024)
+        XCTAssertEqual(FindSearchEngine.literalCaseInsensitiveOverlapUTF16("ß"), 16)
+        XCTAssertEqual(FindSearchEngine.literalCaseInsensitiveOverlapUTF16(String(repeating: "a", count: 10)), 30)
+    }
+
+    func testSourceOverloadAgreesWithStringForLiteral() {
+        let text = "foo Foo FOO bar"
+        let options = FindSearchOptions(query: "foo")
+        let fromString = FindSearchEngine.search(options: options, in: text, anchorLocation: 0)
+        let fromSource = FindSearchEngine.search(options: options, in: StringFindTextSource(text), anchorLocation: 0)
+        XCTAssertEqual(fromString, fromSource)
+        XCTAssertEqual(
+            FindSearchEngine.findNext(options: options, in: text, after: 1),
+            FindSearchEngine.findNext(options: options, in: StringFindTextSource(text), after: 1)
+        )
+        XCTAssertEqual(
+            FindSearchEngine.findPrevious(options: options, in: text, before: 8),
+            FindSearchEngine.findPrevious(options: options, in: StringFindTextSource(text), before: 8)
+        )
+    }
+
+    func testSourceOverloadRegexOnContiguousStringStillWorks() {
+        let source = StringFindTextSource("abc 123 def 456")
+        let outcome = FindSearchEngine.search(
+            options: FindSearchOptions(query: "[0-9]+", useRegex: true),
+            in: source,
+            anchorLocation: 0
+        )
+        XCTAssertNil(outcome.errorMessage)
+        XCTAssertEqual(outcome.matchCount, 2)
+        XCTAssertEqual(outcome.currentRange, NSRange(location: 4, length: 3))
+    }
+
+    func testRegexOnNonContiguousSourceReturnsErrorWithoutReading() {
+        let source = RecordingFindTextSource(string: String(repeating: "needle ", count: 1_000))
+        let outcome = FindSearchEngine.search(
+            options: FindSearchOptions(query: "nee.le", useRegex: true),
+            in: source,
+            anchorLocation: 0
+        )
+        XCTAssertEqual(outcome.errorMessage, FindSearchEngine.regexWindowsNotImplementedMessage)
+        XCTAssertEqual(outcome.matchCount, 0)
+        XCTAssertEqual(source.substringCallCount, 0)
+
+        let wholeWord = FindSearchEngine.search(
+            options: FindSearchOptions(query: "needle", wholeWord: true),
+            in: source,
+            anchorLocation: 0
+        )
+        XCTAssertEqual(wholeWord.errorMessage, FindSearchEngine.regexWindowsNotImplementedMessage)
+        XCTAssertEqual(source.substringCallCount, 0)
+    }
+}
+
+private final class RecordingFindTextSource: FindTextSource, @unchecked Sendable {
+    let string: String
+    private(set) var substringCallCount = 0
+
+    init(string: String) {
+        self.string = string
+    }
+
+    var utf16Length: Int {
+        (string as NSString).length
+    }
+
+    var contiguousNSString: NSString? { nil }
+
+    func substring(utf16Offset: Int, length: Int) -> String {
+        substringCallCount += 1
+        let ns = string as NSString
+        let location = max(0, utf16Offset)
+        let take = max(0, min(length, ns.length - location))
+        guard take > 0 else {
+            return ""
+        }
+        return ns.substring(with: NSRange(location: location, length: take))
+    }
 }

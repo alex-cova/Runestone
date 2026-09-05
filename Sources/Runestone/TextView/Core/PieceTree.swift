@@ -35,7 +35,7 @@ typealias PieceNode = RedBlackTreeNode<PieceNodeID, Int, PieceNodeData>
 typealias PieceNodeTree = RedBlackTree<PieceNodeID, Int, PieceNodeData>
 
 /// Immutable copy of piece-tree buffers for EIP ranged reads off the editor thread.
-struct PieceTreeContentSnapshot: Sendable {
+struct PieceTreeContentSnapshot: Sendable, FindTextSource {
     struct PieceCopy: Sendable {
         var sourceIsOriginal: Bool
         var utf8Offset: Int
@@ -49,6 +49,9 @@ struct PieceTreeContentSnapshot: Sendable {
     let pieces: [PieceCopy]
     let originalCheckpoints: [UTF8DocumentScanner.Checkpoint]
     let utf16Length: Int
+    let utf8Length: Int
+
+    var contiguousNSString: NSString? { nil }
 
     func substring(utf16Offset: Int, length: Int) -> String {
         let location = max(0, utf16Offset)
@@ -58,6 +61,46 @@ struct PieceTreeContentSnapshot: Sendable {
         }
         let units = utf16Units(in: NSRange(location: location, length: take))
         return String(utf16CodeUnits: units, count: units.count)
+    }
+
+    func prefetch(utf16Range: NSRange) {
+        guard let original else {
+            return
+        }
+        let location = max(0, utf16Range.location)
+        let length = min(max(utf16Range.length, 0), max(0, utf16Length - location))
+        guard length > 0 else {
+            return
+        }
+        var remainingCap = PieceTree.prefetchByteCap
+        var cursor = location
+        let end = location + length
+        var utf16 = 0
+        for piece in pieces {
+            if remainingCap <= 0 || cursor >= end {
+                break
+            }
+            let pieceEnd = utf16 + piece.utf16Length
+            if piece.sourceIsOriginal, cursor < pieceEnd, end > utf16 {
+                let local = max(cursor, utf16) - utf16
+                let take = min(end, pieceEnd) - (utf16 + local)
+                if take > 0 {
+                    withUTF8(of: piece) { bytes in
+                        let utf8Start = piece.utf8Offset + utf8Offset(in: piece, localUTF16: local, bytes: bytes)
+                        let utf8End = piece.utf8Offset + utf8Offset(in: piece, localUTF16: local + take, bytes: bytes)
+                        let count = min(max(utf8End - utf8Start, 0), remainingCap)
+                        if count > 0 {
+                            original.prefetch(byteOffset: utf8Start, count: count)
+                            remainingCap -= count
+                        }
+                    }
+                    cursor += take
+                }
+            } else if cursor < pieceEnd {
+                cursor = pieceEnd
+            }
+            utf16 = pieceEnd
+        }
     }
 
     private func utf16Units(in range: NSRange) -> [unichar] {
@@ -463,7 +506,8 @@ final class PieceTree {
             addBuffer: addBuffer,
             pieces: copies,
             originalCheckpoints: originalCheckpoints,
-            utf16Length: utf16Length
+            utf16Length: utf16Length,
+            utf8Length: copies.reduce(0) { $0 + $1.utf8Length }
         )
     }
 
