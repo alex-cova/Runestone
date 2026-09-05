@@ -265,37 +265,41 @@ final class FindSearchEngineTests: XCTestCase {
         XCTAssertEqual(outcome.currentRange, NSRange(location: 4, length: 3))
     }
 
-    func testRegexOnNonContiguousSourceReturnsErrorWithoutReading() {
+    func testRegexOnNonContiguousSourceWindowsWithoutContiguousString() throws {
         let source = RecordingFindTextSource(string: String(repeating: "needle ", count: 1_000))
         let regex = FindSearchOptions(query: "nee.le", useRegex: true)
         let outcome = FindSearchEngine.search(options: regex, in: source, anchorLocation: 0)
-        XCTAssertEqual(outcome.errorMessage, FindSearchEngine.regexWindowsNotImplementedMessage)
-        XCTAssertEqual(outcome.matchCount, 0)
-        XCTAssertEqual(source.substringCallCount, 0)
+        XCTAssertNil(outcome.errorMessage)
+        XCTAssertEqual(outcome.matchCount, 1_000)
+        XCTAssertEqual(outcome.currentRange, NSRange(location: 0, length: 6))
+        XCTAssertGreaterThan(source.substringCallCount, 0)
 
         let wholeWord = FindSearchEngine.search(
             options: FindSearchOptions(query: "needle", wholeWord: true),
             in: source,
             anchorLocation: 0
         )
-        XCTAssertEqual(wholeWord.errorMessage, FindSearchEngine.regexWindowsNotImplementedMessage)
-        XCTAssertEqual(source.substringCallCount, 0)
+        XCTAssertNil(wholeWord.errorMessage)
+        XCTAssertEqual(wholeWord.matchCount, 1_000)
 
-        XCTAssertNil(FindSearchEngine.findNext(options: regex, in: source, after: 0))
-        XCTAssertEqual(source.substringCallCount, 0)
-        XCTAssertNil(FindSearchEngine.findPrevious(options: regex, in: source, before: source.utf16Length))
-        XCTAssertEqual(source.substringCallCount, 0)
-        XCTAssertThrowsError(try FindSearchEngine.replaceAllMatches(options: regex, in: source, replacement: "x"))
-        XCTAssertEqual(source.substringCallCount, 0)
-        XCTAssertThrowsError(
-            try FindSearchEngine.replacementText(
-                options: regex,
-                in: source,
-                matching: NSRange(location: 0, length: 1),
-                replacement: "$0"
-            )
+        XCTAssertEqual(
+            FindSearchEngine.findNext(options: regex, in: source, after: 0),
+            NSRange(location: 0, length: 6)
         )
-        XCTAssertEqual(source.substringCallCount, 0)
+        XCTAssertEqual(
+            FindSearchEngine.findPrevious(options: regex, in: source, before: source.utf16Length),
+            NSRange(location: source.utf16Length - 7, length: 6)
+        )
+        let matches = try FindSearchEngine.replaceAllMatches(options: regex, in: source, replacement: "x")
+        XCTAssertEqual(matches.count, 1_000)
+        let expanded = try FindSearchEngine.replacementText(
+            options: regex,
+            in: source,
+            matching: NSRange(location: 0, length: 6),
+            replacement: "$0"
+        )
+        XCTAssertEqual(expanded, "needle")
+        XCTAssertNil(source.contiguousNSString)
     }
 }
 

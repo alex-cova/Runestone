@@ -89,9 +89,17 @@ public struct FindSearchOptions: Sendable, Equatable {
 ///
 /// This is a separate, parallel implementation to ``SearchQuery``/`TextView.search(for:)` rather
 /// than a replacement for it — that API stays exactly as it is. Regular expressions use
-/// `.anchorsMatchLines`, so `^`/`$` match at line boundaries (same as ``SearchQuery``). On a
-/// non-contiguous ``FindTextSource``, regex and whole-word search are not windowed yet and
-/// return an error outcome rather than materializing the document.
+/// `.anchorsMatchLines`, so `^`/`$` match at line boundaries (same as ``SearchQuery``).
+///
+/// On a non-contiguous ``FindTextSource``, regex and whole-word search walk 1 MiB unique windows.
+/// The matcher region is unique plus a 64 KiB right pad so a match that starts in unique and ends
+/// in the pad is found. A left pad is visible only via `.withTransparentBounds` /
+/// `.withoutAnchoringBounds` when the unique start is past document start, so lookbehind / `\b` /
+/// `^` see prior context without matching at a mid-file unique cut. Accept a match iff
+/// `offset <= start < offset + unique`, or `start == utf16Length` on the last window. A successful
+/// match longer than unique + right pad (for example `foo.*bar` with `bar` 2 MiB past `foo`) is
+/// missed; there is no extend-on-touch heuristic. Contiguous `NSString` documents keep whole-string
+/// `enumerateMatches`.
 public enum FindSearchEngine {
     public static let maxHighlightedMatches = 100
     /// Literal/regex scans above this size run off the main actor when possible (see
@@ -106,14 +114,15 @@ public enum FindSearchEngine {
 
     /// Overridable in tests so a match can be forced across a unique/right-pad cut without a 64 KB fixture.
     nonisolated(unsafe) static var debugLiteralWindowUTF16: Int?
+    /// Overridable in tests so a regex match can be forced across a unique cut without a 1 MiB fixture.
+    /// 2 MiB `^`/`$` tests must leave this `nil` so they use ``regexWindowUTF16``.
+    nonisolated(unsafe) static var debugRegexWindowUTF16: Int?
     /// UTF-16 length of each windowed-literal substring, for tests that extend-1 actually widened the first window.
     nonisolated(unsafe) static var debugLiteralWindowSubstringUTF16Lengths: [Int]?
 
     public static func literalCaseInsensitiveOverlapUTF16(_ query: String) -> Int {
         max(query.utf16.count * 3, 16)
     }
-
-    static let regexWindowsNotImplementedMessage = "regex windows land in 1b"
 
     public static func search(
         options: FindSearchOptions,
@@ -133,18 +142,9 @@ public enum FindSearchEngine {
         guard !options.query.isEmpty else { return .empty }
         do {
             if options.useRegex || options.wholeWord {
-                guard let ns = source.contiguousNSString else {
-                    return FindSearchOutcome(
-                        matchCount: 0,
-                        currentIndex: nil,
-                        currentRange: nil,
-                        highlightRanges: [],
-                        errorMessage: regexWindowsNotImplementedMessage
-                    )
-                }
                 return try regexSearch(
                     options: options,
-                    in: ns as String,
+                    in: source,
                     anchorLocation: anchorLocation,
                     maxHighlights: maxHighlights
                 )
@@ -173,9 +173,7 @@ public enum FindSearchEngine {
     public static func findNext(options: FindSearchOptions, in source: any FindTextSource, after location: Int) -> NSRange? {
         guard !options.query.isEmpty else { return nil }
         if options.useRegex || options.wholeWord {
-            guard let ns = source.contiguousNSString else { return nil }
-            let start = min(max(location, 0), ns.length)
-            return try? regexNext(options: options, in: ns as String, from: start)
+            return try? regexNext(options: options, in: source, after: location)
         }
         let start = min(max(location, 0), source.utf16Length)
         var found: NSRange?
@@ -193,9 +191,7 @@ public enum FindSearchEngine {
     public static func findPrevious(options: FindSearchOptions, in source: any FindTextSource, before location: Int) -> NSRange? {
         guard !options.query.isEmpty else { return nil }
         if options.useRegex || options.wholeWord {
-            guard let ns = source.contiguousNSString else { return nil }
-            let limit = min(max(location, 0), ns.length)
-            return try? regexPrevious(options: options, in: ns as String, before: limit)
+            return try? regexPrevious(options: options, in: source, before: location)
         }
         if let ns = source.contiguousNSString {
             let limit = min(max(location, 0), ns.length)
@@ -239,22 +235,27 @@ public enum FindSearchEngine {
         guard options.useRegex || options.wholeWord else {
             return replacement
         }
-        guard let ns = source.contiguousNSString else {
-            throw FindRegexWindowsNotImplementedError()
+        if let ns = source.contiguousNSString {
+            let text = ns as String
+            guard range.location != NSNotFound, NSMaxRange(range) <= ns.length else {
+                return replacement
+            }
+            let parsed = ReplacementStringParser(string: replacement).parse()
+            guard parsed.containsPlaceholder else {
+                return replacement
+            }
+            let regex = try FindRegexCache.regex(pattern: regexPattern(for: options), options: regexOptions(for: options))
+            guard let result = regex.firstMatch(in: text, options: [], range: range), result.range == range else {
+                return replacement
+            }
+            return parsed.string(byMatching: result, in: ns)
         }
-        let text = ns as String
-        guard range.location != NSNotFound, NSMaxRange(range) <= ns.length else {
-            return replacement
-        }
-        let parsed = ReplacementStringParser(string: replacement).parse()
-        guard parsed.containsPlaceholder else {
-            return replacement
-        }
-        let regex = try FindRegexCache.regex(pattern: regexPattern(for: options), options: regexOptions(for: options))
-        guard let result = regex.firstMatch(in: text, options: [], range: range), result.range == range else {
-            return replacement
-        }
-        return parsed.string(byMatching: result, in: ns)
+        return try windowedReplacementText(
+            options: options,
+            in: source,
+            matching: range,
+            replacement: replacement
+        )
     }
 
     /// Per-match ranges and replacement strings for building a ``BatchReplaceSet``.
@@ -279,10 +280,7 @@ public enum FindSearchEngine {
     ) throws -> [FindReplaceMatch] {
         guard !options.query.isEmpty else { return [] }
         if options.useRegex || options.wholeWord {
-            guard let ns = source.contiguousNSString else {
-                throw FindRegexWindowsNotImplementedError()
-            }
-            return try regexReplaceAllMatches(options: options, in: ns as String, replacement: replacement)
+            return try regexReplaceAllMatches(options: options, in: source, replacement: replacement)
         }
         return try literalReplaceAllMatches(options: options, in: source, replacement: replacement)
     }
@@ -637,6 +635,28 @@ public enum FindSearchEngine {
 
     private static func regexSearch(
         options: FindSearchOptions,
+        in source: any FindTextSource,
+        anchorLocation: Int,
+        maxHighlights: Int
+    ) throws -> FindSearchOutcome {
+        if let ns = source.contiguousNSString {
+            return try contiguousRegexSearch(
+                options: options,
+                in: ns as String,
+                anchorLocation: anchorLocation,
+                maxHighlights: maxHighlights
+            )
+        }
+        return try windowedRegexSearch(
+            options: options,
+            in: source,
+            anchorLocation: anchorLocation,
+            maxHighlights: maxHighlights
+        )
+    }
+
+    private static func contiguousRegexSearch(
+        options: FindSearchOptions,
         in text: String,
         anchorLocation: Int,
         maxHighlights: Int
@@ -676,7 +696,7 @@ public enum FindSearchEngine {
             currentRange = regex.firstMatch(in: text, options: [], range: full)?.range
         }
 
-        let highlights = try collectRegexHighlights(
+        let highlights = try collectContiguousRegexHighlights(
             regex: regex,
             in: text,
             around: currentIndex ?? 0,
@@ -693,7 +713,7 @@ public enum FindSearchEngine {
         )
     }
 
-    private static func collectRegexHighlights(
+    private static func collectContiguousRegexHighlights(
         regex: NSRegularExpression,
         in text: String,
         around index: Int,
@@ -725,31 +745,58 @@ public enum FindSearchEngine {
         return ranges
     }
 
-    private static func regexNext(options: FindSearchOptions, in text: String, from location: Int) throws -> NSRange? {
-        let regex = try FindRegexCache.regex(pattern: regexPattern(for: options), options: regexOptions(for: options))
-        let ns = text as NSString
-        let range = NSRange(location: min(location, ns.length), length: ns.length - min(location, ns.length))
-        guard range.length > 0 else { return nil }
-        return regex.firstMatch(in: text, options: [], range: range)?.range
+    private static func regexNext(
+        options: FindSearchOptions,
+        in source: any FindTextSource,
+        after location: Int
+    ) throws -> NSRange? {
+        if let ns = source.contiguousNSString {
+            let text = ns as String
+            let regex = try FindRegexCache.regex(pattern: regexPattern(for: options), options: regexOptions(for: options))
+            let start = min(max(location, 0), ns.length)
+            let range = NSRange(location: start, length: ns.length - start)
+            guard range.length > 0 else { return nil }
+            return regex.firstMatch(in: text, options: [], range: range)?.range
+        }
+        return try windowedRegexNext(options: options, in: source, after: location)
     }
 
-    private static func regexPrevious(options: FindSearchOptions, in text: String, before location: Int) throws -> NSRange? {
-        let regex = try FindRegexCache.regex(pattern: regexPattern(for: options), options: regexOptions(for: options))
-        let limit = min(location, (text as NSString).length)
-        let full = NSRange(location: 0, length: limit)
-        var last: NSRange?
-        regex.enumerateMatches(in: text, options: [], range: full) { result, _, stop in
-            if Task.isCancelled {
-                stop.pointee = true
-                return
+    private static func regexPrevious(
+        options: FindSearchOptions,
+        in source: any FindTextSource,
+        before location: Int
+    ) throws -> NSRange? {
+        if let ns = source.contiguousNSString {
+            let text = ns as String
+            let regex = try FindRegexCache.regex(pattern: regexPattern(for: options), options: regexOptions(for: options))
+            let limit = min(max(location, 0), ns.length)
+            let full = NSRange(location: 0, length: limit)
+            var last: NSRange?
+            regex.enumerateMatches(in: text, options: [], range: full) { result, _, stop in
+                if Task.isCancelled {
+                    stop.pointee = true
+                    return
+                }
+                guard let range = result?.range, range.location != NSNotFound else { return }
+                last = range
             }
-            guard let range = result?.range, range.location != NSNotFound else { return }
-            last = range
+            return last
         }
-        return last
+        return try windowedRegexPrevious(options: options, in: source, before: location)
     }
 
     private static func regexReplaceAllMatches(
+        options: FindSearchOptions,
+        in source: any FindTextSource,
+        replacement: String
+    ) throws -> [FindReplaceMatch] {
+        if let ns = source.contiguousNSString {
+            return try contiguousRegexReplaceAllMatches(options: options, in: ns as String, replacement: replacement)
+        }
+        return try windowedRegexReplaceAllMatches(options: options, in: source, replacement: replacement)
+    }
+
+    private static func contiguousRegexReplaceAllMatches(
         options: FindSearchOptions,
         in text: String,
         replacement: String
@@ -778,6 +825,407 @@ public enum FindSearchEngine {
         return matches
     }
 
+    // MARK: - Windowed regex
+
+    private static func windowedRegexSearch(
+        options: FindSearchOptions,
+        in source: any FindTextSource,
+        anchorLocation: Int,
+        maxHighlights: Int
+    ) throws -> FindSearchOutcome {
+        let regex = try FindRegexCache.regex(pattern: regexPattern(for: options), options: regexOptions(for: options))
+        var matchCount = 0
+        var currentIndex: Int?
+        var currentRange: NSRange?
+        var firstRange: NSRange?
+        let result = enumerateWindowedRegexMatches(regex: regex, in: source) { found, _, _ in
+            if firstRange == nil {
+                firstRange = found
+            }
+            let index = matchCount
+            matchCount += 1
+            if currentIndex == nil, found.location >= anchorLocation {
+                currentIndex = index
+                currentRange = found
+            }
+            return true
+        }
+        if result == .cancelled {
+            return .empty
+        }
+        if matchCount == 0 {
+            return .empty
+        }
+        if currentIndex == nil {
+            currentIndex = 0
+            currentRange = firstRange
+        }
+        let highlights = collectWindowedRegexHighlights(
+            regex: regex,
+            in: source,
+            around: currentIndex ?? 0,
+            matchCount: matchCount,
+            maxHighlights: maxHighlights
+        )
+        return FindSearchOutcome(
+            matchCount: matchCount,
+            currentIndex: currentIndex,
+            currentRange: currentRange,
+            highlightRanges: highlights,
+            errorMessage: nil
+        )
+    }
+
+    private static func collectWindowedRegexHighlights(
+        regex: NSRegularExpression,
+        in source: any FindTextSource,
+        around index: Int,
+        matchCount: Int,
+        maxHighlights: Int
+    ) -> [NSRange] {
+        let half = maxHighlights / 2
+        let startIndex = max(0, min(index - half, max(0, matchCount - maxHighlights)))
+        let endIndex = min(matchCount, startIndex + maxHighlights)
+        var ranges: [NSRange] = []
+        var matchIndex = 0
+        _ = enumerateWindowedRegexMatches(regex: regex, in: source) { found, _, _ in
+            if matchIndex >= endIndex {
+                return false
+            }
+            if matchIndex >= startIndex {
+                ranges.append(found)
+            }
+            matchIndex += 1
+            return true
+        }
+        return ranges
+    }
+
+    private static func windowedRegexNext(
+        options: FindSearchOptions,
+        in source: any FindTextSource,
+        after location: Int
+    ) throws -> NSRange? {
+        let regex = try FindRegexCache.regex(pattern: regexPattern(for: options), options: regexOptions(for: options))
+        let after = max(location, 0)
+        var found: NSRange?
+        _ = enumerateWindowedRegexMatches(regex: regex, in: source, from: after) { range, _, _ in
+            if range.location > source.utf16Length {
+                return true
+            }
+            if range.location >= after || (range.location == source.utf16Length && after <= source.utf16Length) {
+                found = range
+                return false
+            }
+            return true
+        }
+        return found
+    }
+
+    private static func windowedRegexPrevious(
+        options: FindSearchOptions,
+        in source: any FindTextSource,
+        before location: Int
+    ) throws -> NSRange? {
+        let utf16Length = source.utf16Length
+        guard utf16Length > 0, location > 0 else {
+            return nil
+        }
+        let regex = try FindRegexCache.regex(pattern: regexPattern(for: options), options: regexOptions(for: options))
+        let windowSize = effectiveRegexWindowUTF16()
+        // Geometry only; do not clamp `before` before the accept test (wrap-around uses length + 1).
+        var cursor = min(location, utf16Length)
+
+        while cursor > 0 {
+            if Task.isCancelled {
+                return nil
+            }
+            let plannedUnique = min(windowSize, cursor)
+            let uniqueStart = cursor - plannedUnique
+            let geometry = makeRegexWindow(
+                uniqueStart: uniqueStart,
+                plannedUnique: plannedUnique,
+                utf16Length: utf16Length,
+                source: source
+            )
+            let windowString = source.substring(utf16Offset: geometry.substrStart, length: geometry.substrLength)
+            let ns = windowString as NSString
+            var searchRange = geometry.localSearchRange
+            if NSMaxRange(searchRange) > ns.length {
+                searchRange.length = max(0, ns.length - searchRange.location)
+            }
+            var last: NSRange?
+            var wasCancelled = false
+            regex.enumerateMatches(
+                in: ns as String,
+                options: geometry.matchingOptions,
+                range: searchRange
+            ) { result, _, stop in
+                if Task.isCancelled {
+                    wasCancelled = true
+                    stop.pointee = true
+                    return
+                }
+                guard let result, result.range.location != NSNotFound else { return }
+                let docStart = geometry.substrStart + result.range.location
+                let inWindow = (uniqueStart <= docStart && docStart < cursor)
+                    || (cursor == utf16Length && docStart == utf16Length)
+                guard inWindow else {
+                    if docStart >= cursor && !(cursor == utf16Length && docStart == utf16Length) {
+                        stop.pointee = true
+                    }
+                    return
+                }
+                let beforeCaller = docStart < location
+                    || (docStart == utf16Length && location >= utf16Length)
+                guard beforeCaller else { return }
+                let candidate = NSRange(location: docStart, length: result.range.length)
+                if let current = last {
+                    if candidate.location > current.location
+                        || (candidate.location == current.location && candidate.length >= current.length) {
+                        last = candidate
+                    }
+                } else {
+                    last = candidate
+                }
+            }
+            if wasCancelled {
+                return nil
+            }
+            if let last {
+                return last
+            }
+            cursor = uniqueStart
+        }
+        return nil
+    }
+
+    private static func windowedRegexReplaceAllMatches(
+        options: FindSearchOptions,
+        in source: any FindTextSource,
+        replacement: String
+    ) throws -> [FindReplaceMatch] {
+        let regex = try FindRegexCache.regex(pattern: regexPattern(for: options), options: regexOptions(for: options))
+        let parsed = ReplacementStringParser(string: replacement).parse()
+        var matches: [FindReplaceMatch] = []
+        let result = enumerateWindowedRegexMatches(regex: regex, in: source) { range, checkingResult, window in
+            let replacementText = parsed.containsPlaceholder
+                ? parsed.string(byMatching: checkingResult, in: window)
+                : replacement
+            matches.append(FindReplaceMatch(range: range, replacementText: replacementText))
+            return true
+        }
+        if result == .cancelled {
+            throw CancellationError()
+        }
+        return matches
+    }
+
+    private static func windowedReplacementText(
+        options: FindSearchOptions,
+        in source: any FindTextSource,
+        matching range: NSRange,
+        replacement: String
+    ) throws -> String {
+        let utf16Length = source.utf16Length
+        guard range.location != NSNotFound, range.location >= 0, NSMaxRange(range) <= utf16Length else {
+            return replacement
+        }
+        let parsed = ReplacementStringParser(string: replacement).parse()
+        guard parsed.containsPlaceholder else {
+            return replacement
+        }
+        let regex = try FindRegexCache.regex(pattern: regexPattern(for: options), options: regexOptions(for: options))
+        let pad = regexOverlapUTF16
+        var substrStart = max(0, range.location - pad)
+        var substrEnd = min(utf16Length, NSMaxRange(range) + pad)
+        if substrStart > 0, let unit = utf16Unit(in: source, at: substrStart), isLowSurrogate(unit) {
+            substrStart -= 1
+        }
+        if substrEnd < utf16Length,
+           let unit = utf16Unit(in: source, at: substrEnd), isHighSurrogate(unit),
+           let next = utf16Unit(in: source, at: substrEnd + 1), isLowSurrogate(next) {
+            substrEnd += 1
+        }
+        let windowString = source.substring(utf16Offset: substrStart, length: substrEnd - substrStart)
+        let ns = windowString as NSString
+        let local = NSRange(location: range.location - substrStart, length: range.length)
+        guard local.location >= 0, NSMaxRange(local) <= ns.length else {
+            return replacement
+        }
+        var matchingOptions: NSRegularExpression.MatchingOptions = [.withTransparentBounds]
+        if substrStart > 0 {
+            matchingOptions.insert(.withoutAnchoringBounds)
+        }
+        guard let result = regex.firstMatch(in: ns as String, options: matchingOptions, range: local),
+              result.range == local else {
+            return replacement
+        }
+        return parsed.string(byMatching: result, in: ns)
+    }
+
+    /// Invokes `body` for each accepted regex match in document coordinates.
+    /// `result` ranges are relative to `window`. `body` returns `false` to stop.
+    private static func enumerateWindowedRegexMatches(
+        regex: NSRegularExpression,
+        in source: any FindTextSource,
+        from startOffset: Int = 0,
+        body: (NSRange, NSTextCheckingResult, NSString) -> Bool
+    ) -> LiteralEnumerateResult {
+        let utf16Length = source.utf16Length
+        let windowSize = effectiveRegexWindowUTF16()
+        var offset = min(max(startOffset, 0), utf16Length)
+
+        while offset < utf16Length {
+            if Task.isCancelled {
+                return .cancelled
+            }
+            let plannedUnique = min(windowSize, utf16Length - offset)
+            let geometry = makeRegexWindow(
+                uniqueStart: offset,
+                plannedUnique: plannedUnique,
+                utf16Length: utf16Length,
+                source: source
+            )
+            let windowString = source.substring(utf16Offset: geometry.substrStart, length: geometry.substrLength)
+            let ns = windowString as NSString
+            var searchRange = geometry.localSearchRange
+            if NSMaxRange(searchRange) > ns.length {
+                searchRange.length = max(0, ns.length - searchRange.location)
+            }
+            var stopped = false
+            var cancelled = false
+            regex.enumerateMatches(
+                in: ns as String,
+                options: geometry.matchingOptions,
+                range: searchRange
+            ) { result, _, stop in
+                if Task.isCancelled {
+                    cancelled = true
+                    stop.pointee = true
+                    return
+                }
+                guard let result, result.range.location != NSNotFound else { return }
+                let docStart = geometry.substrStart + result.range.location
+                if !geometry.accepts(docStart: docStart, utf16Length: utf16Length) {
+                    if docStart >= geometry.uniqueEnd {
+                        stop.pointee = true
+                    }
+                    return
+                }
+                let docRange = NSRange(location: docStart, length: result.range.length)
+                if !body(docRange, result, ns) {
+                    stopped = true
+                    stop.pointee = true
+                }
+            }
+            if cancelled {
+                return .cancelled
+            }
+            if stopped {
+                return .stopped
+            }
+            prefetchNextRegexWindow(in: source, from: geometry.uniqueEnd, unique: windowSize)
+            offset = geometry.uniqueEnd
+        }
+        return .completed
+    }
+
+    private struct RegexWindowGeometry {
+        let uniqueStart: Int
+        let plannedUnique: Int
+        let uniqueEnd: Int
+        let includesEOF: Bool
+        let leftPad: Int
+        let rightPad: Int
+        let substrStart: Int
+        let substrLength: Int
+        let localSearchRange: NSRange
+        let matchingOptions: NSRegularExpression.MatchingOptions
+
+        func accepts(docStart: Int, utf16Length: Int) -> Bool {
+            if uniqueStart <= docStart && docStart < uniqueEnd {
+                return true
+            }
+            return includesEOF && docStart == utf16Length
+        }
+    }
+
+    private static func makeRegexWindow(
+        uniqueStart: Int,
+        plannedUnique: Int,
+        utf16Length: Int,
+        source: any FindTextSource
+    ) -> RegexWindowGeometry {
+        let uniqueEnd = uniqueStart + plannedUnique
+        let includesEOF = uniqueEnd == utf16Length
+        let leftPad = regexLeftPad(uniqueStart: uniqueStart, source: source)
+        var rightPad = includesEOF ? 0 : min(regexOverlapUTF16, utf16Length - uniqueEnd)
+        let searchEnd = uniqueEnd + rightPad
+        if searchEnd < utf16Length,
+           let unit = utf16Unit(in: source, at: searchEnd), isHighSurrogate(unit),
+           let next = utf16Unit(in: source, at: searchEnd + 1), isLowSurrogate(next) {
+            rightPad += 1
+        }
+        let matchingOptions: NSRegularExpression.MatchingOptions = uniqueStart > 0
+            ? [.withTransparentBounds, .withoutAnchoringBounds]
+            : []
+        return RegexWindowGeometry(
+            uniqueStart: uniqueStart,
+            plannedUnique: plannedUnique,
+            uniqueEnd: uniqueEnd,
+            includesEOF: includesEOF,
+            leftPad: leftPad,
+            rightPad: rightPad,
+            substrStart: uniqueStart - leftPad,
+            substrLength: leftPad + plannedUnique + rightPad,
+            localSearchRange: NSRange(location: leftPad, length: plannedUnique + rightPad),
+            matchingOptions: matchingOptions
+        )
+    }
+
+    /// Left pad starts at ``regexOverlapUTF16`` (or to document start), then grows to include the
+    /// preceding line delimiter and a leading-low-surrogate snap. Not part of the matcher region.
+    private static func regexLeftPad(uniqueStart: Int, source: any FindTextSource) -> Int {
+        guard uniqueStart > 0 else {
+            return 0
+        }
+        var leftPad = min(regexOverlapUTF16, uniqueStart)
+        let start = uniqueStart - leftPad
+        if start > 0, let unit = utf16Unit(in: source, at: start - 1) {
+            if unit == 0x000A {
+                leftPad += 1
+                if start - 1 > 0, let prev = utf16Unit(in: source, at: start - 2), prev == 0x000D {
+                    leftPad += 1
+                }
+            } else if unit == 0x000D || unit == 0x0085 || unit == 0x2028 || unit == 0x2029 {
+                leftPad += 1
+            }
+        }
+        let snappedStart = uniqueStart - leftPad
+        if snappedStart > 0, let unit = utf16Unit(in: source, at: snappedStart), isLowSurrogate(unit) {
+            leftPad += 1
+        }
+        return leftPad
+    }
+
+    private static func prefetchNextRegexWindow(
+        in source: any FindTextSource,
+        from offset: Int,
+        unique: Int
+    ) {
+        guard let snapshot = source as? PieceTreeContentSnapshot, offset < snapshot.utf16Length else {
+            return
+        }
+        let nextUnique = min(unique, snapshot.utf16Length - offset)
+        let nextPad = min(regexOverlapUTF16, max(0, snapshot.utf16Length - offset - nextUnique))
+        snapshot.prefetch(utf16Range: NSRange(location: offset, length: nextUnique + nextPad))
+    }
+
+    private static func effectiveRegexWindowUTF16() -> Int {
+        max(debugRegexWindowUTF16 ?? regexWindowUTF16, 1)
+    }
+
     private static func regexPattern(for options: FindSearchOptions) -> String {
         if options.useRegex {
             return options.query
@@ -795,12 +1243,6 @@ public enum FindSearchEngine {
             regexOptions.insert(.caseInsensitive)
         }
         return regexOptions
-    }
-}
-
-private struct FindRegexWindowsNotImplementedError: Error, LocalizedError {
-    var errorDescription: String? {
-        FindSearchEngine.regexWindowsNotImplementedMessage
     }
 }
 

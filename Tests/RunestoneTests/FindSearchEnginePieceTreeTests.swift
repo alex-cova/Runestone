@@ -178,39 +178,34 @@ final class FindSearchEnginePieceTreeTests: XCTestCase {
         let snapshot = try XCTUnwrap(view.contentSnapshot())
         let before = view.materializeCount
 
-        let regex = FindSearchEngine.search(
-            options: FindSearchOptions(query: "cat", useRegex: true),
-            in: snapshot,
-            anchorLocation: 0
-        )
-        XCTAssertEqual(regex.errorMessage, FindSearchEngine.regexWindowsNotImplementedMessage)
-        XCTAssertEqual(regex.matchCount, 0)
-        XCTAssertNil(regex.currentRange)
+        let regexOptions = FindSearchOptions(query: "cat", useRegex: true)
+        let regex = FindSearchEngine.search(options: regexOptions, in: snapshot, anchorLocation: 0)
+        let regexString = FindSearchEngine.search(options: regexOptions, in: text, anchorLocation: 0)
+        XCTAssertNil(regex.errorMessage)
+        XCTAssertEqual(regex.matchCount, regexString.matchCount)
+        XCTAssertEqual(regex.currentRange, regexString.currentRange)
 
-        let wholeWord = FindSearchEngine.search(
-            options: FindSearchOptions(query: "cat", wholeWord: true),
-            in: snapshot,
-            anchorLocation: 0
-        )
-        XCTAssertEqual(wholeWord.errorMessage, FindSearchEngine.regexWindowsNotImplementedMessage)
+        let wholeWordOptions = FindSearchOptions(query: "cat", wholeWord: true)
+        let wholeWord = FindSearchEngine.search(options: wholeWordOptions, in: snapshot, anchorLocation: 0)
+        let wholeWordString = FindSearchEngine.search(options: wholeWordOptions, in: text, anchorLocation: 0)
+        XCTAssertNil(wholeWord.errorMessage)
+        XCTAssertEqual(wholeWord.matchCount, wholeWordString.matchCount)
+        XCTAssertEqual(wholeWord.matchCount, 400)
 
-        XCTAssertNil(FindSearchEngine.findNext(
-            options: FindSearchOptions(query: "cat", useRegex: true),
-            in: snapshot,
-            after: 0
-        ))
-        XCTAssertNil(FindSearchEngine.findPrevious(
-            options: FindSearchOptions(query: "cat", wholeWord: true),
-            in: snapshot,
-            before: snapshot.utf16Length
-        ))
-        XCTAssertThrowsError(
-            try FindSearchEngine.replaceAllMatches(
-                options: FindSearchOptions(query: "cat", useRegex: true),
-                in: snapshot,
-                replacement: "dog"
-            )
+        XCTAssertEqual(
+            FindSearchEngine.findNext(options: regexOptions, in: snapshot, after: 0),
+            FindSearchEngine.findNext(options: regexOptions, in: text, after: 0)
         )
+        XCTAssertEqual(
+            FindSearchEngine.findPrevious(options: wholeWordOptions, in: snapshot, before: snapshot.utf16Length),
+            FindSearchEngine.findPrevious(options: wholeWordOptions, in: text, before: (text as NSString).length)
+        )
+        let matches = try FindSearchEngine.replaceAllMatches(
+            options: regexOptions,
+            in: snapshot,
+            replacement: "dog"
+        )
+        XCTAssertEqual(matches.count, regex.matchCount)
         XCTAssertEqual(view.materializeCount, before)
         XCTAssertEqual(view.materializeCount, 0)
     }
