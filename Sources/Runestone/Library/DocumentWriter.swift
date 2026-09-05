@@ -528,3 +528,59 @@ private struct FooterAccumulator {
         return (size, units, 0)
     }
 }
+
+/// FIFO lock held for the whole `snapshot → write → compact` interval of ``TextView/write``.
+final class DocumentWriteLock: @unchecked Sendable {
+    private let mutex = NSLock()
+    private var isLocked = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        await withCheckedContinuation { continuation in
+            mutex.lock()
+            if !isLocked {
+                isLocked = true
+                mutex.unlock()
+                continuation.resume()
+            } else {
+                waiters.append(continuation)
+                mutex.unlock()
+            }
+        }
+    }
+
+    func release() {
+        mutex.lock()
+        if waiters.isEmpty {
+            isLocked = false
+            mutex.unlock()
+        } else {
+            let next = waiters.removeFirst()
+            mutex.unlock()
+            next.resume()
+        }
+    }
+}
+
+extension DocumentWriter {
+    /// Off-main write that inherits cancellation from the calling task.
+    static func writeCooperatively(
+        _ source: DocumentWriteSource,
+        to url: URL,
+        options: DocumentWriteOptions = .init(),
+        progress: (@Sendable (Int64, Int64) -> Void)? = nil
+    ) async throws -> DocumentWriteFooter {
+        let writer = Task.detached(priority: .userInitiated) {
+            try DocumentWriter.write(source, to: url, options: options, progress: progress)
+        }
+        do {
+            return try await withTaskCancellationHandler {
+                try await writer.value
+            } onCancel: {
+                writer.cancel()
+            }
+        } catch is CancellationError {
+            throw DocumentWriteError.cancelled
+        }
+    }
+}

@@ -102,6 +102,8 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
         splitRight.bezelStyle = .rounded
         let openFile = NSButton(title: "Open…", target: self, action: #selector(openFile))
         openFile.bezelStyle = .rounded
+        let saveFile = NSButton(title: "Save", target: self, action: #selector(saveFile))
+        saveFile.bezelStyle = .rounded
         let splitDown = NSButton(title: "Split Down", target: self, action: #selector(splitDown))
         splitDown.bezelStyle = .rounded
         let closePane = NSButton(title: "Close Pane", target: self, action: #selector(closeActivePane))
@@ -125,6 +127,7 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
         distractionFree.setButtonType(.toggle)
 
         stack.addArrangedSubview(openFile)
+        stack.addArrangedSubview(saveFile)
         stack.addArrangedSubview(splitRight)
         stack.addArrangedSubview(splitDown)
         stack.addArrangedSubview(closePane)
@@ -168,6 +171,31 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
         panel.begin { [weak self] result in
             guard result == .OK, let url = panel.url, let self else { return }
             Task { await self.openDocument(from: url) }
+        }
+    }
+
+    @objc private func saveFile() {
+        Task { await self.saveActiveDocument() }
+    }
+
+    private func saveActiveDocument() async {
+        let pane = workbench.activePane
+        guard let document = pane.selectedDocument else { return }
+        let textView = paneHosts[pane.id]?.textView
+        var destination = document.url
+        if destination == nil {
+            let panel = NSSavePanel()
+            panel.canCreateDirectories = true
+            panel.nameFieldStringValue = document.displayName
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            destination = url
+        }
+        do {
+            _ = try await document.save(from: textView, to: destination)
+            rebuildTabBars()
+        } catch {
+            let alert = NSAlert(error: error)
+            alert.runModal()
         }
     }
 

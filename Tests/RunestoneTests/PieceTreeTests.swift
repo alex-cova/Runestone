@@ -124,6 +124,59 @@ final class PieceTreeTests: XCTestCase {
         XCTAssertEqual(view.rangeOfComposedCharacterSequence(at: expected - 1).length, expected)
     }
 
+    func testCompactCollapsesToSingleOriginalPiece() throws {
+        let url = try writeTemp("abcdefghij")
+        let view = try awaitLoad(url)
+        view.replaceText(in: NSRange(location: 5, length: 0), with: "XYZ")
+        let before = view.substring(in: NSRange(location: 0, length: view.length))
+        XCTAssertEqual(before, "abcdeXYZfghij")
+        XCTAssertGreaterThan(view.pieceCount, 1)
+        XCTAssertGreaterThan(view.addBufferByteCount, 0)
+        let generation = view.contentGeneration
+        guard let snapshot = view.contentSnapshot() else {
+            return XCTFail("expected piece-tree snapshot")
+        }
+        let dest = try writeTemp("")
+        let footer = try DocumentWriter.write(.pieceTree(snapshot), to: dest)
+        guard let mapping = FileMapping.openPrivateClone(of: dest) else {
+            return XCTFail("expected private clone")
+        }
+        view.compactPieceTree(mapping: mapping, footer: footer)
+        XCTAssertEqual(view.pieceCount, 1)
+        XCTAssertEqual(view.substring(in: NSRange(location: 0, length: view.length)), before)
+        XCTAssertEqual(view.addBufferByteCount, 0)
+        XCTAssertEqual(view.contentGeneration, generation)
+        XCTAssertEqual(try String(contentsOf: dest, encoding: .utf8), before)
+    }
+
+    func testCompactPreservesSplitCRLFAsOneDelimiter() throws {
+        let url = try writeTemp("ab\r\ncd")
+        let view = try awaitLoad(url)
+        view.replaceText(in: NSRange(location: 3, length: 0), with: "X")
+        view.replaceText(in: NSRange(location: 3, length: 1), with: "")
+        XCTAssertEqual(view.string as String, "ab\r\ncd")
+        XCTAssertGreaterThanOrEqual(view.pieceCount, 2)
+        XCTAssertEqual(view.rangeOfNextNewLine(startingAt: 0), NSRange(location: 2, length: 2))
+        let before = view.substring(in: NSRange(location: 0, length: view.length))
+        guard let snapshot = view.contentSnapshot() else {
+            return XCTFail("expected piece-tree snapshot")
+        }
+        let dest = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let footer = try DocumentWriter.write(.pieceTree(snapshot), to: dest)
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: dest)
+        }
+        guard let mapping = FileMapping.openPrivateClone(of: dest) else {
+            return XCTFail("expected private clone")
+        }
+        view.compactPieceTree(mapping: mapping, footer: footer)
+        XCTAssertEqual(view.pieceCount, 1)
+        XCTAssertEqual(view.substring(in: NSRange(location: 0, length: view.length)), before)
+        XCTAssertEqual(view.addBufferByteCount, 0)
+        XCTAssertEqual(view.rangeOfNextNewLine(startingAt: 0), NSRange(location: 2, length: 2))
+        XCTAssertEqual(try Data(contentsOf: dest), Data("ab\r\ncd".utf8))
+    }
+
     func testScatteredInsertsStayEquivalent() throws {
         let url = try writeTemp(String(repeating: "0123456789", count: 20))
         let view = try awaitLoad(url)

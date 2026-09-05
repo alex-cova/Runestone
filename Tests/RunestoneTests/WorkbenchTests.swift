@@ -147,6 +147,66 @@ final class WorkbenchTests: XCTestCase {
         XCTAssertEqual(restored.activePane.documents.map(\.displayName), ["a.txt", "b.txt"])
     }
 
+    func testSnapshotEncodesIsFileBacked() throws {
+        let document = WorkbenchDocument(displayName: "mmap.txt", text: "")
+        document.isFileBacked = true
+        document.url = URL(fileURLWithPath: "/tmp/mmap.txt")
+        let snapshot = WorkbenchDocumentSnapshot(document: document)
+        XCTAssertTrue(snapshot.isFileBacked)
+        XCTAssertEqual(snapshot.text, "")
+        let encoded = try JSONEncoder().encode(snapshot)
+        let decoded = try JSONDecoder().decode(WorkbenchDocumentSnapshot.self, from: encoded)
+        XCTAssertTrue(decoded.isFileBacked)
+        XCTAssertEqual(decoded.text, "")
+
+        var object = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+        object.removeValue(forKey: "isFileBacked")
+        let stripped = try JSONSerialization.data(withJSONObject: object)
+        let legacy = try JSONDecoder().decode(WorkbenchDocumentSnapshot.self, from: stripped)
+        XCTAssertFalse(legacy.isFileBacked)
+    }
+
+    func testRestoreThenReloadFileBackedDocumentsReloadsMmapContent() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try "mmap body\n".write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let document = try await WorkbenchDocument.load(contentsOf: url)
+        document.selectedRange = NSRange(location: 2, length: 3)
+        document.isDirty = true
+        let originalID = document.id
+        let originalDocumentID = document.documentID
+        let bench = EditorWorkbench()
+        bench.openDocument(document)
+
+        let encoded = try JSONEncoder().encode(bench.makeRestorationState())
+        let decoded = try JSONDecoder().decode(EditorRestorationState.self, from: encoded)
+
+        let restored = EditorWorkbench()
+        restored.restore(from: decoded)
+        let restoredDoc = restored.activePane.selectedDocument
+        XCTAssertEqual(restoredDoc?.id, originalID)
+        XCTAssertEqual(restoredDoc?.documentID, originalDocumentID)
+        XCTAssertEqual(restoredDoc?.text, "")
+        XCTAssertTrue(restoredDoc?.isFileBacked ?? false)
+        XCTAssertNil(restoredDoc?.pendingState)
+        XCTAssertEqual(restoredDoc?.isDirty, true)
+
+        try await restored.reloadFileBackedDocuments()
+        let reloaded = restored.activePane.selectedDocument
+        XCTAssertEqual(reloaded?.id, originalID)
+        XCTAssertEqual(reloaded?.documentID, originalDocumentID)
+        XCTAssertEqual(reloaded?.text, "")
+        XCTAssertTrue(reloaded?.isFileBacked ?? false)
+        XCTAssertEqual(
+            reloaded?.pendingState?.stringView.substring(in: NSRange(location: 0, length: 10)),
+            "mmap body\n"
+        )
+        XCTAssertEqual(reloaded?.pendingState?.stringView.materializeCount, 0)
+        XCTAssertEqual(reloaded?.selectedRange, NSRange(location: 2, length: 3))
+        XCTAssertEqual(reloaded?.isDirty, true)
+        XCTAssertNotNil(reloaded?.rangeReader)
+    }
+
     func testRestorationPreservesSplitLayout() throws {
         let bench = EditorWorkbench()
         bench.openDocument(WorkbenchDocument(displayName: "left", text: "L"))

@@ -246,14 +246,17 @@ final class PieceTree {
 
     static let prefetchByteCap = 256 * 1024
 
-    private let original: FileMapping?
+    private var original: FileMapping?
     private var addBuffer = Data()
     private let tree: PieceNodeTree
-    private let originalCheckpoints: [UTF8DocumentScanner.Checkpoint]
+    private var originalCheckpoints: [UTF8DocumentScanner.Checkpoint]
     private(set) var utf16Length = 0
     private var cachedNode: PieceNode?
     private var cachedPieceUTF16Start = 0
     private(set) var materializeCount = 0
+    var addBufferByteCount: Int {
+        addBuffer.count
+    }
 
     var isEmpty: Bool {
         utf16Length == 0
@@ -533,6 +536,26 @@ final class PieceTree {
             utf16Length: utf16Length,
             utf8Length: copies.reduce(0) { $0 + $1.utf8Length }
         )
+    }
+
+    /// Replace original+delta with a single original piece covering `mapping`.
+    /// Caller guarantees `mapping` bytes equal the concatenation of the current pieces.
+    func compact(mapping: FileMapping, footer: DocumentWriteFooter) {
+        RunestoneSignposts.interval("PieceTree.compact") {
+            original = mapping
+            originalCheckpoints = footer.checkpoints
+            addBuffer = Data()
+            let piece = Piece(
+                source: .original,
+                utf8Offset: 0,
+                utf8Length: footer.utf8Length,
+                utf16Length: footer.utf16Length,
+                originalUTF16Start: 0,
+                lineFeedCount: footer.lineFeedCount
+            )
+            replaceRoot(with: piece)
+            utf16Length = footer.utf16Length
+        }
     }
 
     // MARK: - Edits

@@ -189,6 +189,12 @@ final class StringView {
         return nil
     }
 
+    func compactPieceTree(mapping: FileMapping, footer: DocumentWriteFooter) {
+        if case .pieceTree(let tree) = storage {
+            tree.compact(mapping: mapping, footer: footer)
+        }
+    }
+
     var materializeCount: Int {
         if case .pieceTree(let tree) = storage {
             return tree.materializeCount
@@ -201,6 +207,13 @@ final class StringView {
             return tree.pieceCount
         }
         return 1
+    }
+
+    var addBufferByteCount: Int {
+        if case .pieceTree(let tree) = storage {
+            return tree.addBufferByteCount
+        }
+        return 0
     }
 
     var lastPrefetchByteCount: Int {

@@ -8,6 +8,9 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
     public let documentID: DocumentID
     public var url: URL?
     public var displayName: String
+    /// Document text for untitled / contiguous buffers.
+    ///
+    /// Empty when ``isFileBacked``. Do not write this to disk; use ``save(from:to:)``.
     public var text: String
     public var language: TreeSitterLanguage?
     public var languageIdentifier: String?
@@ -110,6 +113,99 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
             cursor: Cursor(position: start),
             viewport: Viewport(x: Double(scrollOffset.x), y: Double(scrollOffset.y), width: 0, height: 0),
             languageIdentifier: languageIdentifier
+        )
+    }
+
+    /// Save-in-place (`to: nil` uses ``url``) or save-as.
+    /// File-backed documents must pass the live ``TextView`` (or still-unconsumed ``pendingState``).
+    /// Never writes ``text`` when ``isFileBacked`` is true.
+    ///
+    /// Does **not** compact. When `textView` is provided, compact happens inside ``TextView/write(to:options:progress:)``.
+    @MainActor
+    public func save(
+        from textView: TextView? = nil,
+        to url: URL? = nil,
+        options: DocumentWriteOptions = .init(),
+        progress: (@Sendable (Int64, Int64) -> Void)? = nil
+    ) async throws -> DocumentWriteResult {
+        guard let dest = url ?? self.url else {
+            throw DocumentWriteError.noDestination
+        }
+        let result: DocumentWriteResult
+        if let textView {
+            result = try await textView.write(to: dest, options: options, progress: progress)
+            isDirty = !result.generationMatched
+            refreshRangeReader(from: textView.pieceTreeContentSnapshot() ?? pendingState?.stringView.contentSnapshot())
+        } else if let pendingState {
+            result = try await writePendingOrContiguous(
+                pendingState.stringView,
+                to: dest,
+                options: options,
+                progress: progress
+            )
+            isDirty = false
+            refreshRangeReader(from: pendingState.stringView.contentSnapshot())
+        } else if !isFileBacked {
+            result = try await writeContiguousText(to: dest, options: options, progress: progress)
+            isDirty = false
+            rangeReader = nil
+        } else {
+            throw DocumentWriteError.bufferUnavailable
+        }
+        self.url = dest
+        displayName = dest.lastPathComponent
+        return result
+    }
+
+    private func refreshRangeReader(from snapshot: PieceTreeContentSnapshot?) {
+        if let snapshot {
+            rangeReader = TextRangeReader(utf16Length: snapshot.utf16Length) { offset, length in
+                snapshot.substring(utf16Offset: offset, length: length)
+            }
+        } else {
+            rangeReader = nil
+        }
+    }
+
+    private func writePendingOrContiguous(
+        _ stringView: StringView,
+        to dest: URL,
+        options: DocumentWriteOptions,
+        progress: (@Sendable (Int64, Int64) -> Void)?
+    ) async throws -> DocumentWriteResult {
+        let source: DocumentWriteSource
+        if let snapshot = stringView.contentSnapshot() {
+            source = .pieceTree(snapshot)
+        } else {
+            source = .contiguous(stringView.string as String)
+        }
+        return try await writeSource(source, to: dest, options: options, progress: progress)
+    }
+
+    private func writeContiguousText(
+        to dest: URL,
+        options: DocumentWriteOptions,
+        progress: (@Sendable (Int64, Int64) -> Void)?
+    ) async throws -> DocumentWriteResult {
+        try await writeSource(.contiguous(text), to: dest, options: options, progress: progress)
+    }
+
+    private func writeSource(
+        _ source: DocumentWriteSource,
+        to dest: URL,
+        options: DocumentWriteOptions,
+        progress: (@Sendable (Int64, Int64) -> Void)?
+    ) async throws -> DocumentWriteResult {
+        let footer = try await DocumentWriter.writeCooperatively(
+            source,
+            to: dest,
+            options: options,
+            progress: progress
+        )
+        return DocumentWriteResult(
+            wroteBytes: Int64(footer.utf8Length),
+            generationMatched: true,
+            compacted: false
         )
     }
 }

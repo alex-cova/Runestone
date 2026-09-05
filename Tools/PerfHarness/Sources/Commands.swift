@@ -240,7 +240,8 @@ enum Commands {
         textView.layoutSubviews()
 
         let query = SearchQuery(text: pattern, matchMethod: regex ? .regularExpression : .contains)
-        let searchResult = Measurement.time("TextView.search(for:) — the SearchController path used by the shipping find panel") {
+        // Legacy TextView.search(for:) / SearchController path. The shipping find panel uses FindSearchEngine.
+        let searchResult = Measurement.time("TextView.search(for:) — legacy SearchController path (not the shipping find panel)") {
             textView.search(for: query)
         }
         ResultLog.row(regex ? "search_regex" : "search_literal", file: path, sizeBytes: sizeBytes, seconds: searchResult.seconds, extra: "\(searchResult.value.count) matches")
@@ -258,14 +259,39 @@ enum Commands {
 
         let tempURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("perfharness-save-\(UUID().uuidString).txt")
         defer { try? FileManager.default.removeItem(at: tempURL) }
-        let saveResult = Measurement.time("naive full rewrite after 1-character edit") {
-            try? textView.text.write(to: tempURL, atomically: true, encoding: .utf8)
+        let viewBox = UncheckedBox(textView)
+        let box = BlockingBox<DocumentWriteResult>()
+        let start = DispatchTime.now()
+        Task { @MainActor in
+            do {
+                box.result = .success(try await viewBox.value.write(to: tempURL))
+            } catch {
+                box.result = .failure(error)
+            }
         }
-        ResultLog.row("save_full_rewrite", file: path, sizeBytes: sizeBytes, seconds: saveResult.seconds,
-                       extra: "baseline only \u{2014} see PERFORMANCE_AUDIT.md Phase 4 Saving for the patch-based alternative")
+        while box.result == nil {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        let seconds = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000_000
+        FileHandle.standardError.write("  [TextView.write after 1-character edit] \(String(format: "%.4f", seconds))s\n".data(using: .utf8)!)
+        let writeResult = try box.result!.get()
+        ResultLog.row(
+            "save_write",
+            file: path,
+            sizeBytes: sizeBytes,
+            seconds: seconds,
+            extra: "generationMatched=\(writeResult.generationMatched) compacted=\(writeResult.compacted)"
+        )
     }
 }
 
 private final class BlockingBox<Value>: @unchecked Sendable {
     var result: Result<Value, Error>?
+}
+
+private final class UncheckedBox<Value>: @unchecked Sendable {
+    let value: Value
+    init(_ value: Value) {
+        self.value = value
+    }
 }

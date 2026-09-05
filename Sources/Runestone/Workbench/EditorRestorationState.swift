@@ -15,6 +15,7 @@ public struct WorkbenchDocumentSnapshot: Equatable, Codable, Sendable {
     public var selectedRangeLength: Int
     public var scrollOffsetX: CGFloat
     public var scrollOffsetY: CGFloat
+    public var isFileBacked: Bool
 
     public init(
         id: UUID,
@@ -27,7 +28,8 @@ public struct WorkbenchDocumentSnapshot: Equatable, Codable, Sendable {
         selectedRangeLocation: Int = 0,
         selectedRangeLength: Int = 0,
         scrollOffsetX: CGFloat = 0,
-        scrollOffsetY: CGFloat = 0
+        scrollOffsetY: CGFloat = 0,
+        isFileBacked: Bool = false
     ) {
         self.id = id
         self.documentID = documentID
@@ -40,6 +42,7 @@ public struct WorkbenchDocumentSnapshot: Equatable, Codable, Sendable {
         self.selectedRangeLength = selectedRangeLength
         self.scrollOffsetX = scrollOffsetX
         self.scrollOffsetY = scrollOffsetY
+        self.isFileBacked = isFileBacked
     }
 
     public init(document: WorkbenchDocument) {
@@ -54,10 +57,43 @@ public struct WorkbenchDocumentSnapshot: Equatable, Codable, Sendable {
         self.selectedRangeLength = document.selectedRange.length
         self.scrollOffsetX = document.scrollOffset.x
         self.scrollOffsetY = document.scrollOffset.y
+        self.isFileBacked = document.isFileBacked
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        documentID = try container.decode(UUID.self, forKey: .documentID)
+        url = try container.decodeIfPresent(URL.self, forKey: .url)
+        displayName = try container.decode(String.self, forKey: .displayName)
+        text = try container.decode(String.self, forKey: .text)
+        languageIdentifier = try container.decodeIfPresent(String.self, forKey: .languageIdentifier)
+        isDirty = try container.decode(Bool.self, forKey: .isDirty)
+        selectedRangeLocation = try container.decode(Int.self, forKey: .selectedRangeLocation)
+        selectedRangeLength = try container.decode(Int.self, forKey: .selectedRangeLength)
+        scrollOffsetX = try container.decode(CGFloat.self, forKey: .scrollOffsetX)
+        scrollOffsetY = try container.decode(CGFloat.self, forKey: .scrollOffsetY)
+        isFileBacked = try container.decodeIfPresent(Bool.self, forKey: .isFileBacked) ?? false
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(documentID, forKey: .documentID)
+        try container.encodeIfPresent(url, forKey: .url)
+        try container.encode(displayName, forKey: .displayName)
+        try container.encode(text, forKey: .text)
+        try container.encodeIfPresent(languageIdentifier, forKey: .languageIdentifier)
+        try container.encode(isDirty, forKey: .isDirty)
+        try container.encode(selectedRangeLocation, forKey: .selectedRangeLocation)
+        try container.encode(selectedRangeLength, forKey: .selectedRangeLength)
+        try container.encode(scrollOffsetX, forKey: .scrollOffsetX)
+        try container.encode(scrollOffsetY, forKey: .scrollOffsetY)
+        try container.encode(isFileBacked, forKey: .isFileBacked)
     }
 
     public func makeDocument(language: TreeSitterLanguage? = nil) -> WorkbenchDocument {
-        WorkbenchDocument(
+        let document = WorkbenchDocument(
             id: id,
             documentID: DocumentID(documentID),
             url: url,
@@ -69,6 +105,23 @@ public struct WorkbenchDocumentSnapshot: Equatable, Codable, Sendable {
             selectedRange: NSRange(location: selectedRangeLocation, length: selectedRangeLength),
             scrollOffset: CGPoint(x: scrollOffsetX, y: scrollOffsetY)
         )
+        document.isFileBacked = isFileBacked
+        return document
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case documentID
+        case url
+        case displayName
+        case text
+        case languageIdentifier
+        case isDirty
+        case selectedRangeLocation
+        case selectedRangeLength
+        case scrollOffsetX
+        case scrollOffsetY
+        case isFileBacked
     }
 }
 

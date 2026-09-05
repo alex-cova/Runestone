@@ -65,6 +65,9 @@ import CoreText
         return StringFindTextSource(textInputView.string as String)
     }
 
+    var contentGeneration: UInt64 {
+        textInputView.stringView.contentGeneration
+    }
     /// A Boolean value that indicates whether the text view is editable.
     public var isEditable = true {
         didSet {
@@ -897,6 +900,7 @@ import CoreText
     }
 
     private let textInputView: TextInputView
+    private let writeLock = DocumentWriteLock()
     private let minimapView = MinimapView(frame: .zero)
     private let tapGestureRecognizer = QuickTapGestureRecognizer()
     private var _inputAccessoryView: UIView?
@@ -1365,6 +1369,9 @@ import CoreText
     }
 
     /// Search for the specified query.
+    ///
+    /// Synchronous; materializes file-backed buffers. Prefer ``FindSearchEngine`` with a
+    /// piece-tree snapshot for large documents.
     ///
     /// The code below shows how a ``SearchQuery`` can be constructed and passed to ``search(for:)``.
     ///
@@ -2085,6 +2092,66 @@ extension TextView: TextInputViewDelegate {
 
     func textInputView(_ view: TextInputView, didChangeContent change: TextContentChange) {
         editorDelegate?.textView(self, didChangeContent: change)
+    }
+}
+
+extension TextView {
+    /// UTF-8 write of the live buffer. File-backed documents stream piece UTF-8; they do not
+    /// materialize ``text``. Throws ``DocumentWriteError/unsupportedEncoding`` unless UTF-8.
+    ///
+    /// On success, inspect ``DocumentWriteResult/generationMatched``: if the user typed during
+    /// the write this is `false` and the live buffer is ahead of `url`.
+    public func write(
+        to url: URL,
+        options: DocumentWriteOptions = .init(),
+        progress: (@Sendable (Int64, Int64) -> Void)? = nil
+    ) async throws -> DocumentWriteResult {
+        await writeLock.acquire()
+        defer { writeLock.release() }
+        let (source, generation) = captureWriteSource()
+        let footer: DocumentWriteFooter
+        do {
+            let writer = Task.detached(priority: .userInitiated) {
+                try DocumentWriter.write(source, to: url, options: options, progress: progress)
+            }
+            footer = try await withTaskCancellationHandler {
+                try await writer.value
+            } onCancel: {
+                writer.cancel()
+            }
+        } catch is CancellationError {
+            throw DocumentWriteError.cancelled
+        }
+        return finishWrite(source: source, generation: generation, footer: footer, url: url)
+    }
+
+    private func captureWriteSource() -> (DocumentWriteSource, UInt64) {
+        let generation = textInputView.stringView.contentGeneration
+        if let snapshot = textInputView.stringView.contentSnapshot() {
+            return (.pieceTree(snapshot), generation)
+        }
+        return (.contiguous(textInputView.string as String), generation)
+    }
+
+    private func finishWrite(
+        source: DocumentWriteSource,
+        generation: UInt64,
+        footer: DocumentWriteFooter,
+        url: URL
+    ) -> DocumentWriteResult {
+        let generationMatched = textInputView.stringView.contentGeneration == generation
+        var compacted = false
+        if generationMatched, case .pieceTree = source {
+            if let mapping = FileMapping.openPrivateClone(of: url) {
+                textInputView.stringView.compactPieceTree(mapping: mapping, footer: footer)
+                compacted = true
+            }
+        }
+        return DocumentWriteResult(
+            wroteBytes: Int64(footer.utf8Length),
+            generationMatched: generationMatched,
+            compacted: compacted
+        )
     }
 }
 

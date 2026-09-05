@@ -77,7 +77,9 @@ public final class EditorWorkbench: Identifiable, @unchecked Sendable {
         EditorRestorationState(activePaneID: activePaneID, layout: EditorLayoutSnapshot(layout: layout))
     }
 
-  public func restore(
+    /// Synchronous layout restore. File-backed documents have empty `text` until
+    /// ``reloadFileBackedDocuments()``.
+    public func restore(
         from state: EditorRestorationState,
         languageResolver: (WorkbenchDocumentSnapshot) -> TreeSitterLanguage? = { _ in nil }
     ) {
@@ -93,6 +95,59 @@ public final class EditorWorkbench: Identifiable, @unchecked Sendable {
             activePaneID = fallback.id
         } else {
             initCleanLayout()
+        }
+    }
+
+    /// For each document with `isFileBacked && url != nil`, ``WorkbenchDocument/load(contentsOf:language:languageIdentifier:parsePolicy:io:)``
+    /// and splice `id`, `documentID`, selection, scroll, and `isDirty` onto the loaded instance
+    /// (loaded `pendingState` / `rangeReader` / `isFileBacked` win). Dirty mmap edits are discarded.
+    public func reloadFileBackedDocuments(
+        languageResolver: (WorkbenchDocument) -> TreeSitterLanguage? = { _ in nil }
+    ) async throws {
+        var replacements: [UUID: WorkbenchDocument] = [:]
+        for document in allDocuments() {
+            guard document.isFileBacked, let url = document.url else {
+                continue
+            }
+            let loaded = try await WorkbenchDocument.load(
+                contentsOf: url,
+                language: languageResolver(document) ?? document.language,
+                languageIdentifier: document.languageIdentifier
+            )
+            let spliced = WorkbenchDocument(
+                id: document.id,
+                documentID: document.documentID,
+                url: loaded.url,
+                displayName: loaded.displayName,
+                text: loaded.text,
+                language: loaded.language ?? document.language,
+                languageIdentifier: loaded.languageIdentifier ?? document.languageIdentifier,
+                isDirty: document.isDirty,
+                selectedRange: document.selectedRange,
+                scrollOffset: document.scrollOffset
+            )
+            spliced.pendingState = loaded.pendingState
+            spliced.isFileBacked = loaded.isFileBacked
+            spliced.rangeReader = loaded.rangeReader
+            replacements[document.id] = spliced
+        }
+        guard !replacements.isEmpty else {
+            return
+        }
+        for pane in panes {
+            pane.documents = pane.documents.map { replacements[$0.id] ?? $0 }
+        }
+    }
+
+    /// ``restore(from:languageResolver:)`` then, if `reloadingFileBacked`, ``reloadFileBackedDocuments()``.
+    public func restore(
+        from state: EditorRestorationState,
+        reloadingFileBacked: Bool,
+        languageResolver: (WorkbenchDocumentSnapshot) -> TreeSitterLanguage? = { _ in nil }
+    ) async throws {
+        restore(from: state, languageResolver: languageResolver)
+        if reloadingFileBacked {
+            try await reloadFileBackedDocuments { $0.language }
         }
     }
 
