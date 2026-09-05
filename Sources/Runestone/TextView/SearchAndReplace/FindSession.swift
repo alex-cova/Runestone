@@ -2,9 +2,8 @@ import Foundation
 
 /// Stateful find/replace session driving ``FindSearchEngine`` — the headless counterpart to the
 /// `TextView`-bound find panel (`showFindPanel`/`FindPanelController`). Holds the query and its
-/// options, the current match, and the capped highlight window, and exposes navigation/replace
-/// operations that take the searched text as a plain `String` rather than reading it from a live
-/// text view.
+/// options, the current match, and the capped highlight window, and exposes navigation over a
+/// ``FindTextSource`` (or `String` wrappers) rather than reading a live text view.
 ///
 /// ```swift
 /// let session = FindSession()
@@ -15,7 +14,8 @@ import Foundation
 /// ```
 ///
 /// Pair with ``FindSearchScheduler`` for debounced, off-main-thread searching as the query or
-/// document text changes.
+/// document text changes. ``replaceCurrent(in:)`` / ``replaceAll(in:)`` stay `String`-only
+/// because they return a whole new document string.
 @MainActor
 public final class FindSession {
     public var query = ""
@@ -104,65 +104,73 @@ public final class FindSession {
     }
 
     public func selectNext(in text: String) {
+        selectNext(in: StringFindTextSource(text))
+    }
+
+    public func selectNext(in source: any FindTextSource) {
         guard matchCount > 0 else { return }
         let options = searchOptions()
         let after = currentRange.map { $0.location + max($0.length, 1) } ?? 0
-        if let next = FindSearchEngine.findNext(options: options, in: text, after: after) {
+        if let next = FindSearchEngine.findNext(options: options, in: source, after: after) {
             currentRange = next
             currentIndex = ((currentIndex ?? -1) + 1) % matchCount
-            scheduleHighlightRefresh(in: text)
+            scheduleHighlightRefresh(in: source)
             return
         }
-        if let first = FindSearchEngine.findNext(options: options, in: text, after: 0) {
+        if let first = FindSearchEngine.findNext(options: options, in: source, after: 0) {
             currentRange = first
             currentIndex = 0
-            scheduleHighlightRefresh(in: text)
+            scheduleHighlightRefresh(in: source)
         }
     }
 
     public func selectPrevious(in text: String) {
+        selectPrevious(in: StringFindTextSource(text))
+    }
+
+    public func selectPrevious(in source: any FindTextSource) {
         guard matchCount > 0 else { return }
         let options = searchOptions()
-        let before = currentRange?.location ?? (text as NSString).length
-        if let previous = FindSearchEngine.findPrevious(options: options, in: text, before: before) {
+        let before = currentRange?.location ?? source.utf16Length
+        if let previous = FindSearchEngine.findPrevious(options: options, in: source, before: before) {
             currentRange = previous
             currentIndex = ((currentIndex ?? 0) - 1 + matchCount) % matchCount
-            scheduleHighlightRefresh(in: text)
+            scheduleHighlightRefresh(in: source)
             return
         }
-        let nsLength = (text as NSString).length
-        if let last = FindSearchEngine.findPrevious(options: options, in: text, before: nsLength + 1) {
+        let nsLength = source.utf16Length
+        if let last = FindSearchEngine.findPrevious(options: options, in: source, before: nsLength + 1) {
             currentRange = last
             currentIndex = matchCount - 1
-            scheduleHighlightRefresh(in: text)
+            scheduleHighlightRefresh(in: source)
         }
     }
 
     private var highlightRefreshTask: Task<Void, Never>?
 
-    private func scheduleHighlightRefresh(in text: String) {
+    private func scheduleHighlightRefresh(in source: any FindTextSource) {
         highlightRefreshTask?.cancel()
         let options = searchOptions()
         let anchor = currentRange?.location ?? 0
-        if text.utf16.count < FindSearchEngine.offMainCharacterThreshold {
-            refreshHighlightWindow(in: text)
+        if source.utf16Length < FindSearchEngine.offMainCharacterThreshold {
+            refreshHighlightWindow(in: source)
             return
         }
         highlightRefreshTask = Task { @MainActor in
             let outcome = await Task.detached(priority: .userInitiated) {
-                FindSearchEngine.search(options: options, in: text, anchorLocation: anchor)
+                FindSearchEngine.search(options: options, in: source, anchorLocation: anchor)
             }.value
             guard !Task.isCancelled else { return }
             highlightRanges = outcome.highlightRanges
         }
     }
 
-    private func refreshHighlightWindow(in text: String) {
+    private func refreshHighlightWindow(in source: any FindTextSource) {
         guard matchCount > 0 else {
             highlightRanges = []
             return
         }
-        let outcome = FindSearchEngine.search(options: searchOptions(), in: text, anchorLocation: currentRange?.location ?? 0)
+        let outcome = FindSearchEngine.search(options: searchOptions(), in: source, anchorLocation: currentRange?.location ?? 0)
         highlightRanges = outcome.highlightRanges
     }
 
@@ -221,18 +229,34 @@ public final class FindSession {
         wholeWord: Bool,
         useRegex: Bool
     ) throws -> [NSRange] {
+        try findRanges(
+            query: query,
+            in: StringFindTextSource(text),
+            matchCase: matchCase,
+            wholeWord: wholeWord,
+            useRegex: useRegex
+        )
+    }
+
+    public nonisolated static func findRanges(
+        query: String,
+        in source: any FindTextSource,
+        matchCase: Bool,
+        wholeWord: Bool,
+        useRegex: Bool
+    ) throws -> [NSRange] {
         let options = FindSearchOptions(query: query, matchCase: matchCase, wholeWord: wholeWord, useRegex: useRegex)
         if useRegex || wholeWord {
-            let probe = FindSearchEngine.search(options: options, in: text, anchorLocation: 0)
+            let probe = FindSearchEngine.search(options: options, in: source, anchorLocation: 0)
             if let errorMessage = probe.errorMessage {
                 throw NSError(domain: "FindSession", code: 1, userInfo: [NSLocalizedDescriptionKey: errorMessage])
             }
         }
         var ranges: [NSRange] = []
         var location = 0
-        let nsLength = (text as NSString).length
+        let nsLength = source.utf16Length
         while location <= nsLength {
-            guard let next = FindSearchEngine.findNext(options: options, in: text, after: location) else {
+            guard let next = FindSearchEngine.findNext(options: options, in: source, after: location) else {
                 break
             }
             ranges.append(next)

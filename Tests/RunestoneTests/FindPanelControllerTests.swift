@@ -17,7 +17,7 @@ private final class FakeFindTarget: FindPanelTarget {
     }
 
     var findSelection: NSRange? { selection }
-    var textForFind: String { text as String }
+    var findTextSource: any FindTextSource { StringFindTextSource(text as String) }
 
     func selectedTextForFind() -> String? {
         guard let selection, selection.length > 0, NSMaxRange(selection) <= text.length else {
@@ -184,5 +184,34 @@ final class FindPanelControllerTests: XCTestCase {
 
         await waitForDebounce()
         XCTAssertNil(target.selection, "a search that was in flight when the panel closed shouldn't apply its result afterwards")
+    }
+
+    func testOpenPanelAndReplaceAllOnFileBackedBufferDoesNotMaterialize() async throws {
+        let original = "foo bar foo"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try original.write(to: url, atomically: true, encoding: .utf8)
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: url)
+        }
+        let state = try await TextViewState.load(contentsOf: url)
+        XCTAssertTrue(state.stringView.isFileBacked)
+        XCTAssertEqual(state.stringView.materializeCount, 0)
+
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        textView.setState(state)
+        let controller = FindPanelController(target: textView)
+        controller.show(initialQuery: "foo")
+        await waitForImmediateSearch()
+        XCTAssertEqual(state.stringView.materializeCount, 0)
+
+        controller.panelView.replaceField.stringValue = "BAZ"
+        controller.panelView.onReplaceAll?()
+        await waitForImmediateSearch()
+
+        XCTAssertEqual(
+            state.stringView.substring(in: NSRange(location: 0, length: state.stringView.length)),
+            "BAZ bar BAZ"
+        )
+        XCTAssertEqual(state.stringView.materializeCount, 0)
     }
 }

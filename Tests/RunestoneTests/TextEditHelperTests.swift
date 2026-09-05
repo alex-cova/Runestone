@@ -10,6 +10,10 @@ final class TextEditHelperTests: XCTestCase {
         return (helper, stringView)
     }
 
+    private func documentText(_ stringView: StringView) -> String {
+        stringView.substring(in: NSRange(location: 0, length: stringView.length)) ?? ""
+    }
+
     func testReplaceTextClampsOutOfBoundsRangeOnEmptyDocument() {
         let (helper, stringView) = makeHelper(text: "")
         _ = helper.replaceText(in: NSRange(location: 0, length: 1), with: "")
@@ -17,13 +21,16 @@ final class TextEditHelperTests: XCTestCase {
     }
 
     func testApplyProducesTheSameStringAsStringByApplying() {
-        let (helper, _) = makeHelper(text: "aaa bbb ccc")
+        let (helper, stringView) = makeHelper(text: "aaa bbb ccc")
         let batch = BatchReplaceSet(replacements: [
             .init(range: NSRange(location: 0, length: 3), text: "X"),
             .init(range: NSRange(location: 8, length: 3), text: "YY")
         ])
-        let application = helper.apply(batch)
-        XCTAssertEqual(application.newString as String, "X bbb YY")
+        _ = helper.apply(batch)
+        XCTAssertEqual(documentText(stringView), "X bbb YY")
+
+        let (stringHelper, _) = makeHelper(text: "aaa bbb ccc")
+        XCTAssertEqual(stringHelper.string(byApplying: batch) as String, "X bbb YY")
     }
 
     /// This is the case that makes computing the inverse non-trivial: two replacements whose
@@ -31,33 +38,35 @@ final class TextEditHelperTests: XCTestCase {
     /// resulting string has shifted relative to its original range.
     func testInverseReplacementsRestoreTheOriginalStringWhenLengthsDiffer() {
         let original = "aaa bbb ccc"
-        let (helper, _) = makeHelper(text: original)
+        let (helper, stringView) = makeHelper(text: original)
         let batch = BatchReplaceSet(replacements: [
             .init(range: NSRange(location: 0, length: 3), text: "X"),   // shrinks by 2
             .init(range: NSRange(location: 8, length: 3), text: "YY")   // shrinks by 1
         ])
         let application = helper.apply(batch)
-        XCTAssertEqual(application.newString as String, "X bbb YY")
+        let replaced = documentText(stringView)
+        XCTAssertEqual(replaced, "X bbb YY")
 
         // Applying the inverse to a fresh helper seeded with the *new* string should restore the
         // original — exactly what undo does by feeding `inverseReplacements` back through
         // `replaceText(in:)`.
-        let (undoHelper, _) = makeHelper(text: application.newString as String)
+        let (undoHelper, _) = makeHelper(text: replaced)
         let restored = undoHelper.string(byApplying: BatchReplaceSet(replacements: application.inverseReplacements))
         XCTAssertEqual(restored as String, original)
     }
 
     func testInverseReplacementsRestoreTheOriginalStringWhenReplacementGrows() {
         let original = "a b c"
-        let (helper, _) = makeHelper(text: original)
+        let (helper, stringView) = makeHelper(text: original)
         let batch = BatchReplaceSet(replacements: [
             .init(range: NSRange(location: 0, length: 1), text: "AAA"), // grows by 2
             .init(range: NSRange(location: 4, length: 1), text: "C")    // same length
         ])
         let application = helper.apply(batch)
-        XCTAssertEqual(application.newString as String, "AAA b C")
+        let replaced = documentText(stringView)
+        XCTAssertEqual(replaced, "AAA b C")
 
-        let (undoHelper, _) = makeHelper(text: application.newString as String)
+        let (undoHelper, _) = makeHelper(text: replaced)
         let restored = undoHelper.string(byApplying: BatchReplaceSet(replacements: application.inverseReplacements))
         XCTAssertEqual(restored as String, original)
     }
@@ -78,16 +87,47 @@ final class TextEditHelperTests: XCTestCase {
 
     func testOverlappingReplacementsKeepOnlyTheFirstAndItsInverseStillRoundTrips() {
         let original = "abcdef"
-        let (helper, _) = makeHelper(text: original)
+        let (helper, stringView) = makeHelper(text: original)
         let batch = BatchReplaceSet(replacements: [
             .init(range: NSRange(location: 0, length: 3), text: "XYZ"),
             .init(range: NSRange(location: 2, length: 3), text: "OVERLAP") // overlaps the first, should be dropped
         ])
         let application = helper.apply(batch)
-        XCTAssertEqual(application.newString as String, "XYZdef")
+        let replaced = documentText(stringView)
+        XCTAssertEqual(replaced, "XYZdef")
 
-        let (undoHelper, _) = makeHelper(text: application.newString as String)
+        let (undoHelper, _) = makeHelper(text: replaced)
         let restored = undoHelper.string(byApplying: BatchReplaceSet(replacements: application.inverseReplacements))
         XCTAssertEqual(restored as String, original)
+    }
+
+    func testFileBackedApplyDoesNotMaterialize() async throws {
+        let original = "aaa bbb ccc"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try original.write(to: url, atomically: true, encoding: .utf8)
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: url)
+        }
+        let state = try await TextViewState.load(contentsOf: url)
+        XCTAssertTrue(state.stringView.isFileBacked)
+        let helper = TextEditHelper(
+            stringView: state.stringView,
+            lineManager: state.lineManager,
+            lineEndings: .lf
+        )
+        let before = state.stringView.materializeCount
+        let batch = BatchReplaceSet(replacements: [
+            .init(range: NSRange(location: 0, length: 3), text: "X"),
+            .init(range: NSRange(location: 8, length: 3), text: "YY")
+        ])
+        let application = helper.apply(batch)
+        XCTAssertEqual(documentText(state.stringView), "X bbb YY")
+        XCTAssertEqual(state.stringView.materializeCount, before)
+        XCTAssertEqual(state.stringView.materializeCount, 0)
+        XCTAssertEqual(application.inverseReplacements.count, 2)
+
+        let (undoHelper, undoView) = makeHelper(text: documentText(state.stringView))
+        _ = undoHelper.apply(BatchReplaceSet(replacements: application.inverseReplacements))
+        XCTAssertEqual(documentText(undoView), original)
     }
 }

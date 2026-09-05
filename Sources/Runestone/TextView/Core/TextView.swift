@@ -55,6 +55,16 @@ import CoreText
     func pieceTreeContentSnapshot() -> PieceTreeContentSnapshot? {
         textInputView.stringView.contentSnapshot()
     }
+
+    /// Sendable document view for ``FindSearchEngine``. File-backed buffers return a piece-tree
+    /// snapshot and do not materialize UTF-16.
+    public func makeFindTextSource() -> any FindTextSource {
+        if let snapshot = textInputView.stringView.contentSnapshot() {
+            return snapshot
+        }
+        return StringFindTextSource(textInputView.string as String)
+    }
+
     /// A Boolean value that indicates whether the text view is editable.
     public var isEditable = true {
         didSet {
@@ -2110,8 +2120,8 @@ extension TextView: FindPanelTarget {
         textInputView.selection
     }
 
-    var textForFind: String {
-        textInputView.string as String
+    var findTextSource: any FindTextSource {
+        makeFindTextSource()
     }
 
     func selectedTextForFind() -> String? {

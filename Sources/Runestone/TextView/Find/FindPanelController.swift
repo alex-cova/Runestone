@@ -120,11 +120,11 @@ private extension FindPanelController {
             emphasisManager?.removeEmphases(for: EmphasisGroup.find)
             return
         }
-        let text = target.textForFind
+        let source = target.findTextSource
         let anchorLocation = target.findSelection?.location ?? 0
         scheduler.scheduleRefresh(
             session: session,
-            text: text,
+            source: source,
             anchorLocation: anchorLocation,
             immediate: immediate,
             isCurrent: { [weak self] in self?.isVisible ?? false },
@@ -177,15 +177,15 @@ private extension FindPanelController {
         guard let target, session.matchCount > 0 else {
             return
         }
-        let text = target.textForFind
+        let source = target.findTextSource
         let options = session.searchOptions()
         // Anchor on the target's actual current selection, not `session.currentRange` — the
         // latter is only updated once the async refresh below completes, so a second Next/
         // Previous click arriving before that lands would otherwise re-anchor on a stale range
         // and fail to advance.
         let after = target.findSelection.map { $0.location + max($0.length, 1) } ?? 0
-        let next = FindSearchEngine.findNext(options: options, in: text, after: after)
-            ?? (wrapAround ? FindSearchEngine.findNext(options: options, in: text, after: 0) : nil)
+        let next = FindSearchEngine.findNext(options: options, in: source, after: after)
+            ?? (wrapAround ? FindSearchEngine.findNext(options: options, in: source, after: 0) : nil)
         guard let next else {
             return
         }
@@ -198,11 +198,11 @@ private extension FindPanelController {
         guard let target, session.matchCount > 0 else {
             return
         }
-        let text = target.textForFind
+        let source = target.findTextSource
         let options = session.searchOptions()
-        let before = target.findSelection?.location ?? (text as NSString).length
-        let previous = FindSearchEngine.findPrevious(options: options, in: text, before: before)
-            ?? (wrapAround ? FindSearchEngine.findPrevious(options: options, in: text, before: (text as NSString).length + 1) : nil)
+        let before = target.findSelection?.location ?? source.utf16Length
+        let previous = FindSearchEngine.findPrevious(options: options, in: source, before: before)
+            ?? (wrapAround ? FindSearchEngine.findPrevious(options: options, in: source, before: source.utf16Length + 1) : nil)
         guard let previous else {
             return
         }
@@ -219,7 +219,7 @@ private extension FindPanelController {
         do {
             replacement = try FindSearchEngine.replacementText(
                 options: session.searchOptions(),
-                in: target.textForFind,
+                in: target.findTextSource,
                 matching: currentRange,
                 replacement: panelView.replaceText
             )
@@ -236,9 +236,9 @@ private extension FindPanelController {
         }
         let options = session.searchOptions()
         let replacement = panelView.replaceText
-        let text = target.textForFind
-        if (text as NSString).length < FindSearchEngine.offMainCharacterThreshold {
-            applyReplaceAll(options: options, in: text, replacement: replacement, to: target)
+        let source = target.findTextSource
+        if source.utf16Length < FindSearchEngine.offMainCharacterThreshold {
+            applyReplaceAll(options: options, in: source, replacement: replacement, to: target)
             return
         }
         scheduler.cancel()
@@ -249,7 +249,7 @@ private extension FindPanelController {
                 matches = try await Task.detached(priority: .userInitiated) {
                     try FindSearchEngine.replaceAllMatches(
                         options: options,
-                        in: text,
+                        in: source,
                         replacement: replacement
                     )
                 }.value
@@ -265,7 +265,7 @@ private extension FindPanelController {
 
     private func applyReplaceAll(
         options: FindSearchOptions,
-        in text: String,
+        in source: any FindTextSource,
         replacement: String,
         to target: FindPanelTarget
     ) {
@@ -273,7 +273,7 @@ private extension FindPanelController {
         do {
             matches = try FindSearchEngine.replaceAllMatches(
                 options: options,
-                in: text,
+                in: source,
                 replacement: replacement
             )
         } catch {

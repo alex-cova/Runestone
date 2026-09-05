@@ -24,6 +24,28 @@ public final class FindSearchScheduler {
     }
 
     /// Schedules a search for `session`'s current query/options against `text`.
+    public func scheduleRefresh(
+        session: FindSession,
+        text: String,
+        anchorLocation: Int,
+        immediate: Bool = false,
+        isCurrent: @escaping @MainActor () -> Bool = { true },
+        apply: @escaping @MainActor () -> Void
+    ) {
+        scheduleRefresh(
+            session: session,
+            source: StringFindTextSource(text),
+            anchorLocation: anchorLocation,
+            immediate: immediate,
+            isCurrent: isCurrent,
+            apply: apply
+        )
+    }
+
+    /// Schedules a search for `session`'s current query/options against `source`.
+    ///
+    /// The detached scan captures `source` (a snapshot or string wrapper), not a newly
+    /// bridged `String`.
     /// - Parameters:
     ///   - immediate: Skips the debounce delay — use for e.g. showing the find bar with an
     ///     already-known query, where waiting would read as unresponsive.
@@ -33,7 +55,7 @@ public final class FindSearchScheduler {
     ///   - apply: Called on the main actor after `session.applySearchOutcome(_:)` has already run.
     public func scheduleRefresh(
         session: FindSession,
-        text: String,
+        source: any FindTextSource,
         anchorLocation: Int,
         immediate: Bool = false,
         isCurrent: @escaping @MainActor () -> Bool = { true },
@@ -41,19 +63,19 @@ public final class FindSearchScheduler {
     ) {
         debounceTask?.cancel()
         if immediate {
-            runSearch(session: session, text: text, anchorLocation: anchorLocation, isCurrent: isCurrent, apply: apply)
+            runSearch(session: session, source: source, anchorLocation: anchorLocation, isCurrent: isCurrent, apply: apply)
             return
         }
         debounceTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: Self.debounceNanoseconds)
             guard !Task.isCancelled else { return }
-            runSearch(session: session, text: text, anchorLocation: anchorLocation, isCurrent: isCurrent, apply: apply)
+            runSearch(session: session, source: source, anchorLocation: anchorLocation, isCurrent: isCurrent, apply: apply)
         }
     }
 
     private func runSearch(
         session: FindSession,
-        text: String,
+        source: any FindTextSource,
         anchorLocation: Int,
         isCurrent: @escaping @MainActor () -> Bool,
         apply: @escaping @MainActor () -> Void
@@ -65,7 +87,7 @@ public final class FindSearchScheduler {
             wholeWord: session.wholeWord,
             useRegex: session.useRegex
         )
-        let searchText = text
+        let searchSource = source
         let anchor = anchorLocation
 
         if snapshot.query.isEmpty {
@@ -83,7 +105,7 @@ public final class FindSearchScheduler {
                 useRegex: snapshot.useRegex
             )
             let outcome = await Task.detached(priority: .userInitiated) {
-                FindSearchEngine.search(options: options, in: searchText, anchorLocation: anchor)
+                FindSearchEngine.search(options: options, in: searchSource, anchorLocation: anchor)
             }.value
 
             guard !Task.isCancelled else { return }

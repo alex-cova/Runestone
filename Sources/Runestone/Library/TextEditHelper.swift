@@ -50,16 +50,16 @@ final class TextEditHelper {
     }
 
     func string(byApplying batchReplaceSet: BatchReplaceSet) -> NSString {
-        apply(batchReplaceSet).newString
+        _ = apply(batchReplaceSet)
+        return (stringView.substring(in: NSRange(location: 0, length: stringView.length)) ?? "") as NSString
     }
 
     /// Result of applying a batch replacement, including its inverse — replacing
-    /// `inverseReplacements` in `newString` restores the original document. `inverseReplacements`
-    /// is sized to the edited ranges (like a normal single-edit undo delta), not to the whole
-    /// document, so it can back an undo registration without cloning the full string. See
-    /// PERFORMANCE_AUDIT.md Phase 2 #7.
+    /// `inverseReplacements` in the resulting document restores the original.
+    /// `inverseReplacements` is sized to the edited ranges (like a normal single-edit undo
+    /// delta), not to the whole document, so it can back an undo registration without cloning
+    /// the full string. See PERFORMANCE_AUDIT.md Phase 2 #7.
     struct BatchApplication {
-        let newString: NSString
         let inverseReplacements: [BatchReplaceSet.Replacement]
     }
 
@@ -78,6 +78,6 @@ final class TextEditHelper {
             let newRange = NSRange(location: adjustedRange.location, length: (replacement.text as NSString).length)
             inverseReplacements.append(BatchReplaceSet.Replacement(range: newRange, text: oldText))
         }
-        return BatchApplication(newString: stringView.string, inverseReplacements: inverseReplacements)
+        return BatchApplication(inverseReplacements: inverseReplacements)
     }
 }

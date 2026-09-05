@@ -128,4 +128,63 @@ final class FindSessionTests: XCTestCase {
         XCTAssertFalse(ranges.isEmpty)
         XCTAssertEqual(Set(ranges.map(\.location)).count, ranges.count)
     }
+
+    func testSelectNextAndPreviousOnSourceWrapAround() {
+        let session = FindSession()
+        let text = "a b a"
+        let source = StringFindTextSource(text)
+        searched(session, query: "a", in: text)
+        XCTAssertEqual(session.currentIndex, 0)
+
+        session.selectNext(in: source)
+        XCTAssertEqual(session.currentIndex, 1)
+        session.selectNext(in: source)
+        XCTAssertEqual(session.currentIndex, 0)
+
+        session.selectPrevious(in: source)
+        XCTAssertEqual(session.currentIndex, 1)
+    }
+
+    func testFindRangesOnSourceEnumeratesEveryMatch() throws {
+        let source = StringFindTextSource("a b a b a")
+        let ranges = try FindSession.findRanges(
+            query: "a",
+            in: source,
+            matchCase: false,
+            wholeWord: false,
+            useRegex: false
+        )
+        XCTAssertEqual(ranges.count, 3)
+    }
+
+    func testFindRangesAndSelectNextOnFileBackedSourceDoNotMaterialize() async throws {
+        let original = "foo bar foo"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try original.write(to: url, atomically: true, encoding: .utf8)
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: url)
+        }
+        let state = try await TextViewState.load(contentsOf: url)
+        let snapshot = try XCTUnwrap(state.stringView.contentSnapshot())
+        let before = state.stringView.materializeCount
+
+        let ranges = try FindSession.findRanges(
+            query: "foo",
+            in: snapshot,
+            matchCase: false,
+            wholeWord: false,
+            useRegex: false
+        )
+        XCTAssertEqual(ranges.count, 2)
+
+        let session = FindSession()
+        searched(session, query: "foo", in: original)
+        session.selectNext(in: snapshot)
+        XCTAssertEqual(session.currentIndex, 1)
+        session.selectPrevious(in: snapshot)
+        XCTAssertEqual(session.currentIndex, 0)
+
+        XCTAssertEqual(state.stringView.materializeCount, before)
+        XCTAssertEqual(state.stringView.materializeCount, 0)
+    }
 }
