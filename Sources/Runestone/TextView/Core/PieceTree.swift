@@ -53,10 +53,6 @@ struct PieceTreeContentSnapshot: Sendable, FindTextSource {
 
     var contiguousNSString: NSString? { nil }
 
-    var utf8Length: Int {
-        pieces.reduce(0) { $0 + $1.utf8Length }
-    }
-
     func substring(utf16Offset: Int, length: Int) -> String {
         let location = max(0, utf16Offset)
         let take = max(0, min(length, utf16Length - location))
