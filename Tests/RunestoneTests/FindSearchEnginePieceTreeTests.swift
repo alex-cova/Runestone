@@ -4,6 +4,7 @@ import XCTest
 final class FindSearchEnginePieceTreeTests: XCTestCase {
     override func tearDown() {
         FindSearchEngine.debugLiteralWindowUTF16 = nil
+        FindSearchEngine.debugLiteralWindowSubstringUTF16Lengths = nil
         super.tearDown()
     }
 
@@ -123,10 +124,14 @@ final class FindSearchEnginePieceTreeTests: XCTestCase {
     }
 
     func testHighSurrogateAtSearchRegionEndStillDecodesFollowingPair() async throws {
-        FindSearchEngine.debugLiteralWindowUTF16 = 8
+        let unique = 8
+        FindSearchEngine.debugLiteralWindowUTF16 = unique
+        FindSearchEngine.debugLiteralWindowSubstringUTF16Lengths = []
         let emoji = "😀"
         // 1-unit query ⇒ rightPad == 1; 😀 starts at unique+1 == first-window searchEnd.
-        let text = String(repeating: "a", count: 9) + emoji + "xyz"
+        // extend-1 must request unique+2 units so the window includes the high rather than
+        // ending on an unpaired high / omitting the pair.
+        let text = String(repeating: "a", count: unique + 1) + emoji + "xyz"
         let view = try await loadFileBacked(text)
         let snapshot = try XCTUnwrap(view.contentSnapshot())
         let aMatches = FindSearchEngine.search(
@@ -134,11 +139,12 @@ final class FindSearchEnginePieceTreeTests: XCTestCase {
             in: snapshot,
             anchorLocation: 0
         )
-        XCTAssertEqual(aMatches.matchCount, 9)
-        let options = FindSearchOptions(query: emoji, matchCase: true)
-        let outcome = FindSearchEngine.search(options: options, in: snapshot, anchorLocation: 0)
-        XCTAssertEqual(outcome.matchCount, 1)
-        XCTAssertEqual(outcome.currentRange, NSRange(location: 9, length: (emoji as NSString).length))
+        XCTAssertEqual(aMatches.matchCount, unique + 1)
+        let lengths = try XCTUnwrap(FindSearchEngine.debugLiteralWindowSubstringUTF16Lengths)
+        XCTAssertEqual(lengths.first, unique + 2)
+        let firstWindow = snapshot.substring(utf16Offset: 0, length: unique + 2) as NSString
+        XCTAssertEqual(firstWindow.length, unique + 2)
+        XCTAssertTrue((0xD800...0xDBFF).contains(firstWindow.character(at: unique + 1)))
         XCTAssertEqual(view.materializeCount, 0)
     }
 

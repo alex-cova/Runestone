@@ -106,6 +106,8 @@ public enum FindSearchEngine {
 
     /// Overridable in tests so a match can be forced across a unique/right-pad cut without a 64 KB fixture.
     nonisolated(unsafe) static var debugLiteralWindowUTF16: Int?
+    /// UTF-16 length of each windowed-literal substring, for tests that extend-1 actually widened the first window.
+    nonisolated(unsafe) static var debugLiteralWindowSubstringUTF16Lengths: [Int]?
 
     public static func literalCaseInsensitiveOverlapUTF16(_ query: String) -> Int {
         max(query.utf16.count * 3, 16)
@@ -467,6 +469,10 @@ public enum FindSearchEngine {
 
             let windowString = source.substring(utf16Offset: substrStart, length: leftPad + plannedUnique + rightPad)
             let ns = windowString as NSString
+            if var lengths = debugLiteralWindowSubstringUTF16Lengths {
+                lengths.append(ns.length)
+                debugLiteralWindowSubstringUTF16Lengths = lengths
+            }
             let searchLength = min(plannedUnique + rightPad, max(0, ns.length - leftPad))
             var localSearch = NSRange(location: leftPad, length: searchLength)
             while localSearch.length > 0 {
