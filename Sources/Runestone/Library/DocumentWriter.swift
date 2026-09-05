@@ -28,8 +28,9 @@ public struct DocumentWriteOptions: Sendable, Equatable {
 
 public struct DocumentWriteResult: Sendable, Equatable {
     public var wroteBytes: Int64
-    /// `true` iff the live buffer was still the snapshot we wrote. Hosts **must** read this
-    /// (or `WorkbenchDocument.isDirty`) — a throwing-void success does not mean the buffer is on disk.
+    /// `true` iff the live buffer was still the snapshot we wrote (same `StringView` instance
+    /// and unchanged `contentGeneration`). Hosts **must** read this (or `WorkbenchDocument.isDirty`)
+    /// — a throwing-void success does not mean the buffer is on disk.
     public var generationMatched: Bool
     public var compacted: Bool
 
@@ -531,21 +532,48 @@ private struct FooterAccumulator {
 
 /// FIFO lock held for the whole `snapshot → write → compact` interval of ``TextView/write``.
 final class DocumentWriteLock: @unchecked Sendable {
+    private struct Waiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Void, Error>
+    }
+
     private let mutex = NSLock()
     private var isLocked = false
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var waiters: [Waiter] = []
 
-    func acquire() async {
-        await withCheckedContinuation { continuation in
-            mutex.lock()
-            if !isLocked {
-                isLocked = true
-                mutex.unlock()
-                continuation.resume()
-            } else {
-                waiters.append(continuation)
-                mutex.unlock()
+    func acquire() async throws {
+        let id = UUID()
+        do {
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    mutex.lock()
+                    if Task.isCancelled {
+                        mutex.unlock()
+                        continuation.resume(throwing: CancellationError())
+                        return
+                    }
+                    if !isLocked {
+                        isLocked = true
+                        mutex.unlock()
+                        continuation.resume()
+                        return
+                    }
+                    waiters.append(Waiter(id: id, continuation: continuation))
+                    if Task.isCancelled {
+                        if let index = waiters.firstIndex(where: { $0.id == id }) {
+                            waiters.remove(at: index)
+                            mutex.unlock()
+                            continuation.resume(throwing: CancellationError())
+                            return
+                        }
+                    }
+                    mutex.unlock()
+                }
+            } onCancel: { [id] in
+                self.cancelWaiter(id: id)
             }
+        } catch is CancellationError {
+            throw DocumentWriteError.cancelled
         }
     }
 
@@ -557,7 +585,18 @@ final class DocumentWriteLock: @unchecked Sendable {
         } else {
             let next = waiters.removeFirst()
             mutex.unlock()
-            next.resume()
+            next.continuation.resume()
+        }
+    }
+
+    private func cancelWaiter(id: UUID) {
+        mutex.lock()
+        if let index = waiters.firstIndex(where: { $0.id == id }) {
+            let waiter = waiters.remove(at: index)
+            mutex.unlock()
+            waiter.continuation.resume(throwing: CancellationError())
+        } else {
+            mutex.unlock()
         }
     }
 }

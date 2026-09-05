@@ -68,6 +68,10 @@ import CoreText
     var contentGeneration: UInt64 {
         textInputView.stringView.contentGeneration
     }
+
+    var stringViewObjectIdentifier: ObjectIdentifier {
+        ObjectIdentifier(textInputView.stringView)
+    }
     /// A Boolean value that indicates whether the text view is editable.
     public var isEditable = true {
         didSet {
@@ -2106,9 +2110,12 @@ extension TextView {
         options: DocumentWriteOptions = .init(),
         progress: (@Sendable (Int64, Int64) -> Void)? = nil
     ) async throws -> DocumentWriteResult {
-        await writeLock.acquire()
+        try await writeLock.acquire()
         defer { writeLock.release() }
-        let (source, generation) = captureWriteSource()
+        if Task.isCancelled {
+            throw DocumentWriteError.cancelled
+        }
+        let (source, generation, identity) = captureWriteSource()
         let footer: DocumentWriteFooter
         do {
             let writer = Task.detached(priority: .userInitiated) {
@@ -2122,28 +2129,32 @@ extension TextView {
         } catch is CancellationError {
             throw DocumentWriteError.cancelled
         }
-        return finishWrite(source: source, generation: generation, footer: footer, url: url)
+        return finishWrite(source: source, generation: generation, identity: identity, footer: footer, url: url)
     }
 
-    private func captureWriteSource() -> (DocumentWriteSource, UInt64) {
-        let generation = textInputView.stringView.contentGeneration
-        if let snapshot = textInputView.stringView.contentSnapshot() {
-            return (.pieceTree(snapshot), generation)
+    private func captureWriteSource() -> (DocumentWriteSource, UInt64, ObjectIdentifier) {
+        let stringView = textInputView.stringView
+        let generation = stringView.contentGeneration
+        let identity = ObjectIdentifier(stringView)
+        if let snapshot = stringView.contentSnapshot() {
+            return (.pieceTree(snapshot), generation, identity)
         }
-        return (.contiguous(textInputView.string as String), generation)
+        return (.contiguous(stringView.string as String), generation, identity)
     }
 
     private func finishWrite(
         source: DocumentWriteSource,
         generation: UInt64,
+        identity: ObjectIdentifier,
         footer: DocumentWriteFooter,
         url: URL
     ) -> DocumentWriteResult {
-        let generationMatched = textInputView.stringView.contentGeneration == generation
+        let live = textInputView.stringView
+        let generationMatched = ObjectIdentifier(live) == identity && live.contentGeneration == generation
         var compacted = false
         if generationMatched, case .pieceTree = source {
             if let mapping = FileMapping.openPrivateClone(of: url) {
-                textInputView.stringView.compactPieceTree(mapping: mapping, footer: footer)
+                live.compactPieceTree(mapping: mapping, footer: footer)
                 compacted = true
             }
         }

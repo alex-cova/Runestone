@@ -113,6 +113,103 @@ final class WorkbenchSaveTests: XCTestCase {
         assertNoWriterTemps(in: dest.deletingLastPathComponent())
     }
 
+    func testSetStateDuringWriteDoesNotCompactTheNewBuffer() async throws {
+        let urlA = try writeTempFile(String(repeating: "file-a-\n", count: 8_000))
+        let urlB = try writeTempFile("file B different\n")
+        let stateA = try await TextViewState.load(contentsOf: urlA)
+        let stateB = try await TextViewState.load(contentsOf: urlB)
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        textView.setState(stateA)
+        let viewBox = TextViewBox(textView)
+        let stateBox = TextViewStateBox(stateB)
+        let bumpBox = FlagBox()
+        let dest = try uniqueDest(named: "a.txt")
+        let result = try await textView.write(to: dest, progress: { written, _ in
+            guard written > 0 else { return }
+            bumpBox.lock.lock()
+            let shouldSwap = !bumpBox.flag
+            bumpBox.flag = true
+            bumpBox.lock.unlock()
+            guard shouldSwap else { return }
+            DispatchQueue.main.sync {
+                viewBox.textView.setState(stateBox.state)
+            }
+        })
+        XCTAssertFalse(result.generationMatched)
+        XCTAssertFalse(result.compacted)
+        XCTAssertEqual(stateB.stringView.substring(in: NSRange(location: 0, length: 17)), "file B different\n")
+        XCTAssertEqual(stateB.stringView.addBufferByteCount, 0)
+        XCTAssertEqual(try String(contentsOf: dest, encoding: .utf8).hasPrefix("file-a-"), true)
+    }
+
+    func testSaveDoesNotRebindRangeReaderAfterSetState() async throws {
+        let urlA = try writeTempFile(String(repeating: "alpha-\n", count: 8_000))
+        let urlB = try writeTempFile("beta document\n")
+        let documentA = try await WorkbenchDocument.load(contentsOf: urlA)
+        let documentB = try await WorkbenchDocument.load(contentsOf: urlB)
+        let preparedA = try makePreparedView(from: documentA)
+        let originalSlice = documentA.rangeReader?.substring(utf16Offset: 0, length: 7)
+        XCTAssertEqual(originalSlice, "alpha-\n")
+        let viewBox = TextViewBox(preparedA.textView)
+        let stateBox = TextViewStateBox(documentB.pendingState!)
+        let bumpBox = FlagBox()
+        documentA.isDirty = false
+        let result = try await documentA.save(from: preparedA.textView, progress: { written, _ in
+            guard written > 0 else { return }
+            bumpBox.lock.lock()
+            let shouldSwap = !bumpBox.flag
+            bumpBox.flag = true
+            bumpBox.lock.unlock()
+            guard shouldSwap else { return }
+            DispatchQueue.main.sync {
+                viewBox.textView.setState(stateBox.state)
+            }
+        })
+        XCTAssertFalse(result.generationMatched)
+        XCTAssertFalse(result.compacted)
+        XCTAssertTrue(documentA.isDirty)
+        XCTAssertEqual(documentA.rangeReader?.substring(utf16Offset: 0, length: 7), originalSlice)
+        XCTAssertEqual(documentB.pendingState?.stringView.substring(in: NSRange(location: 0, length: 14)), "beta document\n")
+    }
+
+    func testCancelledQueuedWriteDoesNotAcquireLock() async throws {
+        let source = try writeTempFile(String(repeating: "first-write-\n", count: 20_000))
+        let state = try await TextViewState.load(contentsOf: source)
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        textView.setState(state)
+        let viewBox = TextViewBox(textView)
+        let dest1 = try uniqueDest(named: "first.txt")
+        let dest2 = try uniqueDest(named: "second.txt")
+        try "keep-second".write(to: dest2, atomically: true, encoding: .utf8)
+        let started = FlagBox()
+        let first = Task {
+            try await viewBox.textView.write(to: dest1, progress: { written, _ in
+                if written > 0 {
+                    started.lock.lock()
+                    started.flag = true
+                    started.lock.unlock()
+                }
+            })
+        }
+        while !started.flag {
+            await Task.yield()
+        }
+        let second = Task {
+            try await viewBox.textView.write(to: dest2)
+        }
+        second.cancel()
+        do {
+            _ = try await second.value
+            XCTFail("expected cancelled")
+        } catch DocumentWriteError.cancelled {
+            // expected
+        }
+        let firstResult = try await first.value
+        XCTAssertTrue(firstResult.generationMatched)
+        XCTAssertEqual(try String(contentsOf: dest2, encoding: .utf8), "keep-second")
+        assertNoWriterTemps(in: dest2.deletingLastPathComponent())
+    }
+
     private func makePreparedView(from document: WorkbenchDocument) throws -> (textView: TextView, stringView: StringView) {
         let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
         if let state = document.pendingState {
@@ -178,5 +275,12 @@ private final class URLBox: @unchecked Sendable {
     let url: URL
     init(_ url: URL) {
         self.url = url
+    }
+}
+
+private final class TextViewStateBox: @unchecked Sendable {
+    let state: TextViewState
+    init(_ state: TextViewState) {
+        self.state = state
     }
 }

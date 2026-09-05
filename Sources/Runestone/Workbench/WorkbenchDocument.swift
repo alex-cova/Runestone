@@ -133,9 +133,14 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
         }
         let result: DocumentWriteResult
         if let textView {
+            let identity = textView.stringViewObjectIdentifier
             result = try await textView.write(to: dest, options: options, progress: progress)
-            isDirty = !result.generationMatched
-            refreshRangeReader(from: textView.pieceTreeContentSnapshot() ?? pendingState?.stringView.contentSnapshot())
+            if textView.stringViewObjectIdentifier == identity {
+                isDirty = !result.generationMatched
+                refreshRangeReader(from: textView.pieceTreeContentSnapshot() ?? pendingState?.stringView.contentSnapshot())
+            } else {
+                isDirty = true
+            }
         } else if let pendingState {
             result = try await writePendingOrContiguous(
                 pendingState.stringView,
