@@ -267,22 +267,48 @@ enum DocumentWriter {
                 throw DocumentWriteError.ioFailure
             }
             _ = fchown(fd, status.st_uid, status.st_gid)
-            url.withUnsafeFileSystemRepresentation { destPath in
+            try url.withUnsafeFileSystemRepresentation { destPath in
                 guard let destPath else {
-                    return
+                    throw DocumentWriteError.ioFailure
                 }
-                tempPath.withCString { tempC in
+                try tempPath.withCString { tempC in
                     copyXattrs(from: destPath, to: tempC)
-                    copyACL(from: destPath, to: tempC)
+                    try copyACL(from: destPath, to: tempC)
                 }
             }
         } else {
-            let mask = umask(0)
-            umask(mask)
-            if fchmod(fd, mode_t(0o666) & ~mask) != 0 {
+            let mode = try umaskAdjustedNewFileMode(inDirectory: url.deletingLastPathComponent())
+            if fchmod(fd, mode) != 0 {
                 throw DocumentWriteError.ioFailure
             }
         }
+    }
+
+    /// `open(O_CREAT, 0o666)` applies umask without mutating the process-global mask.
+    private static func umaskAdjustedNewFileMode(inDirectory directory: URL) throws -> mode_t {
+        let probeURL = directory.appendingPathComponent(".runestone-umask-\(UUID().uuidString).tmp")
+        let fd = probeURL.withUnsafeFileSystemRepresentation { path -> Int32 in
+            guard let path else {
+                return -1
+            }
+            return open(path, O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0o666)
+        }
+        guard fd >= 0 else {
+            throw DocumentWriteError.ioFailure
+        }
+        defer {
+            close(fd)
+            probeURL.withUnsafeFileSystemRepresentation { path in
+                if let path {
+                    unlink(path)
+                }
+            }
+        }
+        var status = stat()
+        guard fstat(fd, &status) == 0 else {
+            throw DocumentWriteError.ioFailure
+        }
+        return status.st_mode & ~S_IFMT
     }
 
     /// Resource forks (`com.apple.ResourceFork`) and `st_birthtime` are not preserved.
@@ -323,12 +349,16 @@ enum DocumentWriter {
         }
     }
 
-    private static func copyACL(from source: UnsafePointer<CChar>, to destination: UnsafePointer<CChar>) {
+    private static func copyACL(from source: UnsafePointer<CChar>, to destination: UnsafePointer<CChar>) throws {
         guard let acl = acl_get_file(source, ACL_TYPE_EXTENDED) else {
             return
         }
-        _ = acl_set_file(destination, ACL_TYPE_EXTENDED, acl)
-        acl_free(UnsafeMutableRawPointer(acl))
+        defer {
+            acl_free(UnsafeMutableRawPointer(acl))
+        }
+        if acl_set_file(destination, ACL_TYPE_EXTENDED, acl) != 0 {
+            throw DocumentWriteError.ioFailure
+        }
     }
 
     private static func fsyncDirectory(_ directory: URL) {

@@ -21,7 +21,7 @@ final class StringView {
 
     private var storage: Storage
 
-    /// Increments on every storage mutation (`replaceText` and the `string` setter). Compact does not bump this.
+    /// Bumped on storage mutation so a save can detect concurrent edits.
     private(set) var contentGeneration: UInt64 = 0
 
     /// UTF-16 length. Prefer this over ``string``.length so file-backed documents do not materialize.

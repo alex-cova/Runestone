@@ -107,22 +107,47 @@ final class DocumentWriterTests: XCTestCase {
         let original = "do-not-replace-me"
         try original.write(to: dest, atomically: true, encoding: .utf8)
         let payload = String(repeating: "cancel-me-\n", count: 20_000)
-        final class Holder: @unchecked Sendable {
-            var task: Task<DocumentWriteFooter, Error>?
-        }
-        let holder = Holder()
-        holder.task = Task {
-            try DocumentWriter.write(.contiguous(payload), to: dest, progress: { _, _ in
-                holder.task?.cancel()
+        let task = Task {
+            try DocumentWriter.write(.contiguous(payload), to: dest, progress: { written, total in
+                if written > 0, written == total {
+                    withUnsafeCurrentTask { $0?.cancel() }
+                }
             })
         }
         do {
-            _ = try await holder.task!.value
+            _ = try await task.value
             XCTFail("expected cancelled")
         } catch DocumentWriteError.cancelled {
             // expected
         }
         XCTAssertEqual(try String(contentsOf: dest, encoding: .utf8), original)
+        assertNoWriterTemps(in: dest.deletingLastPathComponent())
+    }
+
+    func testExistingXattrSurvivesOverwrite() throws {
+        let dest = try uniqueDest(named: "xattr.txt")
+        try "old".write(to: dest, atomically: true, encoding: .utf8)
+        let name = "com.runestone.test"
+        let value = Data("keep-me".utf8)
+        try dest.withUnsafeFileSystemRepresentation { path in
+            guard let path else {
+                throw DocumentWriteError.ioFailure
+            }
+            XCTAssertEqual(value.withUnsafeBytes { raw in
+                setxattr(path, name, raw.baseAddress, raw.count, 0, 0)
+            }, 0)
+        }
+        _ = try DocumentWriter.write(.contiguous("new"), to: dest)
+        XCTAssertEqual(try String(contentsOf: dest, encoding: .utf8), "new")
+        var buffer = [UInt8](repeating: 0, count: 64)
+        let n = dest.withUnsafeFileSystemRepresentation { path -> Int in
+            guard let path else {
+                return -1
+            }
+            return getxattr(path, name, &buffer, buffer.count, 0, 0)
+        }
+        XCTAssertEqual(n, value.count)
+        XCTAssertEqual(Data(buffer.prefix(n)), value)
         assertNoWriterTemps(in: dest.deletingLastPathComponent())
     }
 
@@ -163,6 +188,7 @@ final class DocumentWriterTests: XCTestCase {
         if expected != 0o600 {
             XCTAssertNotEqual(status.st_mode & 0o777, 0o600)
         }
+        assertNoWriterTemps(in: dest.deletingLastPathComponent())
     }
 
     func testUnsupportedEncodingThrows() throws {
