@@ -267,11 +267,8 @@ final class FindSearchEngineTests: XCTestCase {
 
     func testRegexOnNonContiguousSourceReturnsErrorWithoutReading() {
         let source = RecordingFindTextSource(string: String(repeating: "needle ", count: 1_000))
-        let outcome = FindSearchEngine.search(
-            options: FindSearchOptions(query: "nee.le", useRegex: true),
-            in: source,
-            anchorLocation: 0
-        )
+        let regex = FindSearchOptions(query: "nee.le", useRegex: true)
+        let outcome = FindSearchEngine.search(options: regex, in: source, anchorLocation: 0)
         XCTAssertEqual(outcome.errorMessage, FindSearchEngine.regexWindowsNotImplementedMessage)
         XCTAssertEqual(outcome.matchCount, 0)
         XCTAssertEqual(source.substringCallCount, 0)
@@ -282,6 +279,22 @@ final class FindSearchEngineTests: XCTestCase {
             anchorLocation: 0
         )
         XCTAssertEqual(wholeWord.errorMessage, FindSearchEngine.regexWindowsNotImplementedMessage)
+        XCTAssertEqual(source.substringCallCount, 0)
+
+        XCTAssertNil(FindSearchEngine.findNext(options: regex, in: source, after: 0))
+        XCTAssertEqual(source.substringCallCount, 0)
+        XCTAssertNil(FindSearchEngine.findPrevious(options: regex, in: source, before: source.utf16Length))
+        XCTAssertEqual(source.substringCallCount, 0)
+        XCTAssertThrowsError(try FindSearchEngine.replaceAllMatches(options: regex, in: source, replacement: "x"))
+        XCTAssertEqual(source.substringCallCount, 0)
+        XCTAssertThrowsError(
+            try FindSearchEngine.replacementText(
+                options: regex,
+                in: source,
+                matching: NSRange(location: 0, length: 1),
+                replacement: "$0"
+            )
+        )
         XCTAssertEqual(source.substringCallCount, 0)
     }
 }

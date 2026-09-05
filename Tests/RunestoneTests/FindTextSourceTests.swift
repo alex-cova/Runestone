@@ -39,6 +39,31 @@ final class FindTextSourceTests: XCTestCase {
         XCTAssertEqual(source.substring(utf16Offset: 1, length: 2), "bc")
     }
 
+    func testSnapshotSubstringEmitsUnpairedSurrogates() async throws {
+        let text = "a😀b"
+        let view = try await loadFileBacked(text)
+        let snapshot = try XCTUnwrap(view.contentSnapshot())
+        let ns = text as NSString
+        XCTAssertEqual(ns.length, 4)
+        for offset in 0..<ns.length {
+            for length in 1...(ns.length - offset) {
+                let fromSnapshot = snapshot.substring(utf16Offset: offset, length: length) as NSString
+                let fromNS = ns.substring(with: NSRange(location: offset, length: length)) as NSString
+                XCTAssertEqual(fromSnapshot.length, fromNS.length, "offset \(offset) length \(length)")
+                for index in 0..<fromNS.length {
+                    XCTAssertEqual(
+                        fromSnapshot.character(at: index),
+                        fromNS.character(at: index),
+                        "offset \(offset) length \(length) unit \(index)"
+                    )
+                }
+            }
+        }
+        XCTAssertEqual(snapshot.substring(utf16Offset: 1, length: 1) as NSString, ns.substring(with: NSRange(location: 1, length: 1)) as NSString)
+        XCTAssertTrue((0xD800...0xDBFF).contains(ns.character(at: 1)))
+        XCTAssertTrue((0xDC00...0xDFFF).contains(ns.character(at: 2)))
+    }
+
     private func loadFileBacked(_ text: String) async throws -> StringView {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try text.write(to: url, atomically: true, encoding: .utf8)

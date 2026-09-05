@@ -32,45 +32,85 @@ enum UTF8DocumentScanner {
     }
 
     /// Byte offset of the UTF-16 unit `utf16Offset` within `bytes`. `bytes.count` if past the end.
+    /// A low surrogate maps to the same UTF-8 index as its high surrogate (the scalar start).
     static func utf8Offset(forUTF16Offset utf16Offset: Int, in bytes: UnsafeRawBufferPointer) -> Int {
+        utf8Position(forUTF16Offset: utf16Offset, in: bytes).utf8Offset
+    }
+
+    /// UTF-8 index of the scalar containing `utf16Offset`. `skip` is 1 when that offset is the
+    /// low surrogate of a 4-byte scalar, otherwise 0.
+    static func utf8Position(forUTF16Offset utf16Offset: Int, in bytes: UnsafeRawBufferPointer) -> (utf8Offset: Int, skip: Int) {
         if utf16Offset <= 0 {
-            return 0
+            return (0, 0)
         }
         var utf16 = 0
         var index = 0
         while index < bytes.count {
             if utf16 >= utf16Offset {
-                return index
+                return (index, 0)
             }
-            let lead = bytes[index]
-            let units: Int
-            let advance: Int
-            if lead < 0x80 {
-                units = 1
-                advance = 1
-            } else if lead < 0xC0 {
-                units = 1
-                advance = 1
-            } else if lead < 0xE0 {
-                units = 1
-                advance = min(2, bytes.count - index)
-            } else if lead < 0xF0 {
-                units = 1
-                advance = min(3, bytes.count - index)
-            } else if lead < 0xF8 {
-                units = 2
-                advance = min(4, bytes.count - index)
-            } else {
-                units = 1
-                advance = 1
-            }
+            let (units, advance) = utf8Scalar(at: index, in: bytes)
             if utf16 + units > utf16Offset {
-                return index
+                return (index, utf16Offset - utf16)
             }
             utf16 += units
             index += advance
         }
-        return bytes.count
+        return (bytes.count, 0)
+    }
+
+    /// Appends `length` UTF-16 units starting at `utf16Offset`. A range that starts or ends
+    /// inside a surrogate pair emits the unpaired unit rather than dropping or duplicating it.
+    static func appendUTF16Units(
+        from bytes: UnsafeRawBufferPointer,
+        utf16Offset: Int,
+        length: Int,
+        into result: inout [unichar]
+    ) {
+        guard length > 0 else {
+            return
+        }
+        let start = utf8Position(forUTF16Offset: utf16Offset, in: bytes)
+        let end = utf8Position(forUTF16Offset: utf16Offset + length, in: bytes)
+        var utf8End = end.utf8Offset
+        if end.skip > 0, utf8End < bytes.count {
+            utf8End += utf8Scalar(at: utf8End, in: bytes).advance
+        }
+        guard utf8End > start.utf8Offset else {
+            return
+        }
+        let sliceEnd = min(utf8End, bytes.count)
+        let slice = UnsafeRawBufferPointer(rebasing: bytes[start.utf8Offset..<sliceEnd])
+        guard let string = String(bytes: Data(slice), encoding: .utf8) else {
+            return
+        }
+        let decoded = Array(string.utf16)
+        let drop = min(start.skip, decoded.count)
+        let take = min(length, decoded.count - drop)
+        guard take > 0 else {
+            return
+        }
+        result.append(contentsOf: decoded[drop..<(drop + take)])
+    }
+
+    private static func utf8Scalar(at index: Int, in bytes: UnsafeRawBufferPointer) -> (units: Int, advance: Int) {
+        let lead = bytes[index]
+        if lead < 0x80 {
+            return (1, 1)
+        }
+        if lead < 0xC0 {
+            return (1, 1)
+        }
+        if lead < 0xE0 {
+            return (1, min(2, bytes.count - index))
+        }
+        if lead < 0xF0 {
+            return (1, min(3, bytes.count - index))
+        }
+        if lead < 0xF8 {
+            return (2, min(4, bytes.count - index))
+        }
+        return (1, 1)
     }
 
     static func stripBOM(from bytes: UnsafeRawBufferPointer) -> UnsafeRawBufferPointer {

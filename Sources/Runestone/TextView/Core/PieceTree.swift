@@ -115,16 +115,7 @@ struct PieceTreeContentSnapshot: Sendable, FindTextSource {
                 let local = location - utf16
                 let take = min(remaining, piece.utf16Length - local)
                 withUTF8(of: piece) { bytes in
-                    let utf8Start = utf8Offset(in: piece, localUTF16: local, bytes: bytes)
-                    let utf8End = utf8Offset(in: piece, localUTF16: local + take, bytes: bytes)
-                    let slice = UnsafeRawBufferPointer(rebasing: bytes[utf8Start..<utf8End])
-                    if let string = String(bytes: Data(slice), encoding: .utf8) {
-                        result.append(contentsOf: string.utf16)
-                    }
-                }
-                let expected = range.length - remaining + take
-                if result.count > expected {
-                    result.removeLast(result.count - expected)
+                    appendUTF16Units(of: piece, localUTF16: local, take: take, bytes: bytes, into: &result)
                 }
                 remaining -= take
                 location += take
@@ -135,6 +126,39 @@ struct PieceTreeContentSnapshot: Sendable, FindTextSource {
             }
         }
         return result
+    }
+
+    private func appendUTF16Units(
+        of piece: PieceCopy,
+        localUTF16: Int,
+        take: Int,
+        bytes: UnsafeRawBufferPointer,
+        into result: inout [unichar]
+    ) {
+        if !piece.sourceIsOriginal || originalCheckpoints.isEmpty {
+            UTF8DocumentScanner.appendUTF16Units(from: bytes, utf16Offset: localUTF16, length: take, into: &result)
+            return
+        }
+        let targetUTF16 = piece.originalUTF16Start + localUTF16
+        var startUTF8 = piece.utf8Offset
+        var baseUTF16 = piece.originalUTF16Start
+        if let checkpoint = lastCheckpoint(utf16Offset: targetUTF16),
+           checkpoint.utf8Offset >= piece.utf8Offset,
+           checkpoint.utf16Offset <= targetUTF16 {
+            startUTF8 = checkpoint.utf8Offset
+            baseUTF16 = checkpoint.utf16Offset
+        }
+        let limit = piece.utf8Offset + piece.utf8Length
+        let extraBytes = UnsafeRawBufferPointer(
+            start: bytes.baseAddress.map { $0 + (startUTF8 - piece.utf8Offset) },
+            count: max(limit - startUTF8, 0)
+        )
+        UTF8DocumentScanner.appendUTF16Units(
+            from: extraBytes,
+            utf16Offset: targetUTF16 - baseUTF16,
+            length: take,
+            into: &result
+        )
     }
 
     private func utf8Offset(in piece: PieceCopy, localUTF16: Int, bytes: UnsafeRawBufferPointer) -> Int {

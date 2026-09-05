@@ -394,8 +394,7 @@ public enum FindSearchEngine {
     }
 
     /// Invokes `body` for each accepted literal match in document coordinates.
-    /// `body` returns `false` to stop. Matcher region is unique + right pad; a match is accepted
-    /// iff `offset <= start < offset + unique`.
+    /// `body` returns `false` to stop.
     private static func enumerateLiteralMatches(
         options: FindSearchOptions,
         in source: any FindTextSource,

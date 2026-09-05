@@ -101,6 +101,47 @@ final class FindSearchEnginePieceTreeTests: XCTestCase {
         XCTAssertEqual(view.materializeCount, 0)
     }
 
+    func testEmojiStraddlingUniqueCutIsCountedOnce() async throws {
+        let unique = FindSearchEngine.literalWindowUTF16
+        let emoji = "😀"
+        let emojiLength = (emoji as NSString).length
+        let text = String(repeating: "a", count: unique - 1) + emoji + "tail"
+        let view = try await loadFileBacked(text)
+        let snapshot = try XCTUnwrap(view.contentSnapshot())
+        let options = FindSearchOptions(query: emoji, matchCase: true)
+        let expected = NSRange(location: unique - 1, length: emojiLength)
+        let outcome = FindSearchEngine.search(options: options, in: snapshot, anchorLocation: 0)
+        XCTAssertEqual(outcome.matchCount, 1)
+        XCTAssertEqual(outcome.currentRange, expected)
+        XCTAssertEqual(FindSearchEngine.findNext(options: options, in: snapshot, after: unique - 1), expected)
+        XCTAssertNil(FindSearchEngine.findNext(options: options, in: snapshot, after: unique))
+        XCTAssertEqual(FindSearchEngine.findPrevious(options: options, in: snapshot, before: unique), expected)
+        XCTAssertNil(FindSearchEngine.findPrevious(options: options, in: snapshot, before: unique - 1))
+        let matches = try FindSearchEngine.replaceAllMatches(options: options, in: snapshot, replacement: "x")
+        XCTAssertEqual(matches.map(\.range), [expected])
+        XCTAssertEqual(view.materializeCount, 0)
+    }
+
+    func testHighSurrogateAtSearchRegionEndStillDecodesFollowingPair() async throws {
+        FindSearchEngine.debugLiteralWindowUTF16 = 8
+        let emoji = "😀"
+        // 1-unit query ⇒ rightPad == 1; 😀 starts at unique+1 == first-window searchEnd.
+        let text = String(repeating: "a", count: 9) + emoji + "xyz"
+        let view = try await loadFileBacked(text)
+        let snapshot = try XCTUnwrap(view.contentSnapshot())
+        let aMatches = FindSearchEngine.search(
+            options: FindSearchOptions(query: "a", matchCase: true),
+            in: snapshot,
+            anchorLocation: 0
+        )
+        XCTAssertEqual(aMatches.matchCount, 9)
+        let options = FindSearchOptions(query: emoji, matchCase: true)
+        let outcome = FindSearchEngine.search(options: options, in: snapshot, anchorLocation: 0)
+        XCTAssertEqual(outcome.matchCount, 1)
+        XCTAssertEqual(outcome.currentRange, NSRange(location: 9, length: (emoji as NSString).length))
+        XCTAssertEqual(view.materializeCount, 0)
+    }
+
     func testCRLFOnTheUniqueCut() async throws {
         let unique = FindSearchEngine.literalWindowUTF16
         let text = String(repeating: "a", count: unique - 1) + "\r\n" + "tail"
