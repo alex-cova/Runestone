@@ -968,10 +968,8 @@ public enum FindSearchEngine {
                 }
                 guard let result, result.range.location != NSNotFound else { return }
                 let docStart = geometry.substrStart + result.range.location
-                let inWindow = (uniqueStart <= docStart && docStart < cursor)
-                    || (cursor == utf16Length && docStart == utf16Length)
-                guard inWindow else {
-                    if docStart >= cursor && !(cursor == utf16Length && docStart == utf16Length) {
+                if !geometry.accepts(docStart: docStart, utf16Length: utf16Length) {
+                    if docStart >= geometry.uniqueEnd {
                         stop.pointee = true
                     }
                     return

@@ -52,7 +52,7 @@ final class FindSearchEngineRegexWindowTests: XCTestCase {
         XCTAssertEqual(view.materializeCount, 0)
     }
 
-    func testTwoMiBTrailingNewlineCaretIncludesEmptyLastLine() async throws {
+    func testTwoMiBTrailingNewlineCaretDoesNotMatchEOFAndDollarDoes() async throws {
         let text = String(repeating: "a", count: twoMiB - 1) + "\n"
         let view = try await loadFileBacked(text)
         let snapshot = try XCTUnwrap(view.contentSnapshot())
