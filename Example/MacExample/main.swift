@@ -128,6 +128,8 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
         let metal = NSButton(title: "Metal", target: self, action: #selector(toggleMetalRendering(_:)))
         metal.bezelStyle = .rounded
         metal.setButtonType(.toggle)
+        // Metal is the default in the example app (matches TextView's production default).
+        metal.state = .on
 
         stack.addArrangedSubview(openFile)
         stack.addArrangedSubview(saveFile)
@@ -141,8 +143,8 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
         return stack
     }
 
-    /// Metal is default-off; this flips the per-view property so QA can A/B the renderer
-    /// (PRs 1–8). The `RunestoneMetalRendering=false` UserDefaults kill switch still wins.
+    /// A/B the Metal renderer against the Core Graphics path. `TextView` already defaults Metal on
+    /// in production; the `RunestoneMetalRendering=false` UserDefaults kill switch still wins.
     @objc private func toggleMetalRendering(_ sender: NSButton) {
         let enabled = sender.state == .on
         for host in paneHosts.values {

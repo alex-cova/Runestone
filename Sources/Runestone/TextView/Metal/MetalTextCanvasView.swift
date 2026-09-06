@@ -9,6 +9,9 @@ protocol MetalCanvasGlyphEncoding: AnyObject {
     /// Called inside `MetalTextCanvasView.draw(_:)` with a live encoder whose color attachment is
     /// already cleared to transparent. Must not call `endEncoding` / `present` / `commit`.
     func encode(into encoder: MTLRenderCommandEncoder, drawableSize: CGSize)
+    /// Like `encode`, but forces an instance-buffer rebuild first — for offscreen capture, which
+    /// may run after an on-screen `draw` already consumed the dirty flag.
+    func encodeForCapture(into encoder: MTLRenderCommandEncoder, drawableSize: CGSize)
     /// The canvas left its window (cached / hidden host): release grown instance buffers.
     func hostDidLeaveWindow()
 }
@@ -45,7 +48,7 @@ final class MetalTextCanvasView: UIView {
         let metalLayer = CAMetalLayer()
         metalLayer.device = MetalContext.shared.device
         metalLayer.pixelFormat = .bgra8Unorm
-        metalLayer.framebufferOnly = true
+        metalLayer.framebufferOnly = !MetalContext.shared.allowsDrawableCapture
         metalLayer.contentsScale = effectiveBackingScale
         metalLayer.drawableSize = CGSize(
             width: bounds.width * metalLayer.contentsScale,
@@ -124,6 +127,87 @@ final class MetalTextCanvasView: UIView {
         }
         isDisplayDirty = false
         encodePass(on: metalLayer)
+    }
+
+    /// Renders the current Metal scene into an offscreen BGRA texture and reads it back — the Metal
+    /// glyphs/decorations on a transparent ground, at the canvas's backing scale. For snapshot tests
+    /// / PerfHarness only (`CAMetalLayer` content is not captured by `cacheDisplay`).
+    func captureSnapshot() -> NSBitmapImageRep? {
+        let context = MetalContext.shared
+        guard context.isAvailable,
+              let device = context.device,
+              let queue = context.commandQueue else {
+            return nil
+        }
+        let scale = effectiveBackingScale
+        let width = Int((bounds.width * scale).rounded())
+        let height = Int((bounds.height * scale).rounded())
+        guard width > 0, height > 0 else {
+            return nil
+        }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm,
+            width: width,
+            height: height,
+            mipmapped: false
+        )
+        descriptor.usage = [.renderTarget, .shaderRead]
+        descriptor.storageMode = .private
+        let bytesPerRow = width * 4
+        guard let target = device.makeTexture(descriptor: descriptor),
+              let readback = device.makeBuffer(length: bytesPerRow * height, options: .storageModeShared) else {
+            return nil
+        }
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = target
+        pass.colorAttachments[0].loadAction = .clear
+        pass.colorAttachments[0].storeAction = .store
+        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+        guard let commandBuffer = queue.makeCommandBuffer(),
+              let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
+            return nil
+        }
+        glyphEncoder?.encodeForCapture(into: encoder, drawableSize: CGSize(width: width, height: height))
+        encoder.endEncoding()
+        guard let blit = commandBuffer.makeBlitCommandEncoder() else {
+            return nil
+        }
+        blit.copy(
+            from: target,
+            sourceSlice: 0,
+            sourceLevel: 0,
+            sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+            sourceSize: MTLSize(width: width, height: height, depth: 1),
+            to: readback,
+            destinationOffset: 0,
+            destinationBytesPerRow: bytesPerRow,
+            destinationBytesPerImage: bytesPerRow * height
+        )
+        blit.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: width,
+            pixelsHigh: height,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: bytesPerRow,
+            bitsPerPixel: 32
+        ), let pixels = rep.bitmapData else {
+            return nil
+        }
+        memcpy(pixels, readback.contents(), bytesPerRow * height)
+        // Texture is BGRA; NSBitmapImageRep above is RGBA. Swap R/B in place.
+        for index in stride(from: 0, to: width * height * 4, by: 4) {
+            pixels.advanced(by: index).pointee ^= pixels.advanced(by: index + 2).pointee
+            pixels.advanced(by: index + 2).pointee ^= pixels.advanced(by: index).pointee
+            pixels.advanced(by: index).pointee ^= pixels.advanced(by: index + 2).pointee
+        }
+        return rep
     }
 }
 

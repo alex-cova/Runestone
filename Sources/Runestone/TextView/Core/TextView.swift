@@ -890,9 +890,9 @@ import CoreText
             }
         }
     }
-    /// Host-controlled Metal rendering preference. Defaults to `false`.
-    /// Ignored when no Metal device exists. A `false` value always wins over
-    /// `UserDefaults` `true` (per-view disable).
+    /// Host-controlled Metal rendering preference. Defaults to `true` (production) or `false` under
+    /// XCTest. Ignored when no Metal device exists. A `false` value always wins over
+    /// `UserDefaults` `RunestoneMetalRendering` `true` (per-view disable).
     public var isMetalRenderingEnabled: Bool {
         get {
             textInputView.isMetalRenderingEnabled
@@ -905,14 +905,30 @@ import CoreText
     public var isMetalRenderingActive: Bool {
         textInputView.isMetalRenderingActive
     }
-    /// Resident coverage (R8) glyph-atlas bytes for the shared atlas. Debug/PerfHarness only.
-    var metalGlyphAtlasBytes: Int { textInputView.metalDebugStats?.coverageAtlasBytes ?? 0 }
-    /// Resident color (BGRA) glyph-atlas bytes for the shared atlas. Debug/PerfHarness only.
-    var metalColorAtlasBytes: Int { textInputView.metalDebugStats?.colorAtlasBytes ?? 0 }
+    /// Resident coverage (R8) glyph-atlas bytes for the process-wide atlas. Debug/PerfHarness only.
+    public var metalGlyphAtlasBytes: Int { textInputView.metalDebugStats?.coverageAtlasBytes ?? 0 }
+    /// Resident color (BGRA) glyph-atlas bytes for the process-wide atlas. Debug/PerfHarness only.
+    public var metalColorAtlasBytes: Int { textInputView.metalDebugStats?.colorAtlasBytes ?? 0 }
     /// Number of line fragments this instance is currently painting via Metal. Debug/PerfHarness only.
-    var metalFragmentCount: Int { textInputView.metalDebugStats?.fragmentCount ?? 0 }
+    public var metalFragmentCount: Int { textInputView.metalDebugStats?.fragmentCount ?? 0 }
+    /// Glyph + solid instance count from the last Metal encode. Debug/PerfHarness only.
+    public var metalInstanceCount: Int {
+        (textInputView.metalDebugStats?.glyphInstanceCount ?? 0) + (textInputView.metalDebugStats?.solidInstanceCount ?? 0)
+    }
     /// Windowed p95 of `MetalRenderer.encode`, in nanoseconds. Debug/PerfHarness only.
-    var metalDrawNanosP95: Double { textInputView.metalDebugStats?.drawNanosP95 ?? 0 }
+    public var metalDrawNanosP95: Double { textInputView.metalDebugStats?.drawNanosP95 ?? 0 }
+    /// When `true`, the Metal canvas is created with `framebufferOnly = false` so
+    /// `NSView.cacheDisplay(in:to:)` can read back the presented drawable. Off in the shipping path;
+    /// set it (before creating a `TextView`) only from PerfHarness / snapshot tests.
+    public static var allowsMetalDrawableCapture: Bool {
+        get { MetalContext.shared.allowsDrawableCapture }
+        set { MetalContext.shared.allowsDrawableCapture = newValue }
+    }
+    /// Offscreen render of the Metal glyph canvas (glyphs + decorations on a transparent ground) at
+    /// the backing scale, or `nil` when Metal is not active. Snapshot tests / PerfHarness only.
+    public func captureMetalGlyphSnapshot() -> NSBitmapImageRep? {
+        textInputView.captureMetalSnapshot()
+    }
     /// Coordinates pluggable syntax-highlight providers (tree-sitter overlays, semantic tokens, etc.).
     public private(set) var highlightProviderCoordinator: HighlightProviderCoordinator?
 

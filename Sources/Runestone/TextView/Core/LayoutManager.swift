@@ -64,6 +64,9 @@ final class LayoutManager {
                     // Drop the old face's tiles from the shared glyph atlas; the re-typeset above
                     // makes every visible fragment re-extract with the new font.
                     metalRenderer?.handleThemeFontChange(previousFont: oldValue.font as CTFont)
+                    if let scale = metalCanvasView?.effectiveBackingScale {
+                        metalRenderer?.prewarm(font: theme.font as CTFont, scale: scale)
+                    }
                 }
                 // Dirty only — never layoutIfNeeded here. Theme is assigned from
                 // setState during SwiftUI updateNSView; sync layout aborts AppKit.
@@ -155,6 +158,8 @@ final class LayoutManager {
     private var metalRenderer: MetalRenderer?
     /// `true` when `paintBackend` is the Metal renderer. Flipped by `setMetalRenderingActive(_:)`.
     private(set) var isMetalRenderingActive = false
+    private var metalRasterRetryCount = 0
+    private static let maxMetalRasterRetries = 40
     private var lineNumberLabelReuseQueue = ViewReuseQueue<DocumentLineNodeID, LineNumberView>()
     private var visibleLineIDs: Set<DocumentLineNodeID> = []
     private let linesContainerView = UIView()
@@ -294,6 +299,10 @@ final class LayoutManager {
             }
             if metalRenderer == nil {
                 metalRenderer = MetalRenderer(canvasView: metalCanvasView)
+                metalRenderer?.onAtlasWarmed = { [weak self] in
+                    self?.setNeedsLayout()
+                    self?.textInputView?.setNeedsLayout()
+                }
             }
             guard let metalRenderer else {
                 return false
@@ -304,6 +313,7 @@ final class LayoutManager {
             cgPaintBackend.removeFragments(ids: cgPaintBackend.trackedFragmentIDs)
             paintBackend = metalRenderer
             isMetalRenderingActive = true
+            metalRenderer.prewarm(font: theme.font as CTFont, scale: metalCanvasView.effectiveBackingScale)
         } else {
             guard isMetalRenderingActive else {
                 return true
@@ -437,6 +447,28 @@ extension LayoutManager {
             layoutLinesInViewport()
             updateLineNumberColors()
             CATransaction.commit()
+            scheduleMetalRasterRetryIfNeeded()
+        }
+    }
+
+    /// A layout pass that hit the per-frame glyph raster cap left some visible glyphs un-extracted;
+    /// re-drive layout (bounded) so they fill in over the next few passes. Bounded so a viewport
+    /// that is genuinely all-cold doesn't spin — the rest fills in on the next real scroll.
+    private func scheduleMetalRasterRetryIfNeeded() {
+        guard isMetalRenderingActive, metalRenderer?.consumePendingRasterRetry() == true else {
+            metalRasterRetryCount = 0
+            return
+        }
+        guard metalRasterRetryCount < Self.maxMetalRasterRetries else {
+            return
+        }
+        metalRasterRetryCount += 1
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                return
+            }
+            self.setNeedsLayout()
+            self.textInputView?.setNeedsLayout()
         }
     }
 

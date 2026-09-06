@@ -30,8 +30,14 @@ final class MetalActivationTests: XCTestCase {
         }
     }
 
+    func testDefaultPropertyValueIsOffUnderXCTest() {
+        XCTAssertTrue(MetalActivation.isRunningUnderXCTest, "the test process must be detected as XCTest")
+        XCTAssertFalse(MetalActivation.defaultPropertyValue, "Metal defaults off under XCTest so the CG-path suite keeps exercising CG")
+    }
+
     @MainActor
-    func testTextViewDefaultsToMetalOff() {
+    func testTextViewDefaultsToMetalOffUnderXCTest() {
+        // Production default is `true`; the XCTest guard keeps it `false` here.
         let textView = TextView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
         XCTAssertFalse(textView.isMetalRenderingEnabled)
         XCTAssertFalse(textView.isMetalRenderingActive)

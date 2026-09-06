@@ -139,6 +139,27 @@ final class TextViewMetalSmokeTests: XCTestCase {
         }
     }
 
+    func testMetalGlyphSnapshotHasPaintedPixels() throws {
+        try skipUnlessMetalActivatable()
+        let textView = makeFocusedTextView(text: "func hello() { return 42 }")
+        textView.isMetalRenderingEnabled = true
+        textView.layoutIfNeeded()
+        Thread.sleep(forTimeInterval: 0.1)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        textView.layoutIfNeeded()
+        XCTAssertTrue(textView.isMetalRenderingActive)
+        XCTAssertGreaterThan(textView.metalFragmentCount, 0)
+
+        let snapshot = try XCTUnwrap(textView.captureMetalGlyphSnapshot(), "expected a Metal snapshot")
+        let data = try XCTUnwrap(snapshot.bitmapData)
+        var painted = 0
+        let count = snapshot.pixelsWide * snapshot.pixelsHigh * 4
+        for index in stride(from: 3, to: count, by: 4) where data[index] != 0 {
+            painted += 1
+        }
+        XCTAssertGreaterThan(painted, 0, "Metal snapshot should contain painted glyph pixels (instances=\(textView.metalInstanceCount))")
+    }
+
     func testCanvasLeavingWindowDoesNotCrash() throws {
         try skipUnlessMetalActivatable()
         let textView = makeFocusedTextView(text: "detached")

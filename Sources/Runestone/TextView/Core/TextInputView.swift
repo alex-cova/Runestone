@@ -484,8 +484,10 @@ final class TextInputView: UIView, UITextInput {
             }
         }
     }
-    /// Host-controlled Metal rendering preference. Defaults to `false`.
-    var isMetalRenderingEnabled = false {
+    /// Host-controlled Metal rendering preference. Defaults to `true` in production and `false`
+    /// under XCTest; still gated by `MetalActivation.resolved` (needs a device, honours the
+    /// `RunestoneMetalRendering` kill switch).
+    var isMetalRenderingEnabled = MetalActivation.defaultPropertyValue {
         didSet {
             if isMetalRenderingEnabled != oldValue {
                 refreshMetalActivation()
@@ -506,6 +508,14 @@ final class TextInputView: UIView, UITextInput {
     /// Debug/PerfHarness snapshot of the Metal backend, or `nil` when Metal is inactive.
     var metalDebugStats: MetalRenderer.DebugStats? {
         layoutManager.metalDebugStats
+    }
+
+    /// Offscreen render of the Metal glyph canvas (transparent ground). Snapshot tests / PerfHarness.
+    func captureMetalSnapshot() -> NSBitmapImageRep? {
+        guard isMetalRenderingActive else {
+            return nil
+        }
+        return metalCanvasView.captureSnapshot()
     }
 
     var pageGuideColumn: Int {

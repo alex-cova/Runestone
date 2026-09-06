@@ -28,6 +28,12 @@ func printUsageAndExit() -> Never {
       goto <path> --percent N [--highlighted] [--deferred]
       search <path> --pattern TEXT [--regex] [--highlighted] [--deferred]
       save <path> [--highlighted] [--deferred]
+      scroll-frames <path|synthetic> [--frames N] [--baseline baseline.csv]
+      snapshot-metal <path|synthetic> [--out DIR]
+
+    scroll-frames and snapshot-metal host an NSWindow and drive the Metal path; they are
+    manual / nightly (print numbers, never fail on frame time). Use `synthetic` for a
+    built-in wrapping-off ~50k-character line fixture.
 
     """.data(using: .utf8)!)
     exit(1)
@@ -56,13 +62,20 @@ let options = Commands.Options(
     viewport: hasFlag("--viewport", in: rest)
 )
 
-guard FileManager.default.fileExists(atPath: path) else {
+let allowsSyntheticPath = command == "scroll-frames" || command == "snapshot-metal"
+let usesSynthetic = allowsSyntheticPath && (path == "synthetic" || path == "-")
+guard usesSynthetic || FileManager.default.fileExists(atPath: path) else {
     FileHandle.standardError.write("File not found: \(path)\n".data(using: .utf8)!)
     exit(1)
 }
 
 do {
     switch command {
+    case "scroll-frames":
+        let frames = Int(flagValue("--frames", in: rest) ?? "") ?? 120
+        MetalCommands.scrollFrames(pathOrSynthetic: path, frames: frames, baselinePath: flagValue("--baseline", in: rest))
+    case "snapshot-metal":
+        MetalCommands.snapshotMetal(pathOrSynthetic: path, outputDir: flagValue("--out", in: rest))
     case "open":
         try Commands.open(path: path, options: options)
     case "scroll":

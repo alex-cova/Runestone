@@ -21,6 +21,11 @@ final class MetalContext {
     private var memoryPressureSource: DispatchSourceMemoryPressure?
     private var _glyphAtlas: GlyphAtlas?
 
+    /// When `true`, `MetalTextCanvasView` creates its `CAMetalLayer` with `framebufferOnly = false`
+    /// so `NSView.cacheDisplay(in:to:)` can read back the presented drawable. Off in the shipping
+    /// path; PerfHarness / snapshot tests set it before building a `TextView`.
+    var allowsDrawableCapture = false
+
     /// Process-wide glyph atlas, shared by every `MetalRenderer` (one `MTLDevice`, one budget). Nil
     /// until Metal is confirmed available. Created lazily so default-off editors never allocate it.
     var glyphAtlas: GlyphAtlas? {
@@ -159,7 +164,10 @@ private extension MetalContext {
         ndc.y = 1.0 - (contentPos.y - u.canvasOrigin.y) / u.canvasSize.y * 2.0;
         GlyphVertexOut out;
         out.position = float4(ndc, 0.0, 1.0);
-        out.uv = inst.uvOrigin + corner * inst.uvSize;
+        // Atlas tiles are stored bottom-up (CG raster origin); the quad's content-top vertex
+        // (corner.y == 0) samples the tile's last row.
+        out.uv = float2(inst.uvOrigin.x + corner.x * inst.uvSize.x,
+                        inst.uvOrigin.y + (1.0 - corner.y) * inst.uvSize.y);
         out.color = inst.color;
         return out;
     }

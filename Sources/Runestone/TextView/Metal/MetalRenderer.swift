@@ -119,6 +119,13 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
     private lazy var underlayLineBuffer = DecorationBuffer(device: device, stride: MemoryLayout<DecorationVertex>.stride)
     private var needsInstanceRebuild = false
     private var rasterBudget = GlyphRasterBudget()
+    /// `true` when the last extract hit the per-pass raster cap — some emit-band glyphs are not yet
+    /// on screen. `LayoutManager` re-drives layout (bounded) so they fill in over a few passes.
+    private(set) var pendingRasterRetry = false
+    /// Set by `LayoutManager`; invoked after an async atlas pre-warm finishes so a relayout picks up
+    /// the now-resident tiles.
+    var onAtlasWarmed: (() -> Void)?
+    private var didPrewarm = Set<UInt64>()
 
     private var viewport: CGRect = .zero
     private var canvasFrame: CGRect = .zero
@@ -226,7 +233,14 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             )
             let result = GlyphRunExtractor.extract(request, atlas: atlas, budget: &rasterBudget)
             fragment.glyphs = result.instances
-            fragment.cacheKey = GlyphExtractCacheKey(line: spec.line, emitRect: emitRect)
+            if result.skips.contains(where: { $0.reason == .rasterCap }) {
+                // Budget ran out mid-fragment; leave the cache key unset so the next layout pass
+                // re-extracts with a fresh budget and fills in the rest.
+                fragment.cacheKey = nil
+                pendingRasterRetry = true
+            } else {
+                fragment.cacheKey = GlyphExtractCacheKey(line: spec.line, emitRect: emitRect)
+            }
         }
         // Decorations rebuild every upsert (display-only invalidation re-upserts a fresh spec).
         fragment.decorations = MetalDecorationBuilder.build(
@@ -267,6 +281,10 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         self.viewport = viewport
         self.canvasFrame = canvasFrame
         self.scale = max(scale, 0.001)
+        // `setViewport` runs once at the top of every `layoutLinesInViewport`, before any
+        // `upsertFragment`. Reset the per-pass raster budget here so glyph extraction makes
+        // progress even when no on-screen `draw(_:)` (which also resets it) has happened yet.
+        rasterBudget = GlyphRasterBudget()
         if scaleChanged {
             // `GlyphKey` embeds the scale bucket, so a scale change only means this view must
             // re-extract at the new keys; the old-scale tiles age out via the shared atlas's LRU.
@@ -316,6 +334,31 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         recordDrawNanos(DispatchTime.now().uptimeNanoseconds &- start)
         needsInstanceRebuild = false
         rasterBudget = GlyphRasterBudget()
+    }
+
+    func encodeForCapture(into encoder: MTLRenderCommandEncoder, drawableSize: CGSize) {
+        needsInstanceRebuild = true
+        encode(into: encoder, drawableSize: drawableSize)
+    }
+
+    /// `true` (once) when the last extract capped and needs another layout pass to finish.
+    func consumePendingRasterRetry() -> Bool {
+        defer { pendingRasterRetry = false }
+        return pendingRasterRetry
+    }
+
+    /// Pre-rasterize Latin-1 + digits for `font` at `scale` so ASCII code never misses at extract
+    /// time (idempotent per font/scale). Runs the raster off-main, uploads + relayouts on main.
+    func prewarm(font: CTFont, scale: CGFloat) {
+        let key = GlyphKey.matrixHash(fontMatrix: CTFontGetMatrix(font), runMatrix: .identity)
+            ^ UInt64(bitPattern: Int64(CTFontGetSize(font) * scale * 64))
+        guard didPrewarm.insert(key).inserted else {
+            return
+        }
+        atlas.prewarm(font: font, scale: scale) { [weak self] in
+            self?.pendingRasterRetry = true
+            self?.onAtlasWarmed?()
+        }
     }
 
     /// Called by `MetalTextCanvasView` when it leaves the window: give the grown instance buffers
