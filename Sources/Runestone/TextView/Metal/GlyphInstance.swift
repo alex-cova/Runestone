@@ -17,7 +17,8 @@ struct GlyphInstance {
 extension GlyphInstance: Equatable, Sendable {}
 
 /// Shared-storage instance buffer. Grows 16k → 128k by doubling; `compact()` returns to 16k.
-/// Glyphs beyond `maximumCapacity` stay in `instances` rather than being dropped.
+/// `count` is the number of instances copied to GPU memory. Overflow past 128k uses extra buffers
+/// so glyphs are not dropped and `count` never exceeds the copied GPU length.
 @MainActor
 final class GlyphInstanceBuffer {
     nonisolated static let minimumCapacity = 16_384
@@ -25,7 +26,9 @@ final class GlyphInstanceBuffer {
 
     private let device: MTLDevice
     private(set) var metalBuffer: MTLBuffer
+    private(set) var overflowBuffers: [MTLBuffer] = []
     private(set) var capacity: Int
+    /// Instances copied into `metalBuffer` + `overflowBuffers`.
     private(set) var count = 0
     /// Last `write` payload. Not truncated when `count` exceeds `maximumCapacity`.
     private(set) var instances: [GlyphInstance] = []
@@ -42,29 +45,34 @@ final class GlyphInstanceBuffer {
 
     func write(_ instances: [GlyphInstance]) {
         self.instances = instances
-        count = instances.count
-        let needed = Self.capacity(forCount: instances.count)
+        overflowBuffers = []
+        let needed = Self.capacity(forCount: min(instances.count, Self.maximumCapacity))
         if needed > capacity {
             grow(to: needed)
         }
-        let copyCount = min(instances.count, capacity)
-        guard copyCount > 0 else {
-            return
-        }
-        instances.withUnsafeBytes { raw in
-            guard let base = raw.baseAddress else {
-                return
+        let stride = MemoryLayout<GlyphInstance>.stride
+        let primaryCount = min(instances.count, capacity)
+        copy(instances, start: 0, count: primaryCount, to: metalBuffer)
+        var copied = primaryCount
+        var offset = primaryCount
+        while offset < instances.count {
+            let remaining = instances.count - offset
+            let byteCount = remaining * stride
+            guard let extra = device.makeBuffer(length: byteCount, options: .storageModeShared) else {
+                break
             }
-            metalBuffer.contents().copyMemory(
-                from: base,
-                byteCount: copyCount * MemoryLayout<GlyphInstance>.stride
-            )
+            copy(instances, start: offset, count: remaining, to: extra)
+            overflowBuffers.append(extra)
+            copied += remaining
+            offset += remaining
         }
+        count = copied
     }
 
     func compact() {
         instances = []
         count = 0
+        overflowBuffers = []
         guard capacity != Self.minimumCapacity else {
             return
         }
@@ -95,5 +103,21 @@ final class GlyphInstanceBuffer {
         }
         metalBuffer = buffer
         capacity = newCapacity
+    }
+
+    private func copy(_ instances: [GlyphInstance], start: Int, count: Int, to buffer: MTLBuffer) {
+        guard count > 0 else {
+            return
+        }
+        let stride = MemoryLayout<GlyphInstance>.stride
+        instances.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else {
+                return
+            }
+            buffer.contents().copyMemory(
+                from: base.advanced(by: start * stride),
+                byteCount: count * stride
+            )
+        }
     }
 }

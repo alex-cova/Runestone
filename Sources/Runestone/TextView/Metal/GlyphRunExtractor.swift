@@ -227,8 +227,7 @@ private extension GlyphRunExtractor {
         }
         let font = (attributes[.font] as? NSFont) ?? (request.fallbackFont as NSFont)
         let fontMatrix = CTFontGetMatrix(font)
-        // CTRunGetTextMatrix copies CTFontGetMatrix for sheared fonts; applying that
-        // again on CTFontGetBoundingRectsForGlyphs double-shears italic quads.
+        // Run text matrix copies CTFontGetMatrix for synthetic italic; extra is run * font⁻¹ so bounds are not sheared twice.
         let runMatrix = extraRunMatrix(CTRunGetTextMatrix(run), fontMatrix: fontMatrix)
         let applyRunMatrix = !runMatrix.isIdentity
         let isColor = GlyphRasterizer.isColorFont(font)
@@ -325,27 +324,25 @@ private extension GlyphRunExtractor {
             runMatrix: preparedRun.runMatrix,
             isColor: preparedRun.isColor
         )
-        let slot: GlyphAtlasSlot
-        if let cached = atlas.cached(key) {
-            slot = cached
-        } else {
+        if !atlas.hasEntry(key) {
             guard budget.consume() else {
                 return pending.band == .emit ? .needsRasterCap : .skipped
             }
-            switch atlas.lookup(
-                font: preparedRun.font,
-                glyph: pending.glyph,
-                scale: request.scale,
-                runMatrix: preparedRun.runMatrix,
-                isColor: preparedRun.isColor
-            ) {
-            case .hit(let lookedUp):
-                slot = lookedUp
-            case .oversize:
-                return pending.band == .emit ? .failed : .skipped
-            case .failed:
-                return pending.band == .emit ? .failed : .skipped
-            }
+        }
+        let slot: GlyphAtlasSlot
+        switch atlas.lookup(
+            font: preparedRun.font,
+            glyph: pending.glyph,
+            scale: request.scale,
+            runMatrix: preparedRun.runMatrix,
+            isColor: preparedRun.isColor
+        ) {
+        case .hit(let lookedUp):
+            slot = lookedUp
+        case .oversize:
+            return pending.band == .emit ? .failed : .skipped
+        case .failed:
+            return pending.band == .emit ? .failed : .skipped
         }
         if pending.band == .warm {
             return slot.isEmpty ? .skipped : .warmed

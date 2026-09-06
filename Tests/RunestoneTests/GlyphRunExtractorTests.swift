@@ -107,31 +107,48 @@ final class GlyphRunExtractorTests: XCTestCase {
         XCTAssertTrue(result.skips.isEmpty)
     }
 
-    func testItalicSymbolicTraitsQuadWidthIsShearNotShearSquared() throws {
+    func testItalicSymbolicTraitsUsesMenloItalicFace() throws {
         let atlas = try makeAtlas()
         let regular = makeMenlo(pointSize: 16)
         let italicDescriptor = (regular as NSFont).fontDescriptor.withSymbolicTraits(.italic)
-        let italicFont = NSFont(descriptor: italicDescriptor, size: 16) ?? (regular as NSFont)
-        var shear = CGAffineTransform(a: 1, b: 0, c: 0.25, d: 1, tx: 0, ty: 0)
-        let sheared = CTFontCreateCopyWithAttributes(regular, 0, &shear, nil)
-
+        guard let italicFont = NSFont(descriptor: italicDescriptor, size: 16) else {
+            throw XCTSkip("Menlo italic face is not available")
+        }
+        let italicName = CTFontCopyPostScriptName(italicFont as CTFont) as String
+        guard italicName == "Menlo-Italic" else {
+            throw XCTSkip("withSymbolicTraits did not select Menlo-Italic (got \(italicName))")
+        }
+        XCTAssertEqual(CTFontGetMatrix(italicFont as CTFont).c, 0, accuracy: 0.0001)
         let regularLine = makeLine("A", font: regular)
-        let italicLine = makeLine("A", font: italicFont)
-        let shearedLine = makeLine("A", font: sheared)
+        let italicLine = makeLine("A", font: italicFont as CTFont)
         let regularResult = extract(line: regularLine, font: regular, atlas: atlas, metrics: lineMetrics(regularLine))
-        let italicResult = extract(line: italicLine, font: italicFont, atlas: atlas, metrics: lineMetrics(italicLine))
-        let shearedResult = extract(line: shearedLine, font: sheared, atlas: atlas, metrics: lineMetrics(shearedLine))
-
+        let italicResult = extract(
+            line: italicLine,
+            font: italicFont as CTFont,
+            atlas: atlas,
+            metrics: lineMetrics(italicLine)
+        )
         let regularGlyph = try XCTUnwrap(regularResult.glyphs.first)
         let italicGlyph = try XCTUnwrap(italicResult.glyphs.first)
-        let shearedGlyph = try XCTUnwrap(shearedResult.glyphs.first)
-        XCTAssertNotEqual(regularGlyph.instance.size, .zero)
-        XCTAssertNotEqual(italicGlyph.instance.size, .zero)
-
         let regularKey = GlyphKey.make(font: regular, glyph: regularGlyph.glyph, scale: 2, isColor: false)
-        let italicKey = GlyphKey.make(font: italicFont, glyph: italicGlyph.glyph, scale: 2, isColor: false)
-        let shearedKey = GlyphKey.make(font: sheared, glyph: shearedGlyph.glyph, scale: 2, isColor: false)
+        let italicKey = GlyphKey.make(font: italicFont as CTFont, glyph: italicGlyph.glyph, scale: 2, isColor: false)
+        XCTAssertNotEqual(regularKey.fontID, italicKey.fontID)
         XCTAssertNotEqual(regularKey, italicKey)
+    }
+
+    func testShearedFontQuadWidthIsShearNotShearSquared() throws {
+        let atlas = try makeAtlas()
+        let regular = makeMenlo(pointSize: 16)
+        var shear = CGAffineTransform(a: 1, b: 0, c: 0.25, d: 1, tx: 0, ty: 0)
+        let sheared = CTFontCreateCopyWithAttributes(regular, 0, &shear, nil)
+        let regularLine = makeLine("A", font: regular)
+        let shearedLine = makeLine("A", font: sheared)
+        let regularResult = extract(line: regularLine, font: regular, atlas: atlas, metrics: lineMetrics(regularLine))
+        let shearedResult = extract(line: shearedLine, font: sheared, atlas: atlas, metrics: lineMetrics(shearedLine))
+        let regularGlyph = try XCTUnwrap(regularResult.glyphs.first)
+        let shearedGlyph = try XCTUnwrap(shearedResult.glyphs.first)
+        let regularKey = GlyphKey.make(font: regular, glyph: regularGlyph.glyph, scale: 2, isColor: false)
+        let shearedKey = GlyphKey.make(font: sheared, glyph: shearedGlyph.glyph, scale: 2, isColor: false)
         XCTAssertNotEqual(regularKey.matrixHash, shearedKey.matrixHash)
 
         var glyph = shearedGlyph.glyph
@@ -149,6 +166,58 @@ final class GlyphRunExtractorTests: XCTestCase {
             abs(CGFloat(shearedGlyph.instance.size.x) - singleWidth),
             abs(CGFloat(shearedGlyph.instance.size.x) - doubleWidth)
         )
+    }
+
+    func testVerticalFormsRunMatrixIsAppliedOnce() throws {
+        let atlas = try makeAtlas()
+        let font = makeMenlo(pointSize: 16)
+        let line = makeLine(
+            "A",
+            font: font,
+            extra: [kCTVerticalFormsAttributeName as NSAttributedString.Key: true]
+        )
+        guard let run = (CTLineGetGlyphRuns(line) as? [CTRun])?.first else {
+            throw XCTSkip("kCTVerticalFormsAttributeName produced no CTRun")
+        }
+        let runMatrix = CTRunGetTextMatrix(run)
+        let rawAttributes = CTRunGetAttributes(run) as NSDictionary
+        guard rawAttributes[kCTFontAttributeName] != nil else {
+            throw XCTSkip("Vertical-forms run has no font")
+        }
+        let runFont = rawAttributes[kCTFontAttributeName] as! CTFont
+        let fontMatrix = CTFontGetMatrix(runFont)
+        guard !runMatrix.isIdentity, !affineEqual(runMatrix, fontMatrix) else {
+            throw XCTSkip("kCTVerticalFormsAttributeName did not produce a non-identity extra run matrix")
+        }
+        var glyph: CGGlyph = 0
+        CTRunGetGlyphs(run, CFRange(location: 0, length: 1), &glyph)
+        var bounds = CGRect.zero
+        CTFontGetBoundingRectsForGlyphs(runFont, .default, &glyph, &bounds, 1)
+        let extra = runMatrix.concatenating(fontMatrix.inverted())
+        let single = bounds.applying(extra)
+        let doubled = single.applying(extra)
+        let result = extract(line: line, font: runFont, atlas: atlas, metrics: lineMetrics(line))
+        let extracted = try XCTUnwrap(result.glyphs.first)
+        let scale: CGFloat = 2
+        let pad = CGFloat(GlyphRasterizer.padPixels) / scale
+        XCTAssertEqual(extracted.matrixHash, GlyphKey.matrixHash(fontMatrix: fontMatrix, runMatrix: extra))
+        XCTAssertEqual(CGFloat(extracted.instance.size.x), single.width + 2 * pad, accuracy: 1.5)
+        XCTAssertLessThan(
+            abs(CGFloat(extracted.instance.size.x) - (single.width + 2 * pad)),
+            abs(CGFloat(extracted.instance.size.x) - (doubled.width + 2 * pad))
+        )
+        let key = GlyphKey.make(
+            font: runFont,
+            glyph: extracted.glyph,
+            scale: scale,
+            runMatrix: extra,
+            isColor: false
+        )
+        guard let slot = atlas.cached(key), let pixels = atlas.copyPixels(from: slot) else {
+            XCTFail("Vertical-forms glyph must be in the atlas")
+            return
+        }
+        XCTAssertTrue(pixels.contains { $0 > 0 }, "Rotated glyph ink must land inside the tile")
     }
 
     func testWrappingOffLongLineRebuildsInstancesWhenEmitRectMoves() throws {
@@ -253,11 +322,56 @@ final class GlyphRunExtractorTests: XCTestCase {
         buffer.write(Array(repeating: dummy, count: GlyphInstanceBuffer.maximumCapacity + 1))
         XCTAssertEqual(buffer.capacity, GlyphInstanceBuffer.maximumCapacity)
         XCTAssertEqual(buffer.instances.count, GlyphInstanceBuffer.maximumCapacity + 1)
+        XCTAssertEqual(buffer.count, GlyphInstanceBuffer.maximumCapacity + 1)
+        XCTAssertEqual(buffer.overflowBuffers.count, 1)
 
         buffer.compact()
         XCTAssertEqual(buffer.capacity, GlyphInstanceBuffer.minimumCapacity)
         XCTAssertEqual(buffer.count, 0)
         XCTAssertTrue(buffer.instances.isEmpty)
+        XCTAssertTrue(buffer.overflowBuffers.isEmpty)
+    }
+
+    func testWarmBandDoesNotEmitAndEmitMissesTakeRasterBudgetFirst() throws {
+        let atlas = try makeAtlas()
+        let font = makeMenlo(pointSize: 16)
+        let string = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        let line = makeLine(string, font: font)
+        let metrics = lineMetrics(line)
+        let frame = CGRect(x: 0, y: 0, width: metrics.base.width, height: metrics.scaled.height)
+        let cut = CTLineGetOffsetForStringIndex(line, 3, nil)
+        let emitRect = CGRect(x: -4, y: -20, width: cut, height: metrics.scaled.height + 40)
+        let warmRect = CGRect(x: -4, y: -20, width: metrics.base.width + 8, height: metrics.scaled.height + 40)
+        var budget = GlyphRasterBudget(limit: 8)
+        let request = GlyphExtractRequest(
+            line: line,
+            fragmentFrame: frame,
+            descent: metrics.descent,
+            baseSize: metrics.base,
+            scaledSize: metrics.scaled,
+            unfocusedAlpha: 1,
+            focusedRanges: [],
+            scale: 2,
+            emitRect: emitRect,
+            atlasWarmRect: warmRect,
+            fallbackFont: font,
+            fallbackColor: .white,
+            appearance: nil
+        )
+        let result = GlyphRunExtractor.extract(request, atlas: atlas, budget: &budget)
+        XCTAssertFalse(result.glyphs.isEmpty)
+        XCTAssertGreaterThan(result.warmedGlyphCount, 0)
+        XCTAssertEqual(budget.remaining, 0)
+        for glyph in result.glyphs {
+            let quad = CGRect(
+                x: CGFloat(glyph.instance.origin.x),
+                y: CGFloat(glyph.instance.origin.y),
+                width: CGFloat(glyph.instance.size.x),
+                height: CGFloat(glyph.instance.size.y)
+            )
+            XCTAssertTrue(quad.intersects(emitRect), "emitted quad must intersect emitRect")
+        }
+        XCTAssertLessThan(result.glyphs.count, ctGlyphCount(line))
     }
 }
 
@@ -319,6 +433,10 @@ private extension GlyphRunExtractorTests {
         let height = ascent + descent + leading
         let base = CGSize(width: width, height: height)
         return LineMetrics(descent: descent, base: base, scaled: CGSize(width: width, height: height * multiplier))
+    }
+
+    func affineEqual(_ lhs: CGAffineTransform, _ rhs: CGAffineTransform) -> Bool {
+        lhs.a == rhs.a && lhs.b == rhs.b && lhs.c == rhs.c && lhs.d == rhs.d && lhs.tx == rhs.tx && lhs.ty == rhs.ty
     }
 
     func ctGlyphCount(_ line: CTLine) -> Int {

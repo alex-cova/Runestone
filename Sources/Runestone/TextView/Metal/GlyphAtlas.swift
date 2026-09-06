@@ -131,6 +131,11 @@ final class GlyphAtlas {
         return false
     }
 
+    /// Slot or oversize — used so extract can skip the raster budget on a resident key.
+    func hasEntry(_ key: GlyphKey) -> Bool {
+        cache[key] != nil
+    }
+
     func cached(_ key: GlyphKey) -> GlyphAtlasSlot? {
         if case .slot(let slot) = cache[key] {
             return slot

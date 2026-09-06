@@ -225,10 +225,14 @@ private func drawGlyph(
     context.textMatrix = .identity
     let pad = CGFloat(GlyphRasterizer.padPixels)
     var glyphRef = glyph
+    // Padded origin is in post-transform AABB space; the CTM already concatenates runMatrix.
     var position = CGPoint(
         x: (pad - pixelMinX) / scale,
         y: (pad - pixelMinY) / scale
     )
+    if !runMatrix.isIdentity {
+        position = position.applying(runMatrix.inverted())
+    }
     CTFontDrawGlyphs(font, &glyphRef, &position, 1, context)
     return true
 }

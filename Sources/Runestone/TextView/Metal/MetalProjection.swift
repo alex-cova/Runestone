@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 import simd
 
-/// Vertex uniforms for content-space → NDC. The shader subtracts only `canvas.frame.origin`.
+/// Content-space → NDC uniforms. NDC subtracts only `canvas.frame.origin`.
 struct MetalProjectionUniforms {
     var canvasOrigin: SIMD2<Float>
     var canvasSize: SIMD2<Float>
@@ -19,8 +19,8 @@ enum MetalProjection {
         )
     }
 
-    /// Content-space point to Metal NDC. Y is flipped (`UIView.isFlipped` vs Metal Y-up).
-    /// `scale` is a drawable uniform and does not change NDC.
+    /// Content-space point to Metal NDC. Y is flipped because the view is flipped.
+    /// `scale` does not change NDC.
     static func project(_ point: SIMD2<Float>, uniforms: MetalProjectionUniforms) -> SIMD2<Float> {
         let x = (point.x - uniforms.canvasOrigin.x) / uniforms.canvasSize.x * 2 - 1
         let y = 1 - (point.y - uniforms.canvasOrigin.y) / uniforms.canvasSize.y * 2
