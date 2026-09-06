@@ -147,10 +147,10 @@ enum GlyphRasterizer {
 }
 
 extension GlyphRasterizer {
-    /// Printable Latin-1 plus digits.
+    /// Printable Latin-1.
     static let prewarmScalars: [UnicodeScalar] = {
         var scalars: [UnicodeScalar] = []
-        scalars.reserveCapacity(96 + 96 + 10)
+        scalars.reserveCapacity(96 + 96)
         for value in 0x20...0x7E {
             if let scalar = UnicodeScalar(value) {
                 scalars.append(scalar)
@@ -158,11 +158,6 @@ extension GlyphRasterizer {
         }
         for value in 0xA0...0xFF {
             if let scalar = UnicodeScalar(value) {
-                scalars.append(scalar)
-            }
-        }
-        for digit in "0123456789" {
-            if let scalar = digit.unicodeScalars.first {
                 scalars.append(scalar)
             }
         }
@@ -224,8 +219,7 @@ private func drawGlyph(
     if !isColor {
         context.setFillColor(gray: 1, alpha: 1)
     }
-    // Pixel user space, y-up. Scale points to pixels; bake the run matrix into the CTM
-    // so CTFontGetMatrix is not applied a second time via textMatrix.
+    // Positions are in scaled user space; the font matrix comes only from CTFontDrawGlyphs.
     context.scaleBy(x: scale, y: scale)
     context.concatenate(runMatrix)
     context.textMatrix = .identity

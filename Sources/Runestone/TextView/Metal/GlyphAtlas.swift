@@ -49,6 +49,8 @@ final class GlyphAtlas {
     nonisolated static let maxGlyphExtentPixels = GlyphRasterizer.maxGlyphExtentPixels
     nonisolated static let coveragePageSize = 2048
     nonisolated static let colorPageSize = 1024
+    /// 1 px between packed tiles so bilinear samples at slot edges stay in written texels.
+    nonisolated static let packerGutterPixels = 1
 
     let storageMode: MTLStorageMode
     private let device: MTLDevice
@@ -252,7 +254,7 @@ final class GlyphAtlas {
         }
     }
 
-    /// Builds Latin-1 + digit CPU bitmaps (optionally off-main) and uploads on the main actor.
+    /// Builds printable Latin-1 CPU bitmaps (optionally off-main) and uploads on the main actor.
     func prewarm(
         font: CTFont,
         scale: CGFloat,
@@ -367,28 +369,35 @@ private extension GlyphAtlas {
     struct ShelfPacker {
         let width: Int
         let height: Int
+        let gutter: Int
         var cursorX = 0
         var cursorY = 0
         var shelfHeight = 0
+
+        init(width: Int, height: Int, gutter: Int = GlyphAtlas.packerGutterPixels) {
+            self.width = width
+            self.height = height
+            self.gutter = gutter
+        }
 
         mutating func allocate(width w: Int, height h: Int) -> (x: Int, y: Int)? {
             guard w > 0, h > 0, w <= width, h <= height else {
                 return nil
             }
             if shelfHeight == 0 {
-                cursorX = w
+                cursorX = w + gutter
                 cursorY = 0
                 shelfHeight = h
                 return (0, 0)
             }
             if cursorX + w <= width, h <= shelfHeight {
                 let x = cursorX
-                cursorX += w
+                cursorX += w + gutter
                 return (x, cursorY)
             }
-            let newY = cursorY + shelfHeight
+            let newY = cursorY + shelfHeight + gutter
             if newY + h <= height, w <= width {
-                cursorX = w
+                cursorX = w + gutter
                 cursorY = newY
                 shelfHeight = h
                 return (0, newY)
@@ -454,6 +463,9 @@ private extension GlyphAtlas {
         guard let texture = device.makeTexture(descriptor: descriptor) else {
             return nil
         }
+        guard clearTexture(texture) else {
+            return nil
+        }
         let page = AtlasPage(
             id: nextPageID,
             texture: texture,
@@ -495,6 +507,53 @@ private extension GlyphAtlas {
         page.keys.removeAll()
         coveragePages.removeAll { $0 === page }
         colorPages.removeAll { $0 === page }
+    }
+
+    func clearTexture(_ texture: MTLTexture) -> Bool {
+        let bytesPerPixel = texture.pixelFormat == .r8Unorm ? 1 : 4
+        let width = texture.width
+        let height = texture.height
+        let alignment = max(bytesPerPixel, device.minimumLinearTextureAlignment(for: texture.pixelFormat))
+        let bytesPerRow = alignedStride(width * bytesPerPixel, alignment: alignment)
+        let length = bytesPerRow * height
+        if storageMode == .shared {
+            let zeros = Data(count: length)
+            zeros.withUnsafeBytes { raw in
+                guard let base = raw.baseAddress else {
+                    return
+                }
+                texture.replace(
+                    region: MTLRegionMake2D(0, 0, width, height),
+                    mipmapLevel: 0,
+                    withBytes: base,
+                    bytesPerRow: bytesPerRow
+                )
+            }
+            return true
+        }
+        guard let buffer = device.makeBuffer(length: length, options: .storageModeShared) else {
+            return false
+        }
+        memset(buffer.contents(), 0, length)
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let blit = commandBuffer.makeBlitCommandEncoder() else {
+            return false
+        }
+        blit.copy(
+            from: buffer,
+            sourceOffset: 0,
+            sourceBytesPerRow: bytesPerRow,
+            sourceBytesPerImage: length,
+            sourceSize: MTLSize(width: width, height: height, depth: 1),
+            to: texture,
+            destinationSlice: 0,
+            destinationLevel: 0,
+            destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
+        )
+        blit.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        return true
     }
 
     func uploadPixels(_ bitmap: GlyphBitmap, to page: AtlasPage, x: Int, y: Int) -> Bool {

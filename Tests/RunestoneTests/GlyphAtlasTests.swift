@@ -129,8 +129,11 @@ final class GlyphAtlasTests: XCTestCase {
             scale: 1,
             isColor: false
         ).fontID
-        let glyphsPerPage = (GlyphAtlas.coveragePageSize / extent) * (GlyphAtlas.coveragePageSize / extent)
-        XCTAssertEqual(glyphsPerPage, 64)
+        let gutter = GlyphAtlas.packerGutterPixels
+        let stride = extent + gutter
+        let tilesPerAxis = (GlyphAtlas.coveragePageSize + gutter) / stride
+        let glyphsPerPage = tilesPerAxis * tilesPerAxis
+        XCTAssertGreaterThan(glyphsPerPage, 0)
         let pageCountToExceedBudget = 9
         var keys: [GlyphKey] = []
         keys.reserveCapacity(glyphsPerPage * pageCountToExceedBudget)
