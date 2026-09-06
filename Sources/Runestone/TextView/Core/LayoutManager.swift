@@ -135,7 +135,16 @@ final class LayoutManager {
 
     // MARK: - Views
     let gutterContainerView = GutterContainerView()
-    private var lineFragmentViewReuseQueue = ViewReuseQueue<LineFragmentID, LineFragmentView>()
+    /// Transparent Metal host, inserted behind `linesContainerView`. Owned by `TextInputView`.
+    weak var metalCanvasView: UIView? {
+        didSet {
+            if metalCanvasView !== oldValue {
+                setupViewHierarchy()
+            }
+        }
+    }
+    var paintBackend: LinePaintBackend
+    private let cgPaintBackend: CGLinePaintBackend
     private var lineNumberLabelReuseQueue = ViewReuseQueue<DocumentLineNodeID, LineNumberView>()
     private var visibleLineIDs: Set<DocumentLineNodeID> = []
     private let linesContainerView = UIView()
@@ -202,6 +211,9 @@ final class LayoutManager {
         self.caretRectService = caretRectService
         self.selectionRectService = selectionRectService
         self.highlightService = highlightService
+        let cgPaintBackend = CGLinePaintBackend(linesContainerView: linesContainerView)
+        self.cgPaintBackend = cgPaintBackend
+        self.paintBackend = cgPaintBackend
         self.linesContainerView.isUserInteractionEnabled = false
         self.lineNumbersContainerView.isUserInteractionEnabled = false
         self.gutterContainerView.isUserInteractionEnabled = false
@@ -242,12 +254,14 @@ final class LayoutManager {
                 }
             }
         }
+        paintBackend.invalidateGlyphs(forLineIDs: lineIDs)
     }
 
     func setNeedsDisplayOnLines() {
         for lineController in lineControllerStorage {
             lineController.setNeedsDisplayOnLineFragmentViews()
         }
+        paintBackend.setNeedsDisplay()
     }
 
     func textPreview(containing needleRange: NSRange, peekLength: Int = 50) -> TextPreview? {
@@ -493,7 +507,7 @@ extension LayoutManager {
             return
         }
         let oldVisibleLineIDs = visibleLineIDs
-        let oldVisibleLineFragmentIDs = Set(lineFragmentViewReuseQueue.visibleViews.keys)
+        let oldVisibleLineFragmentIDs = paintBackend.trackedFragmentIDs
         // Layout lines within a padded band around the viewport, so lines about to scroll into
         // view already have their fragments and views prepared (see verticalLayoutPadding).
         let layoutBounds = paddedInsetViewport
@@ -546,7 +560,12 @@ extension LayoutManager {
                 lineFragmentController.foldPlaceholderText = (collapsedFold != nil && lineFragmentIndex == lineFragmentControllers.count - 1)
                     ? "\u{22EF}"
                     : nil
-                layoutLineFragmentView(for: lineFragmentController, lineYPosition: lineYPosition, lineFragmentFrame: &lineFragmentFrame)
+                layoutLineFragmentView(
+                    for: lineFragmentController,
+                    lineID: line.id,
+                    lineYPosition: lineYPosition,
+                    lineFragmentFrame: &lineFragmentFrame
+                )
                 maxY = lineFragmentFrame.maxY
             }
             // The line fragments have now been created and we can set the marked and highlighted ranges on them.
@@ -581,7 +600,7 @@ extension LayoutManager {
             lineController?.cancelSyntaxHighlighting()
         }
         lineNumberLabelReuseQueue.enqueueViews(withKeys: disappearedLineIDs)
-        lineFragmentViewReuseQueue.enqueueViews(withKeys: disappearedLineFragmentIDs)
+        paintBackend.removeFragments(ids: disappearedLineFragmentIDs)
         // Adjust the content offset on the Y-axis if necessary.
         if contentOffsetAdjustmentY != 0 {
             let contentOffsetAdjustment = CGPoint(x: 0, y: contentOffsetAdjustmentY)
@@ -611,18 +630,39 @@ extension LayoutManager {
         lineNumberView.frame = CGRect(x: xPosition, y: yPosition, width: gutterWidthService.lineNumberWidth, height: fontLineHeight)
     }
 
-    private func layoutLineFragmentView(for lineFragmentController: LineFragmentController, lineYPosition: CGFloat, lineFragmentFrame: inout CGRect) {
+    private func layoutLineFragmentView(
+        for lineFragmentController: LineFragmentController,
+        lineID: DocumentLineNodeID,
+        lineYPosition: CGFloat,
+        lineFragmentFrame: inout CGRect
+    ) {
         let lineFragment = lineFragmentController.lineFragment
-        let lineFragmentView = lineFragmentViewReuseQueue.dequeueView(forKey: lineFragment.id)
-        if lineFragmentView.superview == nil {
-            linesContainerView.addSubview(lineFragmentView)
-        }
-        lineFragmentController.lineFragmentView = lineFragmentView
         let lineFragmentOrigin = CGPoint(x: leadingLineSpacing, y: textContainerInset.top + lineYPosition + lineFragment.yPosition)
         let lineFragmentWidth = contentSizeService.contentWidth - leadingLineSpacing - textContainerInset.right
         let lineFragmentSize = CGSize(width: lineFragmentWidth, height: lineFragment.scaledSize.height)
         lineFragmentFrame = CGRect(origin: lineFragmentOrigin, size: lineFragmentSize)
-        lineFragmentView.frame = lineFragmentFrame
+        let spec = LineFragmentPaintSpec(
+            id: lineFragment.id,
+            lineID: lineID,
+            frame: lineFragmentFrame,
+            line: lineFragment.line,
+            descent: lineFragment.descent,
+            baseSize: lineFragment.baseSize,
+            scaledSize: lineFragment.scaledSize,
+            decorations: LineFragmentDecorations(
+                highlighted: lineFragmentController.highlightedRangeFragments,
+                markedRange: lineFragmentController.markedRange,
+                markedColor: lineFragmentController.markedTextBackgroundColor,
+                markedRadius: lineFragmentController.markedTextBackgroundCornerRadius,
+                unfocusedAlpha: lineFragmentController.unfocusedAlpha,
+                focusedRanges: lineFragmentController.focusedRanges,
+                foldPlaceholder: lineFragmentController.foldPlaceholderText
+            )
+        )
+        paintBackend.upsertFragment(spec)
+        if let lineFragmentView = cgPaintBackend.lineFragmentView(for: lineFragment.id) {
+            lineFragmentController.lineFragmentView = lineFragmentView
+        }
     }
 
     private func updateLineNumberColors() {
@@ -643,16 +683,19 @@ extension LayoutManager {
     private func setupViewHierarchy() {
         // Remove views from view hierarchy
         lineSelectionBackgroundView.removeFromSuperview()
+        metalCanvasView?.removeFromSuperview()
         linesContainerView.removeFromSuperview()
         gutterContainerView.removeFromSuperview()
         gutterBackgroundView.removeFromSuperview()
         gutterSelectionBackgroundView.removeFromSuperview()
         lineNumbersContainerView.removeFromSuperview()
         foldRibbonView.removeFromSuperview()
-        let allLineNumberKeys = lineFragmentViewReuseQueue.visibleViews.keys
-        lineFragmentViewReuseQueue.enqueueViews(withKeys: Set(allLineNumberKeys))
-        // Add views to view hierarchy
+        paintBackend.removeFragments(ids: paintBackend.trackedFragmentIDs)
+        // Add views to view hierarchy. Canvas sits behind fragment views so they still paint on top.
         textInputView?.addSubview(lineSelectionBackgroundView)
+        if let metalCanvasView {
+            textInputView?.addSubview(metalCanvasView)
+        }
         textInputView?.addSubview(linesContainerView)
         gutterParentView?.addSubview(gutterContainerView)
         gutterContainerView.addSubview(gutterBackgroundView)

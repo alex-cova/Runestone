@@ -890,6 +890,21 @@ import CoreText
             }
         }
     }
+    /// Host-controlled Metal rendering preference. Defaults to `false`.
+    /// Ignored when no Metal device exists. A `false` value always wins over
+    /// `UserDefaults` `true` (per-view disable).
+    public var isMetalRenderingEnabled: Bool {
+        get {
+            textInputView.isMetalRenderingEnabled
+        }
+        set {
+            textInputView.isMetalRenderingEnabled = newValue
+        }
+    }
+    /// `true` when this instance is currently painting via Metal.
+    public var isMetalRenderingActive: Bool {
+        textInputView.isMetalRenderingActive
+    }
     /// Coordinates pluggable syntax-highlight providers (tree-sitter overlays, semantic tokens, etc.).
     public private(set) var highlightProviderCoordinator: HighlightProviderCoordinator?
 

@@ -484,6 +484,17 @@ final class TextInputView: UIView, UITextInput {
             }
         }
     }
+    /// Host-controlled Metal rendering preference. Defaults to `false`.
+    var isMetalRenderingEnabled = false {
+        didSet {
+            if isMetalRenderingEnabled != oldValue {
+                refreshMetalActivation()
+            }
+        }
+    }
+    /// `true` when this instance is currently presenting the Metal canvas.
+    private(set) var isMetalRenderingActive = false
+    let metalCanvasView = MetalTextCanvasView(frame: .zero)
     var pageGuideColumn: Int {
         get {
             pageGuideController.column
@@ -902,6 +913,11 @@ final class TextInputView: UIView, UITextInput {
         gutterWidthService.gutterMinimumCharacterCount = gutterMinimumCharacterCount
         layoutManager.delegate = self
         layoutManager.textInputView = self
+        layoutManager.metalCanvasView = metalCanvasView
+        metalCanvasView.onRenderingFailure = { [weak self] in
+            self?.handleMetalRenderingFailure()
+        }
+        refreshMetalActivation()
         editMenuController.delegate = self
         setupContentSizeObserver()
         setupGutterWidthObserver()
@@ -950,6 +966,7 @@ final class TextInputView: UIView, UITextInput {
         layoutManager.layoutIfNeeded()
         layoutManager.layoutLineSelectionIfNeeded()
         layoutPageGuideIfNeeded()
+        layoutMetalCanvasIfNeeded()
         selectionOverlayController.updateLayout()
         // Defer selection notifications out of layout — hosts (SwiftUI) writing state
         // from these callbacks during AppKit layout abort with Update Constraints in Window.
@@ -1467,6 +1484,48 @@ private extension TextInputView {
 
 // MARK: - Layout
 private extension TextInputView {
+    private func layoutMetalCanvasIfNeeded() {
+        guard isMetalRenderingActive else {
+            return
+        }
+        metalCanvasView.frame = viewport
+        metalCanvasView.setNeedsDisplay()
+    }
+
+    func refreshMetalActivation() {
+        let defaults = UserDefaults.standard.object(forKey: MetalActivation.defaultsKey) as? Bool
+        // Property-off (and the process-wide kill switch) never needs a Metal device check,
+        // so default-off TextView init does not compile shaders.
+        if !isMetalRenderingEnabled || defaults == false {
+            applyMetalActivation(false)
+            return
+        }
+        let resolved = MetalActivation.resolved(
+            property: isMetalRenderingEnabled,
+            deviceAvailable: MetalContext.shared.isAvailable,
+            defaults: defaults
+        )
+        applyMetalActivation(resolved)
+    }
+
+    private func handleMetalRenderingFailure() {
+        MetalContext.shared.markUnavailable()
+        applyMetalActivation(false)
+    }
+
+    private func applyMetalActivation(_ active: Bool) {
+        let didChange = isMetalRenderingActive != active
+        isMetalRenderingActive = active
+        metalCanvasView.isHidden = !active
+        if active {
+            metalCanvasView.setNeedsDisplay()
+        }
+        if didChange {
+            layoutManager.setNeedsLayout()
+            setNeedsLayout()
+        }
+    }
+
     private func layoutPageGuideIfNeeded() {
         if showPageGuide {
             // The width extension is used to make the page guide look "attached" to the right hand side, even when the scroll view bouncing on the right side.

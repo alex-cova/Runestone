@@ -1,0 +1,94 @@
+import CoreText
+import Foundation
+@preconcurrency import AppKit
+
+@MainActor
+protocol LinePaintBackend: AnyObject {
+    var trackedFragmentIDs: Set<LineFragmentID> { get }
+    /// Full spec. Glyph extract runs if `CTLine` identity or `emitRect` (`canvas.frame`
+    /// from the last `setViewport`) changed; decorations always rebuild from `spec.decorations`.
+    /// The backend does not read `LineFragmentController` — LayoutManager supplies the payload.
+    func upsertFragment(_ spec: LineFragmentPaintSpec)
+    func removeFragments(ids: Set<LineFragmentID>)
+    func invalidateGlyphs(forLineIDs ids: Set<DocumentLineNodeID>)
+    func setViewport(_ viewport: CGRect, canvasFrame: CGRect, scale: CGFloat)
+    /// Forwards to the canvas; does not call `nextDrawable()`.
+    func setNeedsDisplay()
+    /// Drop grown instance buffers back to the 16k start size (off-screen / hidden).
+    func compactInstanceBuffers()
+}
+
+struct LineFragmentPaintSpec {
+    var id: LineFragmentID
+    var lineID: DocumentLineNodeID
+    var frame: CGRect
+    var line: CTLine
+    var descent: CGFloat
+    var baseSize: CGSize
+    var scaledSize: CGSize
+    var decorations: LineFragmentDecorations
+}
+
+struct LineFragmentDecorations {
+    var highlighted: [HighlightedRangeFragment]
+    var markedRange: NSRange?
+    var markedColor: UIColor
+    var markedRadius: CGFloat
+    var unfocusedAlpha: CGFloat
+    var focusedRanges: [NSRange]
+    var foldPlaceholder: String?
+    var foldPlaceholderColor: UIColor = .secondaryLabelColor
+    var foldPlaceholderBackgroundColor: UIColor = .quaternaryLabelColor
+}
+
+/// CG path: today's `ViewReuseQueue` + `LineFragmentView` drawing.
+@MainActor
+final class CGLinePaintBackend: LinePaintBackend {
+    private let reuseQueue = ViewReuseQueue<LineFragmentID, LineFragmentView>()
+    private weak var linesContainerView: UIView?
+    private var fragmentLineIDs: [LineFragmentID: DocumentLineNodeID] = [:]
+
+    var trackedFragmentIDs: Set<LineFragmentID> {
+        Set(reuseQueue.visibleViews.keys)
+    }
+
+    init(linesContainerView: UIView) {
+        self.linesContainerView = linesContainerView
+    }
+
+    func lineFragmentView(for id: LineFragmentID) -> LineFragmentView? {
+        reuseQueue.visibleViews[id]
+    }
+
+    func upsertFragment(_ spec: LineFragmentPaintSpec) {
+        fragmentLineIDs[spec.id] = spec.lineID
+        let view = reuseQueue.dequeueView(forKey: spec.id)
+        if view.superview == nil {
+            linesContainerView?.addSubview(view)
+        }
+        view.frame = spec.frame
+    }
+
+    func removeFragments(ids: Set<LineFragmentID>) {
+        for id in ids {
+            fragmentLineIDs.removeValue(forKey: id)
+        }
+        reuseQueue.enqueueViews(withKeys: ids)
+    }
+
+    func invalidateGlyphs(forLineIDs ids: Set<DocumentLineNodeID>) {
+        for (fragmentID, lineID) in fragmentLineIDs where ids.contains(lineID) {
+            reuseQueue.visibleViews[fragmentID]?.setNeedsDisplay()
+        }
+    }
+
+    func setViewport(_ viewport: CGRect, canvasFrame: CGRect, scale: CGFloat) {}
+
+    func setNeedsDisplay() {
+        for view in reuseQueue.visibleViews.values {
+            view.setNeedsDisplay()
+        }
+    }
+
+    func compactInstanceBuffers() {}
+}

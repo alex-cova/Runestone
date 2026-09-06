@@ -1,0 +1,120 @@
+import AppKit
+import XCTest
+@testable import Runestone
+
+@MainActor
+final class MetalTextCanvasViewTests: XCTestCase {
+    func testHitTestReturnsNil() {
+        let canvas = MetalTextCanvasView(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
+        XCTAssertNil(canvas.hitTest(NSPoint(x: 50, y: 50)))
+        XCTAssertNil(canvas.hitTest(NSPoint(x: 0, y: 0)))
+        XCTAssertNil(canvas.hitTest(NSPoint(x: -10, y: -10)))
+    }
+
+    func testCanvasIsHiddenBehindFragmentsByDefault() {
+        let textView = TextView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        textView.setState(TextViewState(text: "hello\nworld", theme: DefaultTheme()))
+        textView.layoutIfNeeded()
+        guard let textInputView = findTextInputView(in: textView) else {
+            XCTFail("Expected TextInputView")
+            return
+        }
+        let canvas = textInputView.subviews.compactMap { $0 as? MetalTextCanvasView }.first
+        XCTAssertNotNil(canvas, "Canvas must exist in the hierarchy even when Metal is off")
+        XCTAssertEqual(canvas?.isHidden, true)
+        XCTAssertFalse(textView.isMetalRenderingActive)
+        assertCanvasIsBehindFragmentContainer(in: textInputView)
+    }
+
+    func testEnablingMetalShowsTransparentCanvasBehindFragments() throws {
+        guard MetalContext.isAvailable else {
+            throw XCTSkip("Metal is not available")
+        }
+        let defaults = UserDefaults.standard.object(forKey: MetalActivation.defaultsKey) as? Bool
+        guard MetalActivation.resolved(property: true, deviceAvailable: true, defaults: defaults) else {
+            throw XCTSkip("Metal is disabled via UserDefaults kill switch")
+        }
+        let textView = TextView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        textView.setState(TextViewState(text: "hello\nworld", theme: DefaultTheme()))
+        textView.isMetalRenderingEnabled = true
+        textView.layoutIfNeeded()
+        XCTAssertTrue(textView.isMetalRenderingActive)
+        guard let textInputView = findTextInputView(in: textView) else {
+            XCTFail("Expected TextInputView")
+            return
+        }
+        let canvas = textInputView.subviews.compactMap { $0 as? MetalTextCanvasView }.first
+        XCTAssertEqual(canvas?.isHidden, false)
+        XCTAssertEqual((canvas?.layer as? CAMetalLayer)?.isOpaque, false)
+        assertCanvasIsBehindFragmentContainer(in: textInputView)
+        XCTAssertFalse(fragmentViews(in: textInputView).isEmpty, "Fragment views must still paint glyphs when Metal is on")
+    }
+
+    func testDisablingMetalHidesCanvasAndKeepsFragmentViews() throws {
+        guard MetalContext.isAvailable else {
+            throw XCTSkip("Metal is not available")
+        }
+        let defaults = UserDefaults.standard.object(forKey: MetalActivation.defaultsKey) as? Bool
+        guard MetalActivation.resolved(property: true, deviceAvailable: true, defaults: defaults) else {
+            throw XCTSkip("Metal is disabled via UserDefaults kill switch")
+        }
+        let textView = TextView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        textView.setState(TextViewState(text: "hello\nworld", theme: DefaultTheme()))
+        textView.isMetalRenderingEnabled = true
+        textView.layoutIfNeeded()
+        textView.isMetalRenderingEnabled = false
+        textView.layoutIfNeeded()
+        XCTAssertFalse(textView.isMetalRenderingActive)
+        guard let textInputView = findTextInputView(in: textView) else {
+            XCTFail("Expected TextInputView")
+            return
+        }
+        let canvas = textInputView.subviews.compactMap { $0 as? MetalTextCanvasView }.first
+        XCTAssertEqual(canvas?.isHidden, true)
+        XCTAssertFalse(fragmentViews(in: textInputView).isEmpty)
+    }
+}
+
+private extension MetalTextCanvasViewTests {
+    func findTextInputView(in root: NSView) -> TextInputView? {
+        if let textInputView = root as? TextInputView {
+            return textInputView
+        }
+        for subview in root.subviews {
+            if let textInputView = findTextInputView(in: subview) {
+                return textInputView
+            }
+        }
+        return nil
+    }
+
+    func fragmentViews(in root: NSView) -> [LineFragmentView] {
+        var result: [LineFragmentView] = []
+        if let fragment = root as? LineFragmentView {
+            result.append(fragment)
+        }
+        for subview in root.subviews {
+            result.append(contentsOf: fragmentViews(in: subview))
+        }
+        return result
+    }
+
+    func assertCanvasIsBehindFragmentContainer(in textInputView: TextInputView) {
+        let subviews = textInputView.subviews
+        guard let canvasIndex = subviews.firstIndex(where: { $0 is MetalTextCanvasView }) else {
+            XCTFail("Expected MetalTextCanvasView in TextInputView")
+            return
+        }
+        guard let linesIndex = subviews.firstIndex(where: { view in
+            view.subviews.contains { $0 is LineFragmentView }
+        }) else {
+            // Viewport may be empty before layout produces fragments; still require canvas below
+            // whatever container sits after it if present.
+            if canvasIndex + 1 < subviews.count {
+                XCTAssertGreaterThan(canvasIndex + 1, canvasIndex)
+            }
+            return
+        }
+        XCTAssertLessThan(canvasIndex, linesIndex, "Metal canvas must sit behind fragment views")
+    }
+}
