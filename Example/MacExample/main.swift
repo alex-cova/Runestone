@@ -125,6 +125,9 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
         )
         distractionFree.bezelStyle = .rounded
         distractionFree.setButtonType(.toggle)
+        let metal = NSButton(title: "Metal", target: self, action: #selector(toggleMetalRendering(_:)))
+        metal.bezelStyle = .rounded
+        metal.setButtonType(.toggle)
 
         stack.addArrangedSubview(openFile)
         stack.addArrangedSubview(saveFile)
@@ -134,7 +137,17 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
         stack.addArrangedSubview(focus)
         stack.addArrangedSubview(typewriter)
         stack.addArrangedSubview(distractionFree)
+        stack.addArrangedSubview(metal)
         return stack
+    }
+
+    /// Metal is default-off; this flips the per-view property so QA can A/B the renderer
+    /// (PRs 1–8). The `RunestoneMetalRendering=false` UserDefaults kill switch still wins.
+    @objc private func toggleMetalRendering(_ sender: NSButton) {
+        let enabled = sender.state == .on
+        for host in paneHosts.values {
+            host.textView.isMetalRenderingEnabled = enabled
+        }
     }
 
     @objc private func changeFocusMode(_ sender: NSSegmentedControl) {

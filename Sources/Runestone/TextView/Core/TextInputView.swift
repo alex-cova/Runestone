@@ -495,6 +495,14 @@ final class TextInputView: UIView, UITextInput {
     /// `true` when this instance is currently presenting the Metal canvas.
     private(set) var isMetalRenderingActive = false
     let metalCanvasView = MetalTextCanvasView(frame: .zero)
+
+    /// Backing-scale change: the glyph atlas keys embed the scale, so trigger a relayout that
+    /// re-hands the new scale to the renderer (which drops the atlas and re-extracts).
+    func handleBackingPropertiesChange() {
+        layoutManager.setNeedsLayout()
+        setNeedsLayout()
+    }
+
     var pageGuideColumn: Int {
         get {
             pageGuideController.column
@@ -1488,7 +1496,8 @@ private extension TextInputView {
         guard isMetalRenderingActive else {
             return
         }
-        metalCanvasView.frame = viewport
+        // `LayoutManager.layoutMetalCanvas()` owns the canvas frame + viewport hand-off (it runs
+        // inside `layoutIfNeeded` before this). Just make sure a present is queued for this pass.
         metalCanvasView.setNeedsDisplay()
     }
 
@@ -1514,10 +1523,12 @@ private extension TextInputView {
     }
 
     private func applyMetalActivation(_ active: Bool) {
-        let didChange = isMetalRenderingActive != active
-        isMetalRenderingActive = active
-        metalCanvasView.isHidden = !active
-        if active {
+        // The renderer needs a Metal device + canvas; `setMetalRenderingActive` reports what took.
+        let resolvedActive = layoutManager.setMetalRenderingActive(active) && active
+        let didChange = isMetalRenderingActive != resolvedActive
+        isMetalRenderingActive = resolvedActive
+        metalCanvasView.isHidden = !resolvedActive
+        if resolvedActive {
             metalCanvasView.setNeedsDisplay()
         }
         if didChange {

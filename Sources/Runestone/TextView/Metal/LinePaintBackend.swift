@@ -23,6 +23,12 @@ struct LineFragmentPaintSpec {
     var baseSize: CGSize
     var scaledSize: CGSize
     var decorations: LineFragmentDecorations
+    /// Font used when a `CTRun` carries no `.font` attribute. `LayoutManager` supplies `theme.font`.
+    var fallbackFont: CTFont
+    /// Color used when a `CTRun` carries no `.foregroundColor` attribute (`theme.textColor`).
+    var fallbackColor: UIColor
+    /// Appearance to resolve dynamic colors against; the Metal backend needs it off the render pass.
+    var appearance: NSAppearance?
 }
 
 struct LineFragmentDecorations {

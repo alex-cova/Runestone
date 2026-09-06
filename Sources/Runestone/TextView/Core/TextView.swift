@@ -1042,6 +1042,11 @@ import CoreText
         }
     }
 
+    override open func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        textInputView.handleBackingPropertiesChange()
+    }
+
     override open func layoutSubviews() {
         super.layoutSubviews()
         // SwiftUI often sizes the host after the first setState. Without

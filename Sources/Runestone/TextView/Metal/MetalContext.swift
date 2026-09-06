@@ -106,5 +106,63 @@ private extension MetalContext {
     fragment float4 runestone_clear_fragment() {
         return float4(0.0, 0.0, 0.0, 0.0);
     }
+
+    // Must match `GlyphInstance` (Swift) field-for-field.
+    struct GlyphInstanceData {
+        float2 origin;
+        float2 size;
+        float2 uvOrigin;
+        float2 uvSize;
+        float4 color;
+        uint atlasPage;
+    };
+
+    // Must match `MetalProjectionUniforms` (Swift).
+    struct GlyphUniforms {
+        float2 canvasOrigin;
+        float2 canvasSize;
+        float scale;
+    };
+
+    struct GlyphVertexOut {
+        float4 position [[position]];
+        float2 uv;
+        float4 color;
+    };
+
+    vertex GlyphVertexOut runestone_glyph_vertex(uint vid [[vertex_id]],
+                                                 uint iid [[instance_id]],
+                                                 const device GlyphInstanceData *instances [[buffer(0)]],
+                                                 constant GlyphUniforms &u [[buffer(1)]]) {
+        // Triangle-strip corners: (0,0) (1,0) (0,1) (1,1).
+        float2 corner = float2(float(vid & 1), float(vid >> 1));
+        GlyphInstanceData inst = instances[iid];
+        float2 contentPos = inst.origin + corner * inst.size;
+        // Content space -> NDC. Subtract only the canvas origin; Y is flipped (the view is flipped).
+        float2 ndc;
+        ndc.x = (contentPos.x - u.canvasOrigin.x) / u.canvasSize.x * 2.0 - 1.0;
+        ndc.y = 1.0 - (contentPos.y - u.canvasOrigin.y) / u.canvasSize.y * 2.0;
+        GlyphVertexOut out;
+        out.position = float4(ndc, 0.0, 1.0);
+        out.uv = inst.uvOrigin + corner * inst.uvSize;
+        out.color = inst.color;
+        return out;
+    }
+
+    fragment float4 runestone_glyph_coverage_fragment(GlyphVertexOut in [[stage_in]],
+                                                      texture2d<float> atlas [[texture(0)]],
+                                                      sampler s [[sampler(0)]]) {
+        float coverage = atlas.sample(s, in.uv).r;
+        // `in.color` is premultiplied sRGB (focus alpha already folded in).
+        return in.color * coverage;
+    }
+
+    fragment float4 runestone_glyph_color_fragment(GlyphVertexOut in [[stage_in]],
+                                                   texture2d<float> atlas [[texture(0)]],
+                                                   sampler s [[sampler(0)]]) {
+        // Color atlas texels are already premultiplied; instance alpha carries focus dimming.
+        float4 texel = atlas.sample(s, in.uv);
+        return texel * in.color.a;
+    }
     """#
 }

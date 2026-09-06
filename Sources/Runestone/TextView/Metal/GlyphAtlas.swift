@@ -115,6 +115,28 @@ final class GlyphAtlas {
 
     var coveragePageCount: Int { coveragePages.count }
     var colorPageCount: Int { colorPages.count }
+
+    /// Texture backing the page `id` returned in a `GlyphAtlasSlot`, or `nil` if that page was evicted.
+    func pageTexture(id: UInt32) -> MTLTexture? {
+        if let page = coveragePages.first(where: { $0.id == id }) {
+            return page.texture
+        }
+        return colorPages.first(where: { $0.id == id })?.texture
+    }
+
+    /// `true` when page `id` is a BGRA color page (emoji), `false` for an R8 coverage page.
+    func isColorPage(id: UInt32) -> Bool {
+        colorPages.contains { $0.id == id }
+    }
+
+    /// Drops every page and cached slot. Used when the backing scale changes (keys embed scale).
+    func removeAll() {
+        cache.removeAll()
+        coveragePages.removeAll()
+        colorPages.removeAll()
+        hitCount = 0
+        missCount = 0
+    }
     var cachedGlyphCount: Int {
         cache.values.reduce(0) { count, entry in
             if case .slot = entry {

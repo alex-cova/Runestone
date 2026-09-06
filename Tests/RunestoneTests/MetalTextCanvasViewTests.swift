@@ -26,7 +26,7 @@ final class MetalTextCanvasViewTests: XCTestCase {
         assertCanvasIsBehindFragmentContainer(in: textInputView)
     }
 
-    func testEnablingMetalShowsTransparentCanvasBehindFragments() throws {
+    func testEnablingMetalShowsTransparentCanvasAndRemovesFragmentViews() throws {
         guard MetalContext.isAvailable else {
             throw XCTSkip("Metal is not available")
         }
@@ -46,8 +46,8 @@ final class MetalTextCanvasViewTests: XCTestCase {
         let canvas = textInputView.subviews.compactMap { $0 as? MetalTextCanvasView }.first
         XCTAssertEqual(canvas?.isHidden, false)
         XCTAssertEqual((canvas?.layer as? CAMetalLayer)?.isOpaque, false)
-        assertCanvasIsBehindFragmentContainer(in: textInputView)
-        XCTAssertFalse(fragmentViews(in: textInputView).isEmpty, "Fragment views must still paint glyphs when Metal is on")
+        XCTAssertTrue(fragmentViews(in: textInputView).isEmpty, "Metal owns the glyph paint; no fragment views")
+        assertCanvasIsInFrontOfLinesContainer(in: textInputView)
     }
 
     func testDisablingMetalHidesCanvasAndKeepsFragmentViews() throws {
@@ -112,5 +112,24 @@ private extension MetalTextCanvasViewTests {
             return
         }
         XCTAssertLessThan(canvasIndex, linesIndex, "Metal canvas must sit behind fragment views")
+    }
+
+    /// With Metal active the lines container is empty, so identify it by its content-sized frame.
+    func assertCanvasIsInFrontOfLinesContainer(in textInputView: TextInputView) {
+        let subviews = textInputView.subviews
+        guard let canvasIndex = subviews.firstIndex(where: { $0 is MetalTextCanvasView }) else {
+            XCTFail("Expected MetalTextCanvasView in TextInputView")
+            return
+        }
+        guard let linesIndex = subviews.firstIndex(where: { view in
+            type(of: view) == UIView.self
+                && view.frame.origin == .zero
+                && view.frame.width > 0
+                && view.frame.height > 0
+        }) else {
+            XCTFail("Expected the (empty) lines container after layoutIfNeeded")
+            return
+        }
+        XCTAssertGreaterThan(canvasIndex, linesIndex, "Metal canvas must sit in front of the lines container")
     }
 }

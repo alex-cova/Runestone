@@ -135,16 +135,21 @@ final class LayoutManager {
 
     // MARK: - Views
     let gutterContainerView = GutterContainerView()
-    /// Transparent Metal host, inserted behind `linesContainerView`. Owned by `TextInputView`.
-    weak var metalCanvasView: UIView? {
+    /// Transparent Metal host. Sits behind `linesContainerView` while Metal is off, in front of it
+    /// (where the fragment views would be) once Metal is the active paint backend. Owned by
+    /// `TextInputView`.
+    weak var metalCanvasView: MetalTextCanvasView? {
         didSet {
             if metalCanvasView !== oldValue {
                 setupViewHierarchy()
             }
         }
     }
-    var paintBackend: LinePaintBackend
+    private(set) var paintBackend: LinePaintBackend
     private let cgPaintBackend: CGLinePaintBackend
+    private var metalRenderer: MetalRenderer?
+    /// `true` when `paintBackend` is the Metal renderer. Flipped by `setMetalRenderingActive(_:)`.
+    private(set) var isMetalRenderingActive = false
     private var lineNumberLabelReuseQueue = ViewReuseQueue<DocumentLineNodeID, LineNumberView>()
     private var visibleLineIDs: Set<DocumentLineNodeID> = []
     private let linesContainerView = UIView()
@@ -261,7 +266,45 @@ final class LayoutManager {
         for lineController in lineControllerStorage {
             lineController.setNeedsDisplayOnLineFragmentViews()
         }
+        // Display-only invalidation (invisible-character toggles, marked-text changes) does not run
+        // `layoutLinesInViewport`. The CG path just re-`draw`s the fragment views; the Metal path
+        // has no views, so re-upsert a fresh spec per visible fragment (glyph extract is skipped
+        // when neither the `CTLine` identity nor the cull rect changed).
+        upsertVisibleFragmentsForDisplayInvalidation()
         paintBackend.setNeedsDisplay()
+    }
+
+    /// Swap the paint backend between the CG reuse-queue and the Metal renderer. Returns `true` when
+    /// the requested state is in effect afterwards (a `true` request needs a Metal device + canvas).
+    @discardableResult
+    func setMetalRenderingActive(_ active: Bool) -> Bool {
+        if active {
+            guard let metalCanvasView else {
+                return false
+            }
+            if metalRenderer == nil {
+                metalRenderer = MetalRenderer(canvasView: metalCanvasView)
+            }
+            guard let metalRenderer else {
+                return false
+            }
+            guard !isMetalRenderingActive else {
+                return true
+            }
+            cgPaintBackend.removeFragments(ids: cgPaintBackend.trackedFragmentIDs)
+            paintBackend = metalRenderer
+            isMetalRenderingActive = true
+        } else {
+            guard isMetalRenderingActive else {
+                return true
+            }
+            metalRenderer.map { $0.removeFragments(ids: $0.trackedFragmentIDs) }
+            paintBackend = cgPaintBackend
+            isMetalRenderingActive = false
+        }
+        setupViewHierarchy()
+        setNeedsLayout()
+        return active == isMetalRenderingActive
     }
 
     func textPreview(containing needleRange: NSRange, peekLength: Int = 50) -> TextPreview? {
@@ -506,6 +549,9 @@ extension LayoutManager {
         guard viewport.size.width > 0 && viewport.size.height > 0 else {
             return
         }
+        // Position the Metal canvas and hand the backend the current cull rect *before* any
+        // `upsertFragment`, so this pass's glyph extract uses the up-to-date `emitRect`.
+        layoutMetalCanvas()
         let oldVisibleLineIDs = visibleLineIDs
         let oldVisibleLineFragmentIDs = paintBackend.trackedFragmentIDs
         // Layout lines within a padded band around the viewport, so lines about to scroll into
@@ -630,6 +676,47 @@ extension LayoutManager {
         lineNumberView.frame = CGRect(x: xPosition, y: yPosition, width: gutterWidthService.lineNumberWidth, height: fontLineHeight)
     }
 
+    /// Move the transparent Metal canvas to the visible text rect (view-follows-viewport) and give
+    /// the paint backend the viewport / cull rect / backing scale for this layout pass. No-op unless
+    /// Metal is the active backend.
+    private func layoutMetalCanvas() {
+        guard isMetalRenderingActive, let metalCanvasView else {
+            return
+        }
+        let scale = metalCanvasView.window?.backingScaleFactor
+            ?? metalCanvasView.window?.screen?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor
+            ?? 2
+        metalCanvasView.frame = viewport
+        paintBackend.setViewport(viewport, canvasFrame: viewport, scale: scale)
+    }
+
+    /// Rebuild the paint spec for every visible line fragment without running a full viewport
+    /// layout. Used by display-only invalidation paths (`setNeedsDisplayOnLines`,
+    /// `updateMarkedTextOnVisibleLines`). Cheap for the CG backend (it already re-`draw`s its views
+    /// from `setNeedsDisplayOnLines`) so it only runs when Metal is active.
+    private func upsertVisibleFragmentsForDisplayInvalidation() {
+        guard isMetalRenderingActive else {
+            return
+        }
+        let layoutBounds = paddedInsetViewport
+        for lineID in visibleLineIDs {
+            guard let lineController = lineControllerStorage[lineID] else {
+                continue
+            }
+            let lineYPosition = lineController.line.yPosition
+            for lineFragmentController in lineController.lineFragmentControllers(in: layoutBounds) {
+                var frame: CGRect = .zero
+                layoutLineFragmentView(
+                    for: lineFragmentController,
+                    lineID: lineID,
+                    lineYPosition: lineYPosition,
+                    lineFragmentFrame: &frame
+                )
+            }
+        }
+    }
+
     private func layoutLineFragmentView(
         for lineFragmentController: LineFragmentController,
         lineID: DocumentLineNodeID,
@@ -657,7 +744,10 @@ extension LayoutManager {
                 unfocusedAlpha: lineFragmentController.unfocusedAlpha,
                 focusedRanges: lineFragmentController.focusedRanges,
                 foldPlaceholder: lineFragmentController.foldPlaceholderText
-            )
+            ),
+            fallbackFont: theme.font as CTFont,
+            fallbackColor: theme.textColor,
+            appearance: textInputView?.effectiveAppearance
         )
         paintBackend.upsertFragment(spec)
         if let lineFragmentView = cgPaintBackend.lineFragmentView(for: lineFragment.id) {
@@ -691,12 +781,22 @@ extension LayoutManager {
         lineNumbersContainerView.removeFromSuperview()
         foldRibbonView.removeFromSuperview()
         paintBackend.removeFragments(ids: paintBackend.trackedFragmentIDs)
-        // Add views to view hierarchy. Canvas sits behind fragment views so they still paint on top.
+        // Add views to view hierarchy. When Metal is off the canvas sits *behind* the fragment
+        // views (which paint the glyphs); when Metal is the active backend it sits *in front* of
+        // the now-empty `linesContainerView` and paints the glyphs itself, still behind the
+        // selection overlay and carets (re-fronted in `SelectionOverlayController.updateLayout`).
         textInputView?.addSubview(lineSelectionBackgroundView)
-        if let metalCanvasView {
-            textInputView?.addSubview(metalCanvasView)
+        if isMetalRenderingActive {
+            textInputView?.addSubview(linesContainerView)
+            if let metalCanvasView {
+                textInputView?.addSubview(metalCanvasView)
+            }
+        } else {
+            if let metalCanvasView {
+                textInputView?.addSubview(metalCanvasView)
+            }
+            textInputView?.addSubview(linesContainerView)
         }
-        textInputView?.addSubview(linesContainerView)
         gutterParentView?.addSubview(gutterContainerView)
         gutterContainerView.addSubview(gutterBackgroundView)
         gutterContainerView.addSubview(gutterSelectionBackgroundView)
@@ -734,6 +834,10 @@ private extension LayoutManager {
                 }
             }
         }
+        // `markedRange` didSet takes this path with no `layoutLinesInViewport`; refresh the Metal
+        // paint specs so `unmarkText` and marked-range edits are not lost (no ID-only invalidate).
+        upsertVisibleFragmentsForDisplayInvalidation()
+        paintBackend.setNeedsDisplay()
     }
 }
 

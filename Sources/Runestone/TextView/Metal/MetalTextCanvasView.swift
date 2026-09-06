@@ -3,12 +3,23 @@ import Foundation
 import Metal
 import QuartzCore
 
-/// Transparent `CAMetalLayer` host. Glyphs still paint in `LineFragmentView`s above this canvas.
+/// Encodes glyph/decoration draws into the canvas's render pass. Implemented by `MetalRenderer`.
+@MainActor
+protocol MetalCanvasGlyphEncoding: AnyObject {
+    /// Called inside `MetalTextCanvasView.draw(_:)` with a live encoder whose color attachment is
+    /// already cleared to transparent. Must not call `endEncoding` / `present` / `commit`.
+    func encode(into encoder: MTLRenderCommandEncoder, drawableSize: CGSize)
+}
+
+/// Transparent `CAMetalLayer` host. When Metal is active `MetalRenderer` paints glyphs here and the
+/// `LineFragmentView`s are gone; when it is inactive the canvas is hidden and only clears.
 ///
 /// `draw(_:)` is the only place that calls `nextDrawable()`. Layout updates CPU state and
 /// `setNeedsDisplay()` so a flick-scroll cannot present faster than vsync.
 final class MetalTextCanvasView: UIView {
     var onRenderingFailure: (() -> Void)?
+    /// Set by `MetalRenderer` when it becomes the active paint backend; cleared when it steps down.
+    weak var glyphEncoder: MetalCanvasGlyphEncoding?
 
     private var isDisplayDirty = false
     private var drawableRetryCount = 0
@@ -74,6 +85,14 @@ final class MetalTextCanvasView: UIView {
         }
     }
 
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        updateMetalLayerGeometry()
+        if !isHidden {
+            setNeedsDisplay()
+        }
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         guard window != nil, !isHidden, isDisplayDirty else {
             return
@@ -90,7 +109,7 @@ final class MetalTextCanvasView: UIView {
             return
         }
         isDisplayDirty = false
-        encodeClearPass(on: metalLayer)
+        encodePass(on: metalLayer)
     }
 }
 
@@ -104,7 +123,7 @@ private extension MetalTextCanvasView {
         metalLayer.drawableSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
     }
 
-    func encodeClearPass(on metalLayer: CAMetalLayer) {
+    func encodePass(on metalLayer: CAMetalLayer) {
         let context = MetalContext.shared
         guard let commandQueue = context.commandQueue, let commandBuffer = commandQueue.makeCommandBuffer() else {
             context.markUnavailable(reason: "Failed to create Metal command buffer")
@@ -125,6 +144,7 @@ private extension MetalTextCanvasView {
         descriptor.colorAttachments[0].storeAction = .store
         descriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) {
+            glyphEncoder?.encode(into: encoder, drawableSize: metalLayer.drawableSize)
             encoder.endEncoding()
         } else {
             // Still present so CAMetalLayer's drawable pool is released, then fall back.
