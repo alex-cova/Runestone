@@ -249,8 +249,10 @@ final class GlyphAtlas {
         }
     }
 
+    /// Upload a bitmap into the atlas. `allowingPageSizedTile` lifts the per-glyph size cap so the
+    /// whole-run raster fallback (PR 8) can pack a tile up to a full page.
     @discardableResult
-    func upload(_ bitmap: GlyphBitmap) -> GlyphAtlasResult {
+    func upload(_ bitmap: GlyphBitmap, allowingPageSizedTile: Bool = false) -> GlyphAtlasResult {
         if let entry = cache[bitmap.key] {
             switch entry {
             case .slot(let slot):
@@ -260,7 +262,10 @@ final class GlyphAtlas {
                 return .oversize
             }
         }
-        if bitmap.width > configuration.maxGlyphExtent || bitmap.height > configuration.maxGlyphExtent {
+        let sizeCap = allowingPageSizedTile
+            ? (bitmap.isColor ? configuration.colorPageSize : configuration.coveragePageSize)
+            : configuration.maxGlyphExtent
+        if bitmap.width > sizeCap || bitmap.height > sizeCap {
             cache[bitmap.key] = .oversize
             return .oversize
         }

@@ -1,3 +1,4 @@
+@preconcurrency import AppKit
 import CoreText
 import Darwin
 import Foundation
@@ -114,6 +115,111 @@ enum GlyphRasterizer {
             originX: Float(pixelMinX - CGFloat(padPixels)),
             originY: Float(pixelMinY - CGFloat(padPixels)),
             isColor: isColor
+        ))
+    }
+
+    /// Whole-`CTRun` fallback: rasterize every glyph of a run into one premultiplied BGRA tile,
+    /// including its shadow. Used when the per-glyph coverage atlas cannot represent the run
+    /// (`NSShadow`, a glyph over the size cap, an unreproducible run matrix, …). `positions` are the
+    /// raw `CTRunGetPositions` output (line-relative, Y-up baseline space); `runMatrix` is applied to
+    /// positions and bounds but *not* composed onto the glyph shapes (`CTFontDrawGlyphs` applies the
+    /// font matrix itself).
+    struct RunRasterInput {
+        var font: CTFont
+        var glyphs: [CGGlyph]
+        var positions: [CGPoint]
+        var runMatrix: CGAffineTransform
+        var foregroundColor: CGColor
+        var shadow: NSShadow?
+        var scale: CGFloat
+        var key: GlyphKey
+    }
+
+    /// The whole-run tile can be larger than a single glyph but must still fit a color page.
+    static let maxRunExtentPixels = GlyphAtlas.colorPageSize
+
+    static func rasterizeRun(_ input: RunRasterInput, maxExtent: Int = maxRunExtentPixels) -> GlyphRasterResult {
+        let count = min(input.glyphs.count, input.positions.count)
+        guard count > 0 else {
+            return .empty
+        }
+        let scale = max(input.scale, 0.001)
+        let positions = input.positions.prefix(count).map { $0.applying(input.runMatrix) }
+        var bbox = CGRect.null
+        for index in 0..<count {
+            var glyph = input.glyphs[index]
+            var glyphBounds = CGRect.zero
+            CTFontGetBoundingRectsForGlyphs(input.font, .default, &glyph, &glyphBounds, 1)
+            let transformed = glyphBounds.applying(input.runMatrix)
+                .offsetBy(dx: positions[index].x, dy: positions[index].y)
+            bbox = bbox.union(transformed)
+        }
+        guard !bbox.isNull, bbox.width > 0, bbox.height > 0 else {
+            return .empty
+        }
+        if let shadow = input.shadow {
+            let dx = abs(shadow.shadowOffset.width) + 3 * shadow.shadowBlurRadius
+            let dy = abs(shadow.shadowOffset.height) + 3 * shadow.shadowBlurRadius
+            bbox = bbox.insetBy(dx: -dx, dy: -dy)
+        }
+        let pad = CGFloat(padPixels)
+        let width = Int((bbox.width * scale).rounded(.up)) + 2 * padPixels
+        let height = Int((bbox.height * scale).rounded(.up)) + 2 * padPixels
+        if width > maxExtent || height > maxExtent {
+            return .oversize
+        }
+        let bytesPerPixel = 4
+        let bytesPerRow = alignedBytesPerRow(width: width, bytesPerPixel: bytesPerPixel)
+        var data = Data(count: bytesPerRow * height)
+        let glyphs = Array(input.glyphs.prefix(count))
+        let drewSomething = data.withUnsafeMutableBytes { raw -> Bool in
+            guard let base = raw.baseAddress,
+                  let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else {
+                return false
+            }
+            let bitmapInfo = CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue
+            guard let context = CGContext(
+                data: base,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: colorSpace,
+                bitmapInfo: bitmapInfo
+            ) else {
+                return false
+            }
+            context.setShouldAntialias(true)
+            context.setAllowsAntialiasing(true)
+            context.textMatrix = .identity
+            context.scaleBy(x: scale, y: scale)
+            context.translateBy(x: pad / scale - bbox.minX, y: pad / scale - bbox.minY)
+            if let shadow = input.shadow {
+                context.setShadow(
+                    offset: shadow.shadowOffset,
+                    blur: shadow.shadowBlurRadius,
+                    color: shadow.shadowColor?.cgColor
+                )
+            }
+            context.setFillColor(input.foregroundColor)
+            var mutablePositions = positions
+            var mutableGlyphs = glyphs
+            CTFontDrawGlyphs(input.font, &mutableGlyphs, &mutablePositions, count, context)
+            return true
+        }
+        guard drewSomething else {
+            return .failed
+        }
+        flipVertically(data: &data, height: height, bytesPerRow: bytesPerRow)
+        return .bitmap(GlyphBitmap(
+            key: input.key,
+            width: width,
+            height: height,
+            bytesPerRow: bytesPerRow,
+            data: data,
+            originX: Float(bbox.minX * scale - pad),
+            originY: Float(bbox.minY * scale - pad),
+            isColor: true
         ))
     }
 

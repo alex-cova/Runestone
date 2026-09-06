@@ -138,8 +138,16 @@ enum GlyphRunExtractor {
                 prepared.append(preparedRun)
             }
         }
+        var fallbackRuns = Set<Int>()
         for preparedRun in prepared {
-            var stopRun = false
+            if let reason = preparedRun.forcedFallback {
+                fallbackRuns.insert(preparedRun.runIndex)
+                appendRunFallback(preparedRun, reason: reason, request: request, baselineY: baselineY,
+                                  atlas: atlas, budget: &budget, into: &result)
+                continue
+            }
+            let runInstanceStart = result.glyphs.count
+            var capped: GlyphRunSkipReason?
             for pending in preparedRun.glyphs where pending.band == .emit {
                 switch resolve(pending, preparedRun: preparedRun, request: request, atlas: atlas, budget: &budget) {
                 case .instance(let extracted):
@@ -147,18 +155,26 @@ enum GlyphRunExtractor {
                 case .warmed, .skipped:
                     break
                 case .needsRasterCap:
-                    result.skips.append(GlyphRunSkip(runIndex: preparedRun.runIndex, reason: .rasterCap))
-                    stopRun = true
+                    capped = .rasterCap
                 case .failed:
-                    result.skips.append(GlyphRunSkip(runIndex: preparedRun.runIndex, reason: .lookupFailed))
-                    stopRun = true
+                    capped = .lookupFailed
                 }
-                if stopRun {
+                if capped != nil {
                     break
                 }
             }
+            guard let reason = capped else {
+                continue
+            }
+            // Drop this run's partial per-glyph instances and rasterize it whole instead.
+            if result.glyphs.count > runInstanceStart {
+                result.glyphs.removeLast(result.glyphs.count - runInstanceStart)
+            }
+            fallbackRuns.insert(preparedRun.runIndex)
+            appendRunFallback(preparedRun, reason: reason, request: request, baselineY: baselineY,
+                              atlas: atlas, budget: &budget, into: &result)
         }
-        let cappedRuns = Set(result.skips.compactMap { skip -> Int? in
+        let cappedRuns = fallbackRuns.union(result.skips.compactMap { skip -> Int? in
             skip.reason == .rasterCap ? skip.runIndex : nil
         })
         for preparedRun in prepared where !cappedRuns.contains(preparedRun.runIndex) {
@@ -200,6 +216,15 @@ private extension GlyphRunExtractor {
         var isColor: Bool
         var matrixHash: UInt64
         var glyphs: [PendingGlyph]
+        /// Set when the per-glyph coverage atlas cannot represent this run (`NSShadow`, a glyph over
+        /// the size cap). The whole run is rasterized into one BGRA tile instead — see PR 8.
+        var forcedFallback: GlyphRunSkipReason?
+        var rawGlyphs: [CGGlyph] = []
+        var rawPositions: [CGPoint] = []
+        var stringIndexRange: Range<Int> = 0..<0
+        var runColor: SIMD4<Float> = SIMD4(0, 0, 0, 1)
+        var foregroundColor: NSColor = .textColor
+        var shadow: NSShadow?
     }
 
     enum PrepareResult {
@@ -215,6 +240,13 @@ private extension GlyphRunExtractor {
         case failed
     }
 
+    enum RunFallbackResult {
+        case instance(ExtractedGlyph)
+        case offscreen
+        case budgetExhausted
+        case failed
+    }
+
     static func prepare(
         _ run: CTRun,
         runIndex: Int,
@@ -222,9 +254,7 @@ private extension GlyphRunExtractor {
         baselineY: CGFloat
     ) -> PrepareResult {
         let attributes = (CTRunGetAttributes(run) as? [NSAttributedString.Key: Any]) ?? [:]
-        if attributes[.shadow] != nil {
-            return .skip(GlyphRunSkip(runIndex: runIndex, reason: .shadow))
-        }
+        let shadow = attributes[.shadow] as? NSShadow
         let font = (attributes[.font] as? NSFont) ?? (request.fallbackFont as NSFont)
         let fontMatrix = CTFontGetMatrix(font)
         // Run text matrix copies CTFontGetMatrix for synthetic italic; extra is run * font⁻¹ so bounds are not sheared twice.
@@ -232,17 +262,23 @@ private extension GlyphRunExtractor {
         let applyRunMatrix = !runMatrix.isIdentity
         let isColor = GlyphRasterizer.isColorFont(font)
         let runColor = resolveColor(attributes: attributes, request: request)
+        let foregroundColor = (attributes[.foregroundColor] as? NSColor) ?? request.fallbackColor
         let glyphCount = CTRunGetGlyphCount(run)
         let matrixHash = GlyphKey.matrixHash(fontMatrix: fontMatrix, runMatrix: runMatrix)
+        var preparedRun = PreparedRun(
+            runIndex: runIndex,
+            font: font,
+            runMatrix: runMatrix,
+            isColor: isColor,
+            matrixHash: matrixHash,
+            glyphs: [],
+            forcedFallback: shadow != nil ? .shadow : nil,
+            runColor: runColor,
+            foregroundColor: foregroundColor,
+            shadow: shadow
+        )
         guard glyphCount > 0 else {
-            return .run(PreparedRun(
-                runIndex: runIndex,
-                font: font,
-                runMatrix: runMatrix,
-                isColor: isColor,
-                matrixHash: matrixHash,
-                glyphs: []
-            ))
+            return .run(preparedRun)
         }
         var glyphs = [CGGlyph](repeating: 0, count: glyphCount)
         var positions = [CGPoint](repeating: .zero, count: glyphCount)
@@ -251,6 +287,10 @@ private extension GlyphRunExtractor {
         CTRunGetGlyphs(run, range, &glyphs)
         CTRunGetPositions(run, range, &positions)
         CTRunGetStringIndices(run, range, &stringIndices)
+        preparedRun.rawGlyphs = glyphs
+        preparedRun.rawPositions = positions
+        let intIndices = stringIndices.map { Int($0) }
+        preparedRun.stringIndexRange = (intIndices.min() ?? 0)..<((intIndices.max() ?? 0) + 1)
         var pending: [PendingGlyph] = []
         pending.reserveCapacity(glyphCount)
         let scale = max(request.scale, 0.001)
@@ -265,7 +305,12 @@ private extension GlyphRunExtractor {
             }
             let pixelSize = paddedPixelSize(bounds: bounds, scale: scale)
             if pixelSize.width > maxGlyphExtentPixels || pixelSize.height > maxGlyphExtentPixels {
-                return .skip(GlyphRunSkip(runIndex: runIndex, reason: .oversize))
+                // One oversize glyph forces the whole run through the raster fallback. `.oversize`
+                // (not `.shadow`) so `makeRunFallback` always attempts it — there is no `pending`
+                // list to prove it's on screen. The shadow, if any, is still baked in.
+                preparedRun.forcedFallback = .oversize
+                preparedRun.glyphs = []
+                return .run(preparedRun)
             }
             if pixelSize.width == 0 || pixelSize.height == 0 {
                 continue
@@ -299,14 +344,8 @@ private extension GlyphRunExtractor {
                 band: band
             ))
         }
-        return .run(PreparedRun(
-            runIndex: runIndex,
-            font: font,
-            runMatrix: runMatrix,
-            isColor: isColor,
-            matrixHash: matrixHash,
-            glyphs: pending
-        ))
+        preparedRun.glyphs = pending
+        return .run(preparedRun)
     }
 
     @MainActor
@@ -398,6 +437,156 @@ private extension GlyphRunExtractor {
 
     static func requestBaselineY(_ request: GlyphExtractRequest) -> CGFloat {
         baselineY(baseSize: request.baseSize, scaledSize: request.scaledSize, descent: request.descent)
+    }
+
+    // MARK: - Run-level raster fallback (PR 8)
+
+    @MainActor
+    static func appendRunFallback(
+        _ run: PreparedRun,
+        reason: GlyphRunSkipReason,
+        request: GlyphExtractRequest,
+        baselineY: CGFloat,
+        atlas: GlyphAtlas,
+        budget: inout GlyphRasterBudget,
+        into result: inout GlyphExtractResult
+    ) {
+        switch makeRunFallback(run, request: request, baselineY: baselineY, atlas: atlas, budget: &budget) {
+        case .instance(let extracted):
+            result.glyphs.append(extracted)
+        case .offscreen:
+            break
+        case .budgetExhausted:
+            result.skips.append(GlyphRunSkip(runIndex: run.runIndex, reason: .rasterCap))
+        case .failed:
+            result.skips.append(GlyphRunSkip(runIndex: run.runIndex, reason: reason))
+        }
+    }
+
+    @MainActor
+    static func makeRunFallback(
+        _ run: PreparedRun,
+        request: GlyphExtractRequest,
+        baselineY: CGFloat,
+        atlas: GlyphAtlas,
+        budget: inout GlyphRasterBudget
+    ) -> RunFallbackResult {
+        guard !run.rawGlyphs.isEmpty else {
+            return .offscreen
+        }
+        // A shadow run whose per-glyph cull produced nothing is fully off-screen — don't spend a
+        // raster on it. (Oversize runs keep no `pending`, so they always attempt; they're rare.)
+        if run.forcedFallback == .shadow, run.glyphs.isEmpty {
+            return .offscreen
+        }
+        let key = runFallbackKey(run, request: request)
+        let slot: GlyphAtlasSlot
+        if let cached = atlas.cached(key) {
+            slot = cached
+        } else {
+            guard budget.consume() else {
+                return .budgetExhausted
+            }
+            let input = GlyphRasterizer.RunRasterInput(
+                font: run.font,
+                glyphs: run.rawGlyphs,
+                positions: run.rawPositions,
+                runMatrix: run.runMatrix,
+                foregroundColor: resolveCGColor(run.foregroundColor, appearance: request.appearance),
+                shadow: run.shadow,
+                scale: request.scale,
+                key: key
+            )
+            switch GlyphRasterizer.rasterizeRun(input) {
+            case .bitmap(let bitmap):
+                guard case .hit(let uploaded) = atlas.upload(bitmap, allowingPageSizedTile: true) else {
+                    return .failed
+                }
+                slot = uploaded
+            case .oversize, .empty, .failed:
+                return .failed
+            }
+        }
+        guard !slot.isEmpty else {
+            return .offscreen
+        }
+        let scale = max(request.scale, 0.001)
+        let width = CGFloat(slot.width) / scale
+        let height = CGFloat(slot.height) / scale
+        let originX = request.fragmentFrame.minX + CGFloat(slot.originX) / scale
+        let originY = request.fragmentFrame.minY + baselineY - (CGFloat(slot.originY) / scale + height)
+        let quad = CGRect(x: originX, y: originY, width: width, height: height)
+        guard quad.intersects(request.emitRect) else {
+            return .offscreen
+        }
+        var alpha: Float = 1
+        if request.unfocusedAlpha < 1, !runIsFocused(run.stringIndexRange, ranges: request.focusedRanges) {
+            alpha = Float(request.unfocusedAlpha)
+        }
+        let uv = uvRect(for: slot)
+        let instance = GlyphInstance(
+            origin: SIMD2(Float(originX), Float(originY)),
+            size: SIMD2(Float(width), Float(height)),
+            uvOrigin: uv.origin,
+            uvSize: uv.size,
+            color: SIMD4(alpha, alpha, alpha, alpha),
+            atlasPage: slot.pageID
+        )
+        return .instance(ExtractedGlyph(
+            instance: instance,
+            contentOrigin: CGPoint(x: request.fragmentFrame.minX, y: request.fragmentFrame.minY + baselineY),
+            stringIndex: run.stringIndexRange.lowerBound,
+            isColor: true,
+            matrixHash: run.matrixHash,
+            glyph: 0
+        ))
+    }
+
+    /// Cache key for a whole-run tile. `subpixel: 1` is the run-fallback discriminator (real glyphs
+    /// always use bucket 0), so these never collide with per-glyph `GlyphKey`s.
+    static func runFallbackKey(_ run: PreparedRun, request: GlyphExtractRequest) -> GlyphKey {
+        let pointSize = CTFontGetSize(run.font)
+        let pixelSize = UInt16(clamping: Int((pointSize * request.scale * 64).rounded()))
+        var hasher = Hasher()
+        hasher.combine(run.matrixHash)
+        hasher.combine(run.rawGlyphs)
+        for position in run.rawPositions {
+            hasher.combine(Int((position.x * 4).rounded()))
+            hasher.combine(Int((position.y * 4).rounded()))
+        }
+        hasher.combine(run.runColor.x)
+        hasher.combine(run.runColor.y)
+        hasher.combine(run.runColor.z)
+        hasher.combine(run.runColor.w)
+        if let shadow = run.shadow {
+            hasher.combine(Int((shadow.shadowBlurRadius * 16).rounded()))
+            hasher.combine(Int((shadow.shadowOffset.width * 16).rounded()))
+            hasher.combine(Int((shadow.shadowOffset.height * 16).rounded()))
+        }
+        return GlyphKey(
+            fontID: GlyphKey.fontID(for: run.font),
+            glyph: 0,
+            pixelSize: pixelSize,
+            matrixHash: UInt64(truncatingIfNeeded: hasher.finalize()),
+            scale: UInt8(clamping: max(1, Int(request.scale.rounded()))),
+            subpixel: 1,
+            isColor: true
+        )
+    }
+
+    static func runIsFocused(_ range: Range<Int>, ranges: [NSRange]) -> Bool {
+        ranges.contains { NSIntersectionRange($0, NSRange(range)).length > 0 }
+    }
+
+    static func resolveCGColor(_ color: NSColor, appearance: NSAppearance?) -> CGColor {
+        guard let appearance else {
+            return color.cgColor
+        }
+        var resolved = color.cgColor
+        appearance.performAsCurrentDrawingAppearance {
+            resolved = color.cgColor
+        }
+        return resolved
     }
 
     static func uvRect(for slot: GlyphAtlasSlot) -> (origin: SIMD2<Float>, size: SIMD2<Float>) {

@@ -259,7 +259,7 @@ final class GlyphRunExtractorTests: XCTestCase {
         XCTAssertNotEqual(firstOrigins, secondOrigins)
     }
 
-    func testShadowRunIsSkipped() throws {
+    func testShadowRunFallsBackToOneRunTile() throws {
         let atlas = try makeAtlas()
         let font = makeMenlo(pointSize: 16)
         let shadow = NSShadow()
@@ -267,8 +267,65 @@ final class GlyphRunExtractorTests: XCTestCase {
         shadow.shadowBlurRadius = 2
         let line = makeLine("Hi", font: font, extra: [.shadow: shadow])
         let result = extract(line: line, font: font, atlas: atlas, metrics: lineMetrics(line))
+        XCTAssertTrue(result.skips.isEmpty, "the shadow run should be rasterized, not dropped")
+        XCTAssertEqual(result.glyphs.count, 1, "one BGRA tile for the whole run")
+        let fallback = try XCTUnwrap(result.glyphs.first)
+        XCTAssertTrue(fallback.isColor)
+        XCTAssertEqual(fallback.instance.color, SIMD4<Float>(1, 1, 1, 1))
+        XCTAssertGreaterThan(fallback.instance.size.x, 0)
+        XCTAssertEqual(atlas.colorPageCount, 1, "tile lands on a BGRA color page")
+    }
+
+    func testShadowRunFallbackTileIsCachedByKey() throws {
+        let atlas = try makeAtlas()
+        let font = makeMenlo(pointSize: 16)
+        let shadow = NSShadow()
+        shadow.shadowBlurRadius = 1.5
+        let line = makeLine("cache", font: font, extra: [.shadow: shadow])
+        let metrics = lineMetrics(line)
+        _ = extract(line: line, font: font, atlas: atlas, metrics: metrics)
+        let missesAfterFirst = atlas.missCount
+        let second = extract(line: line, font: font, atlas: atlas, metrics: metrics)
+        XCTAssertEqual(second.glyphs.count, 1)
+        XCTAssertEqual(atlas.missCount, missesAfterFirst, "second extract must reuse the cached run tile")
+    }
+
+    func testOversizeGlyphFallsBackToRunTile() throws {
+        let atlas = try makeAtlas()
+        // 400 pt glyphs exceed the 256 px per-glyph cap even at 1x.
+        let font = makeMenlo(pointSize: 400)
+        let line = makeLine("W", font: font)
+        let result = extract(line: line, font: font, atlas: atlas, metrics: lineMetrics(line), scale: 1)
+        XCTAssertTrue(result.skips.isEmpty)
+        XCTAssertEqual(result.glyphs.count, 1)
+        XCTAssertTrue(try XCTUnwrap(result.glyphs.first).isColor)
+    }
+
+    func testShadowRunFallbackRespectsPerFrameRasterCap() throws {
+        let atlas = try makeAtlas()
+        let font = makeMenlo(pointSize: 16)
+        let shadow = NSShadow()
+        shadow.shadowBlurRadius = 1
+        let line = makeLine("x", font: font, extra: [.shadow: shadow])
+        var exhausted = GlyphRasterBudget(limit: 0)
+        let request = GlyphExtractRequest(
+            line: line,
+            fragmentFrame: CGRect(origin: .zero, size: lineMetrics(line).scaled),
+            descent: lineMetrics(line).descent,
+            baseSize: lineMetrics(line).base,
+            scaledSize: lineMetrics(line).scaled,
+            unfocusedAlpha: 1,
+            focusedRanges: [],
+            scale: 2,
+            emitRect: CGRect(x: -10_000, y: -10_000, width: 20_000, height: 20_000),
+            atlasWarmRect: .infinite,
+            fallbackFont: font,
+            fallbackColor: .white,
+            appearance: nil
+        )
+        let result = GlyphRunExtractor.extract(request, atlas: atlas, budget: &exhausted)
         XCTAssertTrue(result.glyphs.isEmpty)
-        XCTAssertEqual(result.skips.map(\.reason), [.shadow])
+        XCTAssertEqual(result.skips.map(\.reason), [.rasterCap])
     }
 
     func testFocusAlphaDimsUnfocusedGlyphs() throws {
