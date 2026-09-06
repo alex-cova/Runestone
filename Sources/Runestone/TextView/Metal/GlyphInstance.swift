@@ -18,7 +18,7 @@ extension GlyphInstance: Equatable, Sendable {}
 
 /// Shared-storage instance buffer. Grows 16k → 128k by doubling; `compact()` returns to 16k.
 /// `count` is the number of instances copied to GPU memory. Overflow past 128k uses extra buffers
-/// so glyphs are not dropped and `count` never exceeds the copied GPU length.
+/// so glyphs are not dropped. Draw `metalBuffer` with `instanceCount: primaryCount`, not `count`.
 @MainActor
 final class GlyphInstanceBuffer {
     nonisolated static let minimumCapacity = 16_384
@@ -30,6 +30,8 @@ final class GlyphInstanceBuffer {
     private(set) var capacity: Int
     /// Instances copied into `metalBuffer` + `overflowBuffers`.
     private(set) var count = 0
+    /// Instances in `metalBuffer`. Use this as `instanceCount` when drawing the primary buffer.
+    private(set) var primaryCount = 0
     /// Last `write` payload. Not truncated when `count` exceeds `maximumCapacity`.
     private(set) var instances: [GlyphInstance] = []
 
@@ -51,7 +53,7 @@ final class GlyphInstanceBuffer {
             grow(to: needed)
         }
         let stride = MemoryLayout<GlyphInstance>.stride
-        let primaryCount = min(instances.count, capacity)
+        primaryCount = min(instances.count, capacity)
         copy(instances, start: 0, count: primaryCount, to: metalBuffer)
         var copied = primaryCount
         var offset = primaryCount
@@ -72,6 +74,7 @@ final class GlyphInstanceBuffer {
     func compact() {
         instances = []
         count = 0
+        primaryCount = 0
         overflowBuffers = []
         guard capacity != Self.minimumCapacity else {
             return

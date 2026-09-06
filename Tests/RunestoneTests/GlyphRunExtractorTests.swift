@@ -310,24 +310,33 @@ final class GlyphRunExtractorTests: XCTestCase {
         buffer.write(Array(repeating: dummy, count: 20_000))
         XCTAssertEqual(buffer.capacity, 32_768)
         XCTAssertEqual(buffer.count, 20_000)
+        XCTAssertEqual(buffer.primaryCount, 20_000)
         XCTAssertEqual(buffer.instances.count, 20_000)
 
         buffer.write(Array(repeating: dummy, count: 40_000))
         XCTAssertEqual(buffer.capacity, 65_536)
         XCTAssertEqual(buffer.count, 40_000)
+        XCTAssertEqual(buffer.primaryCount, 40_000)
 
         buffer.write(Array(repeating: dummy, count: 70_000))
         XCTAssertEqual(buffer.capacity, 131_072)
+        XCTAssertEqual(buffer.primaryCount, 70_000)
 
         buffer.write(Array(repeating: dummy, count: GlyphInstanceBuffer.maximumCapacity + 1))
         XCTAssertEqual(buffer.capacity, GlyphInstanceBuffer.maximumCapacity)
         XCTAssertEqual(buffer.instances.count, GlyphInstanceBuffer.maximumCapacity + 1)
         XCTAssertEqual(buffer.count, GlyphInstanceBuffer.maximumCapacity + 1)
+        XCTAssertEqual(buffer.primaryCount, GlyphInstanceBuffer.maximumCapacity)
+        XCTAssertLessThan(buffer.primaryCount, buffer.count)
         XCTAssertEqual(buffer.overflowBuffers.count, 1)
+        let overflowCount = buffer.overflowBuffers[0].length / MemoryLayout<GlyphInstance>.stride
+        XCTAssertEqual(overflowCount, 1)
+        XCTAssertEqual(buffer.primaryCount + overflowCount, buffer.count)
 
         buffer.compact()
         XCTAssertEqual(buffer.capacity, GlyphInstanceBuffer.minimumCapacity)
         XCTAssertEqual(buffer.count, 0)
+        XCTAssertEqual(buffer.primaryCount, 0)
         XCTAssertTrue(buffer.instances.isEmpty)
         XCTAssertTrue(buffer.overflowBuffers.isEmpty)
     }
