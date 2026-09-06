@@ -901,7 +901,7 @@ import CoreText
             textInputView.isMetalRenderingEnabled = newValue
         }
     }
-    /// `true` when this instance is currently painting via Metal.
+    /// `true` when this instance is currently presenting the Metal canvas.
     public var isMetalRenderingActive: Bool {
         textInputView.isMetalRenderingActive
     }

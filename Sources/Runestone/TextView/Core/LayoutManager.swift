@@ -547,6 +547,14 @@ extension LayoutManager {
             let collapsedFold = foldingController?.collapsedFold(withHeaderLineID: line.id)
             let lineRange = NSRange(location: line.location, length: line.data.length)
             let focusedLineRanges = focusModeController?.focusedRanges(forLineWithID: line.id, lineRange: lineRange) ?? []
+            // Apply marked text before upsert so `LineFragmentPaintSpec.decorations` is current.
+            if let markedRange = markedRange {
+                let markedLineRange = NSRange(location: lineController.line.location, length: lineController.line.data.totalLength)
+                let localMarkedRange = markedRange.local(to: markedLineRange)
+                lineController.setMarkedTextOnLineFragments(localMarkedRange)
+            } else {
+                lineController.setMarkedTextOnLineFragments(nil)
+            }
             for (lineFragmentIndex, lineFragmentController) in lineFragmentControllers.enumerated() {
                 let lineFragment = lineFragmentController.lineFragment
                 var lineFragmentFrame: CGRect = .zero
@@ -567,14 +575,6 @@ extension LayoutManager {
                     lineFragmentFrame: &lineFragmentFrame
                 )
                 maxY = lineFragmentFrame.maxY
-            }
-            // The line fragments have now been created and we can set the marked and highlighted ranges on them.
-            if let markedRange = markedRange {
-                let lineRange = NSRange(location: lineController.line.location, length: lineController.line.data.totalLength)
-                let localMarkedRange = markedRange.local(to: lineRange)
-                lineController.setMarkedTextOnLineFragments(localMarkedRange)
-            } else {
-                lineController.setMarkedTextOnLineFragments(nil)
             }
             let stoppedGeneratingLineFragments = lineFragmentControllers.isEmpty
             let lineSize = CGSize(width: lineController.lineWidth, height: lineController.lineHeight)

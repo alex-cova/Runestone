@@ -5,16 +5,12 @@ import Foundation
 @MainActor
 protocol LinePaintBackend: AnyObject {
     var trackedFragmentIDs: Set<LineFragmentID> { get }
-    /// Full spec. Glyph extract runs if `CTLine` identity or `emitRect` (`canvas.frame`
-    /// from the last `setViewport`) changed; decorations always rebuild from `spec.decorations`.
-    /// The backend does not read `LineFragmentController` — LayoutManager supplies the payload.
+    /// LayoutManager supplies the payload; the backend does not read `LineFragmentController`.
     func upsertFragment(_ spec: LineFragmentPaintSpec)
     func removeFragments(ids: Set<LineFragmentID>)
     func invalidateGlyphs(forLineIDs ids: Set<DocumentLineNodeID>)
     func setViewport(_ viewport: CGRect, canvasFrame: CGRect, scale: CGFloat)
-    /// Forwards to the canvas; does not call `nextDrawable()`.
     func setNeedsDisplay()
-    /// Drop grown instance buffers back to the 16k start size (off-screen / hidden).
     func compactInstanceBuffers()
 }
 

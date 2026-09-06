@@ -69,9 +69,7 @@ final class MetalContext {
         memoryPressureSource = source
     }
 
-    private func handleMemoryPressure() {
-        // Glyph-atlas eviction is wired in a later PR.
-    }
+    private func handleMemoryPressure() {}
 
     private func logFailureOnce(_ message: String) {
         guard !didLogFailure else {

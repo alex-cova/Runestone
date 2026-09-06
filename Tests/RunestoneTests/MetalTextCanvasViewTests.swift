@@ -108,11 +108,7 @@ private extension MetalTextCanvasViewTests {
         guard let linesIndex = subviews.firstIndex(where: { view in
             view.subviews.contains { $0 is LineFragmentView }
         }) else {
-            // Viewport may be empty before layout produces fragments; still require canvas below
-            // whatever container sits after it if present.
-            if canvasIndex + 1 < subviews.count {
-                XCTAssertGreaterThan(canvasIndex + 1, canvasIndex)
-            }
+            XCTFail("Expected a line-fragment container after layoutIfNeeded")
             return
         }
         XCTAssertLessThan(canvasIndex, linesIndex, "Metal canvas must sit behind fragment views")

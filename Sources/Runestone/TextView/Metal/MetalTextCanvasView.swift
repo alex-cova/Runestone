@@ -11,6 +11,8 @@ final class MetalTextCanvasView: UIView {
     var onRenderingFailure: (() -> Void)?
 
     private var isDisplayDirty = false
+    private var drawableRetryCount = 0
+    private static let maxDrawableRetries = 3
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -110,21 +112,32 @@ private extension MetalTextCanvasView {
             return
         }
         guard let drawable = metalLayer.nextDrawable() else {
-            isDisplayDirty = true
+            if drawableRetryCount < Self.maxDrawableRetries {
+                drawableRetryCount += 1
+                setNeedsDisplay()
+            }
             return
         }
+        drawableRetryCount = 0
         let descriptor = MTLRenderPassDescriptor()
         descriptor.colorAttachments[0].texture = drawable.texture
         descriptor.colorAttachments[0].loadAction = .clear
         descriptor.colorAttachments[0].storeAction = .store
         descriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else {
+        if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) {
+            encoder.endEncoding()
+        } else {
+            // Still present so CAMetalLayer's drawable pool is released, then fall back.
             context.markUnavailable(reason: "Failed to create Metal render command encoder")
+            commandBuffer.present(drawable)
+            commandBuffer.commit()
+            commandBuffer.waitUntilScheduled()
             onRenderingFailure?()
             return
         }
-        encoder.endEncoding()
         commandBuffer.present(drawable)
         commandBuffer.commit()
+        // presentsWithTransaction presents at CA commit; the GPU must have the buffer first.
+        commandBuffer.waitUntilScheduled()
     }
 }
