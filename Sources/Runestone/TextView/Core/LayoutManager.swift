@@ -617,7 +617,10 @@ extension LayoutManager {
                 layoutLineFragmentView(
                     for: lineFragmentController,
                     lineID: line.id,
+                    lineLocation: line.location,
                     lineYPosition: lineYPosition,
+                    isLastLineFragment: lineFragmentIndex == lineFragmentControllers.count - 1,
+                    lineEndsWithLineBreak: line.data.delimiterLength > 0,
                     lineFragmentFrame: &lineFragmentFrame
                 )
                 maxY = lineFragmentFrame.maxY
@@ -704,23 +707,43 @@ extension LayoutManager {
             guard let lineController = lineControllerStorage[lineID] else {
                 continue
             }
-            let lineYPosition = lineController.line.yPosition
-            for lineFragmentController in lineController.lineFragmentControllers(in: layoutBounds) {
+            let line = lineController.line
+            let lineYPosition = line.yPosition
+            let controllers = lineController.lineFragmentControllers(in: layoutBounds)
+            for (index, lineFragmentController) in controllers.enumerated() {
                 var frame: CGRect = .zero
                 layoutLineFragmentView(
                     for: lineFragmentController,
                     lineID: lineID,
+                    lineLocation: line.location,
                     lineYPosition: lineYPosition,
+                    isLastLineFragment: index == controllers.count - 1,
+                    lineEndsWithLineBreak: line.data.delimiterLength > 0,
                     lineFragmentFrame: &frame
                 )
             }
         }
     }
 
+    /// Whether any invisible-character marker could be visible. Skips the (potentially large)
+    /// per-fragment substring fetch when the feature is entirely off.
+    private var invisibleCharactersActive: Bool {
+        let configuration = invisibleCharacterConfiguration
+        return configuration.showTabs
+            || configuration.showSpaces
+            || configuration.showNonBreakingSpaces
+            || configuration.showLineBreaks
+            || configuration.showSoftLineBreaks
+            || !configuration.warningCharacters.isEmpty
+    }
+
     private func layoutLineFragmentView(
         for lineFragmentController: LineFragmentController,
         lineID: DocumentLineNodeID,
+        lineLocation: Int,
         lineYPosition: CGFloat,
+        isLastLineFragment: Bool,
+        lineEndsWithLineBreak: Bool,
         lineFragmentFrame: inout CGRect
     ) {
         let lineFragment = lineFragmentController.lineFragment
@@ -728,6 +751,18 @@ extension LayoutManager {
         let lineFragmentWidth = contentSizeService.contentWidth - leadingLineSpacing - textContainerInset.right
         let lineFragmentSize = CGSize(width: lineFragmentWidth, height: lineFragment.scaledSize.height)
         lineFragmentFrame = CGRect(origin: lineFragmentOrigin, size: lineFragmentSize)
+        var invisibles = InvisibleCharacterLayout.empty
+        if invisibleCharactersActive {
+            let fragmentRange = NSRange(location: lineLocation + lineFragment.visibleRange.location,
+                                       length: lineFragment.visibleRange.length)
+            if let fragmentString = stringView.substring(in: fragmentRange) {
+                invisibles = InvisibleCharacterLayout.resolve(
+                    fragmentString: fragmentString,
+                    lineFragment: lineFragment,
+                    configuration: invisibleCharacterConfiguration
+                )
+            }
+        }
         let spec = LineFragmentPaintSpec(
             id: lineFragment.id,
             lineID: lineID,
@@ -743,7 +778,15 @@ extension LayoutManager {
                 markedRadius: lineFragmentController.markedTextBackgroundCornerRadius,
                 unfocusedAlpha: lineFragmentController.unfocusedAlpha,
                 focusedRanges: lineFragmentController.focusedRanges,
-                foldPlaceholder: lineFragmentController.foldPlaceholderText
+                foldPlaceholder: lineFragmentController.foldPlaceholderText,
+                foldPlaceholderColor: lineFragmentController.foldPlaceholderColor,
+                foldPlaceholderBackgroundColor: lineFragmentController.foldPlaceholderBackgroundColor,
+                fragmentRangeUpperBound: lineFragment.range.upperBound,
+                endsWithLineBreak: isLastLineFragment && lineEndsWithLineBreak,
+                invisibles: invisibles,
+                invisibleFont: invisibleCharacterConfiguration.font,
+                invisibleTextColor: invisibleCharacterConfiguration.textColor,
+                invisibleWarningColor: invisibleCharacterConfiguration.warningBorderColor
             ),
             fallbackFont: theme.font as CTFont,
             fallbackColor: theme.textColor,

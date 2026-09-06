@@ -8,14 +8,17 @@ import simd
 /// layer-backed `LineFragmentView` per fragment.
 ///
 /// `LayoutManager` drives it exactly like the CG backend: `upsertFragment` per visible fragment,
-/// `removeFragments` for the ones that scrolled out, `setViewport` once per layout pass. Glyphs are
-/// extracted with `GlyphRunExtractor` (skipped when neither the `CTLine` identity nor the cull rect
-/// changed) into per-atlas-page instance buffers, then drawn in a single render pass from
-/// `MetalTextCanvasView.draw(_:)`.
+/// `removeFragments` for the ones that scrolled out, `setViewport` once per layout pass.
 ///
-/// Decoration *drawing* (highlights, marked text, invisibles, fold chips) lands in PR 5; this
-/// backend stores `LineFragmentDecorations` on each fragment but does not yet emit decoration
-/// geometry. The feature flag stays default-off until then.
+/// Per fragment it keeps:
+/// - text glyph instances from `GlyphRunExtractor` (re-extracted only when the `CTLine` identity or
+///   the cull rect changed), and
+/// - decoration geometry from `MetalDecorationBuilder` (rebuilt every upsert): rounded/stroked
+///   `SolidInstance`s, squiggle `DecorationVertex` triangles, and invisible-character / fold-text
+///   glyphs.
+///
+/// `encode(into:)` draws one pass, in Core Graphics order: highlight & marked fills, squiggles,
+/// text + invisibles, then warning borders / fold chips / fold text on top.
 @MainActor
 final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
     private struct GPUFragment {
@@ -23,9 +26,10 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         var lineID: DocumentLineNodeID
         var cacheKey: GlyphExtractCacheKey?
         var glyphs: [GlyphInstance]
-        var decorations: LineFragmentDecorations
+        var decorations: MetalDecorationGeometry
     }
 
+    /// Triple-buffered per-atlas-page glyph instances.
     private final class PageBucket {
         var buffers: [GlyphInstanceBuffer]
         var cursor = 0
@@ -43,16 +47,76 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         }
     }
 
+    /// Triple-buffered raw struct array (`SolidInstance` or `DecorationVertex`).
+    private final class DecorationBuffer {
+        private let device: MTLDevice
+        private let stride: Int
+        private var buffers: [MTLBuffer?] = [nil, nil, nil]
+        private var capacities = [0, 0, 0]
+        private var cursor = 0
+        private(set) var count = 0
+
+        init(device: MTLDevice, stride: Int) {
+            self.device = device
+            self.stride = stride
+        }
+
+        var current: MTLBuffer? {
+            buffers[cursor]
+        }
+
+        func write<T>(_ items: [T]) {
+            cursor = (cursor + 1) % buffers.count
+            count = items.count
+            guard !items.isEmpty else {
+                return
+            }
+            let needed = items.count * stride
+            if capacities[cursor] < needed {
+                let capacity = max(needed, 4096)
+                if let buffer = device.makeBuffer(length: capacity, options: .storageModeShared) {
+                    buffers[cursor] = buffer
+                    capacities[cursor] = capacity
+                } else {
+                    buffers[cursor] = nil
+                    capacities[cursor] = 0
+                }
+            }
+            guard let buffer = buffers[cursor] else {
+                count = 0
+                return
+            }
+            items.withUnsafeBytes { raw in
+                if let base = raw.baseAddress {
+                    buffer.contents().copyMemory(from: base, byteCount: needed)
+                }
+            }
+        }
+
+        func compact() {
+            buffers = [nil, nil, nil]
+            capacities = [0, 0, 0]
+            count = 0
+        }
+    }
+
     private weak var canvasView: MetalTextCanvasView?
     private let device: MTLDevice
     private let atlas: GlyphAtlas
     private let coveragePipeline: MTLRenderPipelineState
     private let colorPipeline: MTLRenderPipelineState
+    private let solidPipeline: MTLRenderPipelineState
+    private let linePipeline: MTLRenderPipelineState
     private let sampler: MTLSamplerState
 
     private var fragments: [LineFragmentID: GPUFragment] = [:]
-    private var pageBuckets: [UInt32: PageBucket] = [:]
-    private var pageOrder: [UInt32] = []
+    private var textPageBuckets: [UInt32: PageBucket] = [:]
+    private var textPageOrder: [UInt32] = []
+    private var overlayPageBuckets: [UInt32: PageBucket] = [:]
+    private var overlayPageOrder: [UInt32] = []
+    private lazy var underlaySolidBuffer = DecorationBuffer(device: device, stride: MemoryLayout<SolidInstance>.stride)
+    private lazy var overlaySolidBuffer = DecorationBuffer(device: device, stride: MemoryLayout<SolidInstance>.stride)
+    private lazy var underlayLineBuffer = DecorationBuffer(device: device, stride: MemoryLayout<DecorationVertex>.stride)
     private var needsInstanceRebuild = false
     private var rasterBudget = GlyphRasterBudget()
 
@@ -69,15 +133,18 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         guard let providedAtlas = atlas ?? GlyphAtlas(context: context) else {
             return nil
         }
-        guard let coverage = Self.makePipeline(
-            device: device,
-            library: library,
-            fragmentFunction: "runestone_glyph_coverage_fragment"
-        ), let color = Self.makePipeline(
-            device: device,
-            library: library,
-            fragmentFunction: "runestone_glyph_color_fragment"
-        ) else {
+        guard let coverage = Self.makePipeline(device: device, library: library,
+                                               vertexFunction: "runestone_glyph_vertex",
+                                               fragmentFunction: "runestone_glyph_coverage_fragment"),
+              let color = Self.makePipeline(device: device, library: library,
+                                            vertexFunction: "runestone_glyph_vertex",
+                                            fragmentFunction: "runestone_glyph_color_fragment"),
+              let solid = Self.makePipeline(device: device, library: library,
+                                            vertexFunction: "runestone_solid_vertex",
+                                            fragmentFunction: "runestone_solid_fragment"),
+              let line = Self.makePipeline(device: device, library: library,
+                                           vertexFunction: "runestone_decoration_line_vertex",
+                                           fragmentFunction: "runestone_decoration_line_fragment") else {
             return nil
         }
         let samplerDescriptor = MTLSamplerDescriptor()
@@ -93,6 +160,8 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         self.atlas = providedAtlas
         self.coveragePipeline = coverage
         self.colorPipeline = color
+        self.solidPipeline = solid
+        self.linePipeline = line
         self.sampler = sampler
         canvasView.glyphEncoder = self
     }
@@ -110,12 +179,10 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             lineID: spec.lineID,
             cacheKey: nil,
             glyphs: [],
-            decorations: spec.decorations
+            decorations: MetalDecorationGeometry()
         )
         fragment.frame = spec.frame
         fragment.lineID = spec.lineID
-        // Decorations always refresh (PR 5 renders them); glyphs only when the CTLine or cull moved.
-        fragment.decorations = spec.decorations
         if GlyphExtractCacheKey.shouldRebuild(previous: fragment.cacheKey, line: spec.line, emitRect: emitRect) {
             let request = GlyphExtractRequest(
                 line: spec.line,
@@ -136,6 +203,13 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             fragment.glyphs = result.instances
             fragment.cacheKey = GlyphExtractCacheKey(line: spec.line, emitRect: emitRect)
         }
+        // Decorations rebuild every upsert (display-only invalidation re-upserts a fresh spec).
+        fragment.decorations = MetalDecorationBuilder.build(
+            spec: spec,
+            atlas: atlas,
+            scale: scale,
+            budget: &rasterBudget
+        )
         fragments[spec.id] = fragment
         needsInstanceRebuild = true
         canvasView?.setNeedsDisplay()
@@ -184,11 +258,15 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
     }
 
     func compactInstanceBuffers() {
-        for bucket in pageBuckets.values {
-            for buffer in bucket.buffers {
-                buffer.compact()
-            }
+        for bucket in textPageBuckets.values {
+            bucket.buffers.forEach { $0.compact() }
         }
+        for bucket in overlayPageBuckets.values {
+            bucket.buffers.forEach { $0.compact() }
+        }
+        underlaySolidBuffer.compact()
+        overlaySolidBuffer.compact()
+        underlayLineBuffer.compact()
     }
 
     // MARK: - MetalCanvasGlyphEncoding
@@ -198,48 +276,15 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             if needsInstanceRebuild {
                 rebuildInstanceBuffers()
             }
-            guard !pageOrder.isEmpty, canvasFrame.width > 0, canvasFrame.height > 0 else {
+            guard canvasFrame.width > 0, canvasFrame.height > 0 else {
                 return
             }
             var uniforms = MetalProjection.uniforms(canvasFrame: canvasFrame, scale: scale)
-            let stride = MemoryLayout<GlyphInstance>.stride
-            for pageID in pageOrder {
-                guard let bucket = pageBuckets[pageID],
-                      let texture = atlas.pageTexture(id: pageID) else {
-                    continue
-                }
-                let buffer = bucket.current
-                guard buffer.primaryCount > 0 || !buffer.overflowBuffers.isEmpty else {
-                    continue
-                }
-                let pipeline = atlas.isColorPage(id: pageID) ? colorPipeline : coveragePipeline
-                encoder.setRenderPipelineState(pipeline)
-                encoder.setVertexBytes(&uniforms, length: MemoryLayout<MetalProjectionUniforms>.stride, index: 1)
-                encoder.setFragmentTexture(texture, index: 0)
-                encoder.setFragmentSamplerState(sampler, index: 0)
-                if buffer.primaryCount > 0 {
-                    encoder.setVertexBuffer(buffer.metalBuffer, offset: 0, index: 0)
-                    encoder.drawPrimitives(
-                        type: .triangleStrip,
-                        vertexStart: 0,
-                        vertexCount: 4,
-                        instanceCount: buffer.primaryCount
-                    )
-                }
-                for overflow in buffer.overflowBuffers {
-                    let overflowCount = overflow.length / stride
-                    guard overflowCount > 0 else {
-                        continue
-                    }
-                    encoder.setVertexBuffer(overflow, offset: 0, index: 0)
-                    encoder.drawPrimitives(
-                        type: .triangleStrip,
-                        vertexStart: 0,
-                        vertexCount: 4,
-                        instanceCount: overflowCount
-                    )
-                }
-            }
+            drawSolids(underlaySolidBuffer, encoder: encoder, uniforms: &uniforms)
+            drawLines(underlayLineBuffer, encoder: encoder, uniforms: &uniforms)
+            drawGlyphBuckets(textPageBuckets, order: textPageOrder, encoder: encoder, uniforms: &uniforms)
+            drawSolids(overlaySolidBuffer, encoder: encoder, uniforms: &uniforms)
+            drawGlyphBuckets(overlayPageBuckets, order: overlayPageOrder, encoder: encoder, uniforms: &uniforms)
         }
         needsInstanceRebuild = false
         rasterBudget = GlyphRasterBudget()
@@ -250,14 +295,15 @@ private extension MetalRenderer {
     static func makePipeline(
         device: MTLDevice,
         library: MTLLibrary,
+        vertexFunction: String,
         fragmentFunction: String
     ) -> MTLRenderPipelineState? {
-        guard let vertexFunction = library.makeFunction(name: "runestone_glyph_vertex"),
+        guard let vertex = library.makeFunction(name: vertexFunction),
               let fragment = library.makeFunction(name: fragmentFunction) else {
             return nil
         }
         let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.vertexFunction = vertexFunction
+        descriptor.vertexFunction = vertex
         descriptor.fragmentFunction = fragment
         let attachment = descriptor.colorAttachments[0]
         attachment?.pixelFormat = .bgra8Unorm
@@ -272,41 +318,126 @@ private extension MetalRenderer {
         return try? device.makeRenderPipelineState(descriptor: descriptor)
     }
 
-    func rebuildInstanceBuffers() {
-        var instancesByPage: [UInt32: [GlyphInstance]] = [:]
+    private func rebuildInstanceBuffers() {
+        var textByPage: [UInt32: [GlyphInstance]] = [:]
+        var overlayByPage: [UInt32: [GlyphInstance]] = [:]
+        var underlaySolids: [SolidInstance] = []
+        var overlaySolids: [SolidInstance] = []
+        var underlayLines: [DecorationVertex] = []
         for fragment in fragments.values {
             for instance in fragment.glyphs where instance.atlasPage != 0 {
-                instancesByPage[instance.atlasPage, default: []].append(instance)
+                textByPage[instance.atlasPage, default: []].append(instance)
             }
+            for instance in fragment.decorations.symbolGlyphs where instance.atlasPage != 0 {
+                textByPage[instance.atlasPage, default: []].append(instance)
+            }
+            for instance in fragment.decorations.overlayGlyphs where instance.atlasPage != 0 {
+                overlayByPage[instance.atlasPage, default: []].append(instance)
+            }
+            underlaySolids.append(contentsOf: fragment.decorations.underlaySolids)
+            overlaySolids.append(contentsOf: fragment.decorations.overlaySolids)
+            underlayLines.append(contentsOf: fragment.decorations.underlayTriangles)
         }
-        // Drop buckets for atlas pages that were evicted (their `pageID` never comes back — the
-        // atlas hands out monotonic ids), and flush the rest that have no instances this frame.
-        for pageID in Array(pageBuckets.keys) {
-            guard let bucket = pageBuckets[pageID] else {
+        rebuildGlyphBuckets(from: textByPage, buckets: &textPageBuckets, order: &textPageOrder)
+        rebuildGlyphBuckets(from: overlayByPage, buckets: &overlayPageBuckets, order: &overlayPageOrder)
+        underlaySolidBuffer.write(underlaySolids)
+        overlaySolidBuffer.write(overlaySolids)
+        underlayLineBuffer.write(underlayLines)
+    }
+
+    private func rebuildGlyphBuckets(
+        from instancesByPage: [UInt32: [GlyphInstance]],
+        buckets: inout [UInt32: PageBucket],
+        order: inout [UInt32]
+    ) {
+        for pageID in Array(buckets.keys) {
+            guard let bucket = buckets[pageID] else {
                 continue
             }
             if atlas.pageTexture(id: pageID) == nil {
-                pageBuckets.removeValue(forKey: pageID)
+                buckets.removeValue(forKey: pageID)
             } else if instancesByPage[pageID] == nil {
                 bucket.advance()
                 bucket.current.write([])
             }
         }
-        pageOrder = []
+        order = []
         for (pageID, instances) in instancesByPage {
             let bucket: PageBucket
-            if let existing = pageBuckets[pageID] {
+            if let existing = buckets[pageID] {
                 bucket = existing
             } else if let created = makeBucket() {
-                pageBuckets[pageID] = created
+                buckets[pageID] = created
                 bucket = created
             } else {
                 continue
             }
             bucket.advance()
             bucket.current.write(instances)
-            pageOrder.append(pageID)
+            order.append(pageID)
         }
+    }
+
+    private func drawGlyphBuckets(
+        _ buckets: [UInt32: PageBucket],
+        order: [UInt32],
+        encoder: MTLRenderCommandEncoder,
+        uniforms: inout MetalProjectionUniforms
+    ) {
+        let stride = MemoryLayout<GlyphInstance>.stride
+        for pageID in order {
+            guard let bucket = buckets[pageID], let texture = atlas.pageTexture(id: pageID) else {
+                continue
+            }
+            let buffer = bucket.current
+            guard buffer.primaryCount > 0 || !buffer.overflowBuffers.isEmpty else {
+                continue
+            }
+            encoder.setRenderPipelineState(atlas.isColorPage(id: pageID) ? colorPipeline : coveragePipeline)
+            encoder.setVertexBytes(&uniforms, length: MemoryLayout<MetalProjectionUniforms>.stride, index: 1)
+            encoder.setFragmentTexture(texture, index: 0)
+            encoder.setFragmentSamplerState(sampler, index: 0)
+            if buffer.primaryCount > 0 {
+                encoder.setVertexBuffer(buffer.metalBuffer, offset: 0, index: 0)
+                encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: buffer.primaryCount)
+            }
+            for overflow in buffer.overflowBuffers {
+                let overflowCount = overflow.length / stride
+                guard overflowCount > 0 else {
+                    continue
+                }
+                encoder.setVertexBuffer(overflow, offset: 0, index: 0)
+                encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: overflowCount)
+            }
+        }
+    }
+
+    private func drawSolids(
+        _ buffer: DecorationBuffer,
+        encoder: MTLRenderCommandEncoder,
+        uniforms: inout MetalProjectionUniforms
+    ) {
+        guard buffer.count > 0, let mtlBuffer = buffer.current else {
+            return
+        }
+        encoder.setRenderPipelineState(solidPipeline)
+        encoder.setVertexBuffer(mtlBuffer, offset: 0, index: 0)
+        encoder.setVertexBytes(&uniforms, length: MemoryLayout<MetalProjectionUniforms>.stride, index: 1)
+        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: buffer.count)
+    }
+
+    private func drawLines(
+        _ buffer: DecorationBuffer,
+        encoder: MTLRenderCommandEncoder,
+        uniforms: inout MetalProjectionUniforms
+    ) {
+        guard buffer.count > 0, let mtlBuffer = buffer.current else {
+            return
+        }
+        encoder.setRenderPipelineState(linePipeline)
+        encoder.setVertexBuffer(mtlBuffer, offset: 0, index: 0)
+        encoder.setVertexBytes(&uniforms, length: MemoryLayout<MetalProjectionUniforms>.stride, index: 1)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: buffer.count)
     }
 
     private func makeBucket() -> PageBucket? {

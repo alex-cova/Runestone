@@ -41,6 +41,16 @@ struct LineFragmentDecorations {
     var foldPlaceholder: String?
     var foldPlaceholderColor: UIColor = .secondaryLabelColor
     var foldPlaceholderBackgroundColor: UIColor = .quaternaryLabelColor
+    /// Fragment-local end of the fragment's character range (`LineFragment.range.upperBound`); with
+    /// `endsWithLineBreak` it decides whether a `.standard` highlight extends to the canvas edge.
+    var fragmentRangeUpperBound: Int = 0
+    var endsWithLineBreak: Bool = false
+    /// Resolved invisible-character markers for this fragment (empty when the feature is off). The
+    /// Metal backend does not read `InvisibleCharacterConfiguration`; `LayoutManager` resolves it.
+    var invisibles: InvisibleCharacterLayout = .empty
+    var invisibleFont: UIFont = .systemFont(ofSize: 12)
+    var invisibleTextColor: UIColor = .label
+    var invisibleWarningColor: UIColor = .systemRed
 }
 
 /// CG path: today's `ViewReuseQueue` + `LineFragmentView` drawing.

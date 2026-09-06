@@ -7,11 +7,6 @@ protocol LineFragmentRendererDelegate: AnyObject {
 }
 
 final class LineFragmentRenderer {
-    private enum HorizontalPosition {
-        case character(Int)
-        case endOfLine
-    }
-
     weak var delegate: LineFragmentRendererDelegate?
     var lineFragment: LineFragment
     let invisibleCharacterConfiguration: InvisibleCharacterConfiguration
@@ -294,31 +289,22 @@ private extension LineFragmentRenderer {
     }
 
     private func drawInvisibleCharacters(in string: String, context: CGContext) {
-        var indexInLineFragment = 0
-        for substring in string {
-            let indexInLine = lineFragment.visibleRange.location + indexInLineFragment
-            indexInLineFragment += substring.utf16.count
-            if invisibleCharacterConfiguration.warningCharacters.contains(substring) {
-                drawWarningBorder(at: .character(indexInLine), in: context)
-            }
-            if invisibleCharacterConfiguration.showSpaces && substring == Symbol.Character.space {
-                draw(invisibleCharacterConfiguration.spaceSymbol, at: .character(indexInLine))
-            } else if invisibleCharacterConfiguration.showNonBreakingSpaces && substring == Symbol.Character.nonBreakingSpace {
-                draw(invisibleCharacterConfiguration.nonBreakingSpaceSymbol, at: .character(indexInLine))
-            } else if invisibleCharacterConfiguration.showTabs && substring == Symbol.Character.tab {
-                draw(invisibleCharacterConfiguration.tabSymbol, at: .character(indexInLine))
-            } else if invisibleCharacterConfiguration.showLineBreaks && isLineBreak(substring) {
-                draw(invisibleCharacterConfiguration.lineBreakSymbol, at: .endOfLine)
-            } else if invisibleCharacterConfiguration.showSoftLineBreaks && substring == Symbol.Character.lineSeparator {
-                draw(invisibleCharacterConfiguration.softLineBreakSymbol, at: .endOfLine)
-            } else if invisibleCharacterConfiguration.warningCharacters.contains(substring) {
-                draw(String(substring), at: .character(indexInLine), color: invisibleCharacterConfiguration.warningBorderColor)
-            }
+        // Shared with the Metal decoration builder so the two paths cannot disagree on which
+        // markers appear or where they sit.
+        let layout = InvisibleCharacterLayout.resolve(
+            fragmentString: string,
+            lineFragment: lineFragment,
+            configuration: invisibleCharacterConfiguration
+        )
+        for warning in layout.warnings {
+            drawWarningBorder(atX: warning.x, in: context)
+        }
+        for mark in layout.symbols {
+            draw(mark.string, atX: mark.x, color: mark.color)
         }
     }
 
-    private func drawWarningBorder(at horizontalPosition: HorizontalPosition, in context: CGContext) {
-        let xPosition = xPosition(for: horizontalPosition)
+    private func drawWarningBorder(atX xPosition: CGFloat, in context: CGContext) {
         let size = CGSize(width: max(invisibleCharacterConfiguration.font.pointSize * 0.55, 6), height: invisibleCharacterConfiguration.font.pointSize)
         let rect = CGRect(x: xPosition, y: (lineFragment.scaledSize.height - size.height) / 2, width: size.width, height: size.height)
         let path = CGPath(roundedRect: rect, cornerWidth: 2, cornerHeight: 2, transform: nil)
@@ -330,25 +316,15 @@ private extension LineFragmentRenderer {
         context.restoreGState()
     }
 
-    private func draw(_ symbol: String, at horizontalPosition: HorizontalPosition, color: UIColor? = nil) {
+    private func draw(_ symbol: String, atX xPosition: CGFloat, color: UIColor? = nil) {
         let attrs: [NSAttributedString.Key: Any] = [
             .foregroundColor: color ?? invisibleCharacterConfiguration.textColor,
             .font: invisibleCharacterConfiguration.font
         ]
         let size = symbol.size(withAttributes: attrs)
-        let xPosition = xPosition(for: horizontalPosition)
         let yPosition = (lineFragment.scaledSize.height - size.height) / 2
         let rect = CGRect(x: xPosition, y: yPosition, width: size.width, height: size.height)
         symbol.draw(in: rect, withAttributes: attrs)
-    }
-
-    private func xPosition(for horizontalPosition: HorizontalPosition) -> CGFloat {
-        switch horizontalPosition {
-        case .character(let index):
-            return CTLineGetOffsetForStringIndex(lineFragment.line, index, nil)
-        case .endOfLine:
-            return CGFloat(CTLineGetTypographicBounds(lineFragment.line, nil, nil, nil))
-        }
     }
 
     private func shouldHighlightLineEnding(for highlightedRangeFragment: HighlightedRangeFragment) -> Bool {

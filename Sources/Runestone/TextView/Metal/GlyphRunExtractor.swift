@@ -441,34 +441,7 @@ private extension GlyphRunExtractor {
     }
 
     static func resolveColor(attributes: [NSAttributedString.Key: Any], request: GlyphExtractRequest) -> SIMD4<Float> {
-        let color: NSColor
-        if let nsColor = attributes[.foregroundColor] as? NSColor {
-            color = nsColor
-        } else {
-            color = request.fallbackColor
-        }
-        return premultipliedSRGB(color, appearance: request.appearance)
-    }
-
-    static func premultipliedSRGB(_ color: NSColor, appearance: NSAppearance?) -> SIMD4<Float> {
-        func convert(_ color: NSColor) -> SIMD4<Float> {
-            guard let rgb = color.usingColorSpace(.sRGB) else {
-                return SIMD4(0, 0, 0, 1)
-            }
-            var red: CGFloat = 0
-            var green: CGFloat = 0
-            var blue: CGFloat = 0
-            var alpha: CGFloat = 0
-            rgb.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
-            return SIMD4(Float(red * alpha), Float(green * alpha), Float(blue * alpha), Float(alpha))
-        }
-        if let appearance {
-            var result = SIMD4<Float>(0, 0, 0, 1)
-            appearance.performAsCurrentDrawingAppearance {
-                result = convert(color)
-            }
-            return result
-        }
-        return convert(color)
+        let color = (attributes[.foregroundColor] as? NSColor) ?? request.fallbackColor
+        return MetalColor.premultipliedSRGB(color, appearance: request.appearance)
     }
 }

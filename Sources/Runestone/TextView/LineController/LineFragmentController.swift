@@ -99,6 +99,28 @@ final class LineFragmentController {
             }
         }
     }
+    var foldPlaceholderColor: UIColor {
+        get {
+            renderer.foldPlaceholderColor
+        }
+        set {
+            if newValue != renderer.foldPlaceholderColor {
+                renderer.foldPlaceholderColor = newValue
+                lineFragmentView?.setNeedsDisplay()
+            }
+        }
+    }
+    var foldPlaceholderBackgroundColor: UIColor {
+        get {
+            renderer.foldPlaceholderBackgroundColor
+        }
+        set {
+            if newValue != renderer.foldPlaceholderBackgroundColor {
+                renderer.foldPlaceholderBackgroundColor = newValue
+                lineFragmentView?.setNeedsDisplay()
+            }
+        }
+    }
 
     private let renderer: LineFragmentRenderer
 
