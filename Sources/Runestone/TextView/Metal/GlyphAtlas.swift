@@ -65,6 +65,8 @@ final class GlyphAtlas {
 
     private(set) var hitCount = 0
     private(set) var missCount = 0
+    /// Cumulative texel bytes uploaded to atlas pages this process (raster misses + prewarm).
+    private(set) var uploadedBytes = 0
 
     nonisolated private static let prewarmQueue = DispatchQueue(label: "runestone.glyph-atlas.prewarm")
 
@@ -110,7 +112,15 @@ final class GlyphAtlas {
     }
 
     var usedBytes: Int {
-        coveragePages.reduce(0) { $0 + $1.byteCount } + colorPages.reduce(0) { $0 + $1.byteCount }
+        coverageBytes + colorBytes
+    }
+
+    var coverageBytes: Int {
+        coveragePages.reduce(0) { $0 + $1.byteCount }
+    }
+
+    var colorBytes: Int {
+        colorPages.reduce(0) { $0 + $1.byteCount }
     }
 
     var coveragePageCount: Int { coveragePages.count }
@@ -186,6 +196,7 @@ final class GlyphAtlas {
             }
         }
         missCount += 1
+        RunestoneSignposts.event("GlyphAtlas.miss")
         switch GlyphRasterizer.rasterize(
             font: font,
             glyph: glyph,
@@ -254,6 +265,8 @@ final class GlyphAtlas {
         guard uploadPixels(bitmap, to: packed.page, x: packed.x, y: packed.y) else {
             return .failed
         }
+        uploadedBytes += bitmap.width * bitmap.height * (bitmap.isColor ? 4 : 1)
+        RunestoneSignposts.event("GlyphAtlas.uploadBytes")
         packed.page.keys.insert(bitmap.key)
         let slot = GlyphAtlasSlot(
             texture: packed.page.texture,

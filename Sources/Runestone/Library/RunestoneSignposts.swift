@@ -17,4 +17,9 @@ enum RunestoneSignposts {
         defer { performance.endInterval(name, state) }
         return try await work()
     }
+
+    @inline(__always)
+    static func event(_ name: StaticString) {
+        performance.emitEvent(name)
+    }
 }

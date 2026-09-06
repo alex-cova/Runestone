@@ -905,6 +905,14 @@ import CoreText
     public var isMetalRenderingActive: Bool {
         textInputView.isMetalRenderingActive
     }
+    /// Resident coverage (R8) glyph-atlas bytes for the shared atlas. Debug/PerfHarness only.
+    var metalGlyphAtlasBytes: Int { textInputView.metalDebugStats?.coverageAtlasBytes ?? 0 }
+    /// Resident color (BGRA) glyph-atlas bytes for the shared atlas. Debug/PerfHarness only.
+    var metalColorAtlasBytes: Int { textInputView.metalDebugStats?.colorAtlasBytes ?? 0 }
+    /// Number of line fragments this instance is currently painting via Metal. Debug/PerfHarness only.
+    var metalFragmentCount: Int { textInputView.metalDebugStats?.fragmentCount ?? 0 }
+    /// Windowed p95 of `MetalRenderer.encode`, in nanoseconds. Debug/PerfHarness only.
+    var metalDrawNanosP95: Double { textInputView.metalDebugStats?.drawNanosP95 ?? 0 }
     /// Coordinates pluggable syntax-highlight providers (tree-sitter overlays, semantic tokens, etc.).
     public private(set) var highlightProviderCoordinator: HighlightProviderCoordinator?
 

@@ -19,6 +19,19 @@ final class MetalContext {
     private var didFailPermanently = false
     private var didLogFailure = false
     private var memoryPressureSource: DispatchSourceMemoryPressure?
+    private var _glyphAtlas: GlyphAtlas?
+
+    /// Process-wide glyph atlas, shared by every `MetalRenderer` (one `MTLDevice`, one budget). Nil
+    /// until Metal is confirmed available. Created lazily so default-off editors never allocate it.
+    var glyphAtlas: GlyphAtlas? {
+        guard isAvailable else {
+            return nil
+        }
+        if _glyphAtlas == nil {
+            _glyphAtlas = GlyphAtlas(context: self)
+        }
+        return _glyphAtlas
+    }
 
     var isAvailable: Bool {
         guard !didFailPermanently, device != nil, commandQueue != nil else {
@@ -69,7 +82,9 @@ final class MetalContext {
         memoryPressureSource = source
     }
 
-    private func handleMemoryPressure() {}
+    private func handleMemoryPressure() {
+        _glyphAtlas?.handleMemoryPressure()
+    }
 
     private func logFailureOnce(_ message: String) {
         guard !didLogFailure else {

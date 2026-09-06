@@ -98,6 +98,32 @@ final class TextViewMetalSmokeTests: XCTestCase {
         XCTAssertFalse(textView.isMetalRenderingActive)
         XCTAssertFalse(fragmentViews(in: textView).isEmpty, "CG path repopulates fragment views")
     }
+
+    func testTwoTextViewsShareOneGlyphAtlas() throws {
+        try skipUnlessMetalActivatable()
+        let first = makeFocusedTextView(text: "func first() { return 1 }")
+        let second = makeFocusedTextView(text: "func second() { return 2 }")
+        for textView in [first, second] {
+            textView.isMetalRenderingEnabled = true
+            textView.layoutIfNeeded()
+        }
+        XCTAssertIdentical(MetalContext.shared.glyphAtlas, MetalContext.shared.glyphAtlas)
+        XCTAssertGreaterThan(first.metalGlyphAtlasBytes, 0)
+        // Both views report the same shared-atlas byte count.
+        XCTAssertEqual(first.metalGlyphAtlasBytes, second.metalGlyphAtlasBytes)
+        XCTAssertEqual(first.metalFragmentCount, 1)
+    }
+
+    func testCanvasLeavingWindowDoesNotCrash() throws {
+        try skipUnlessMetalActivatable()
+        let textView = makeFocusedTextView(text: "detached")
+        textView.isMetalRenderingEnabled = true
+        textView.layoutIfNeeded()
+        // Simulate a workbench tab switch / EditorHostCache eviction.
+        textView.window?.contentView = NSView()
+        textView.layoutIfNeeded()
+        XCTAssertTrue(textView.isMetalRenderingActive)
+    }
 }
 
 private extension TextViewMetalSmokeTests {

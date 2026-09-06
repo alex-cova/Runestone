@@ -503,6 +503,11 @@ final class TextInputView: UIView, UITextInput {
         setNeedsLayout()
     }
 
+    /// Debug/PerfHarness snapshot of the Metal backend, or `nil` when Metal is inactive.
+    var metalDebugStats: MetalRenderer.DebugStats? {
+        layoutManager.metalDebugStats
+    }
+
     var pageGuideColumn: Int {
         get {
             pageGuideController.column

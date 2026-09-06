@@ -124,13 +124,38 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
     private var canvasFrame: CGRect = .zero
     private var scale: CGFloat = 2
 
+    /// Debug/PerfHarness snapshot (see `TextView.metal*` accessors and Observability in the design).
+    struct DebugStats {
+        var fragmentCount = 0
+        var glyphInstanceCount = 0
+        var solidInstanceCount = 0
+        var coverageAtlasBytes = 0
+        var colorAtlasBytes = 0
+        var drawNanosP95: Double = 0
+    }
+
+    private var recentDrawNanos: [UInt64] = []
+    private var lastInstanceCounts = (glyphs: 0, solids: 0)
+
+    var debugStats: DebugStats {
+        DebugStats(
+            fragmentCount: fragments.count,
+            glyphInstanceCount: lastInstanceCounts.glyphs,
+            solidInstanceCount: lastInstanceCounts.solids,
+            coverageAtlasBytes: atlas.coverageBytes,
+            colorAtlasBytes: atlas.colorBytes,
+            drawNanosP95: percentile(recentDrawNanos, 0.95)
+        )
+    }
+
     init?(canvasView: MetalTextCanvasView, context: MetalContext = .shared, atlas: GlyphAtlas? = nil) {
         guard context.isAvailable,
               let device = context.device,
               let library = context.library else {
             return nil
         }
-        guard let providedAtlas = atlas ?? GlyphAtlas(context: context) else {
+        // Process-wide shared atlas (one budget across every `TextView`); tests may inject one.
+        guard let providedAtlas = atlas ?? context.glyphAtlas else {
             return nil
         }
         guard let coverage = Self.makePipeline(device: device, library: library,
@@ -243,8 +268,9 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         self.canvasFrame = canvasFrame
         self.scale = max(scale, 0.001)
         if scaleChanged {
-            // Glyph keys embed the backing scale — drop the atlas and force a re-extract.
-            atlas.removeAll()
+            // `GlyphKey` embeds the scale bucket, so a scale change only means this view must
+            // re-extract at the new keys; the old-scale tiles age out via the shared atlas's LRU.
+            // Never `removeAll()` here — other `TextView`s may still need those pages.
             for id in fragments.keys {
                 fragments[id]?.cacheKey = nil
             }
@@ -272,6 +298,7 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
     // MARK: - MetalCanvasGlyphEncoding
 
     func encode(into encoder: MTLRenderCommandEncoder, drawableSize: CGSize) {
+        let start = DispatchTime.now().uptimeNanoseconds
         RunestoneSignposts.interval("MetalRenderer.draw") {
             if needsInstanceRebuild {
                 rebuildInstanceBuffers()
@@ -286,8 +313,16 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
             drawSolids(overlaySolidBuffer, encoder: encoder, uniforms: &uniforms)
             drawGlyphBuckets(overlayPageBuckets, order: overlayPageOrder, encoder: encoder, uniforms: &uniforms)
         }
+        recordDrawNanos(DispatchTime.now().uptimeNanoseconds &- start)
         needsInstanceRebuild = false
         rasterBudget = GlyphRasterBudget()
+    }
+
+    /// Called by `MetalTextCanvasView` when it leaves the window: give the grown instance buffers
+    /// back so `EditorHostCache`'s off-screen hosts do not each pin ~24 MB.
+    func hostDidLeaveWindow() {
+        RunestoneSignposts.event("MetalRenderer.skippedOffscreen")
+        compactInstanceBuffers()
     }
 }
 
@@ -343,6 +378,25 @@ private extension MetalRenderer {
         underlaySolidBuffer.write(underlaySolids)
         overlaySolidBuffer.write(overlaySolids)
         underlayLineBuffer.write(underlayLines)
+        let glyphCount = textByPage.values.reduce(0) { $0 + $1.count } + overlayByPage.values.reduce(0) { $0 + $1.count }
+        lastInstanceCounts = (glyphs: glyphCount, solids: underlaySolids.count + overlaySolids.count)
+        RunestoneSignposts.event("MetalRenderer.instanceCount")
+    }
+
+    private func recordDrawNanos(_ nanos: UInt64) {
+        recentDrawNanos.append(nanos)
+        if recentDrawNanos.count > 120 {
+            recentDrawNanos.removeFirst(recentDrawNanos.count - 120)
+        }
+    }
+
+    private func percentile(_ samples: [UInt64], _ fraction: Double) -> Double {
+        guard !samples.isEmpty else {
+            return 0
+        }
+        let sorted = samples.sorted()
+        let index = min(sorted.count - 1, max(0, Int((Double(sorted.count - 1) * fraction).rounded())))
+        return Double(sorted[index])
     }
 
     private func rebuildGlyphBuckets(

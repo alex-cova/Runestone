@@ -9,6 +9,8 @@ protocol MetalCanvasGlyphEncoding: AnyObject {
     /// Called inside `MetalTextCanvasView.draw(_:)` with a live encoder whose color attachment is
     /// already cleared to transparent. Must not call `endEncoding` / `present` / `commit`.
     func encode(into encoder: MTLRenderCommandEncoder, drawableSize: CGSize)
+    /// The canvas left its window (cached / hidden host): release grown instance buffers.
+    func hostDidLeaveWindow()
 }
 
 /// Transparent `CAMetalLayer` host. When Metal is active `MetalRenderer` paints glyphs here and the
@@ -77,6 +79,9 @@ final class MetalTextCanvasView: UIView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard window != nil else {
+            // Off-screen (workbench tab switch, EditorHostCache): stop presenting and shrink the
+            // grown instance buffers back to their start size.
+            glyphEncoder?.hostDidLeaveWindow()
             return
         }
         updateMetalLayerGeometry()

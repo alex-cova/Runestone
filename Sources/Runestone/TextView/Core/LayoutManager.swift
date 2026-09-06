@@ -274,6 +274,11 @@ final class LayoutManager {
         paintBackend.setNeedsDisplay()
     }
 
+    /// Debug/PerfHarness snapshot of the Metal backend, or `nil` when Metal is not active.
+    var metalDebugStats: MetalRenderer.DebugStats? {
+        isMetalRenderingActive ? metalRenderer?.debugStats : nil
+    }
+
     /// Swap the paint backend between the CG reuse-queue and the Metal renderer. Returns `true` when
     /// the requested state is in effect afterwards (a `true` request needs a Metal device + canvas).
     @discardableResult
