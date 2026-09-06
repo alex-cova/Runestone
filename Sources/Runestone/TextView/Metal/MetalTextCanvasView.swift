@@ -46,7 +46,7 @@ final class MetalTextCanvasView: UIView {
         metalLayer.device = MetalContext.shared.device
         metalLayer.pixelFormat = .bgra8Unorm
         metalLayer.framebufferOnly = true
-        metalLayer.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        metalLayer.contentsScale = effectiveBackingScale
         metalLayer.drawableSize = CGSize(
             width: bounds.width * metalLayer.contentsScale,
             height: bounds.height * metalLayer.contentsScale
@@ -59,6 +59,15 @@ final class MetalTextCanvasView: UIView {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         nil
+    }
+
+    /// Backing scale of the window this canvas is on (not `NSScreen.main`, which would be wrong for
+    /// a window on a secondary display). `NSScreen.main` is only the detached-view last resort.
+    var effectiveBackingScale: CGFloat {
+        window?.backingScaleFactor
+            ?? window?.screen?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor
+            ?? 2
     }
 
     override func setNeedsDisplay() {
@@ -123,7 +132,7 @@ private extension MetalTextCanvasView {
         guard let metalLayer = layer as? CAMetalLayer else {
             return
         }
-        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        let scale = effectiveBackingScale
         metalLayer.contentsScale = scale
         metalLayer.drawableSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
     }

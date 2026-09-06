@@ -114,6 +114,31 @@ final class TextViewMetalSmokeTests: XCTestCase {
         XCTAssertEqual(first.metalFragmentCount, 1)
     }
 
+    func testSplitTwoMetalTextViewsInOneWindowPresentIndependently() throws {
+        try skipUnlessMetalActivatable()
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 640, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        let split = NSSplitView(frame: window.contentRect(forFrameRect: window.frame))
+        split.isVertical = true
+        window.contentView = split
+
+        var textViews: [TextView] = []
+        for i in 0..<2 {
+            let textView = TextView(frame: CGRect(x: 0, y: 0, width: 320, height: 300))
+            split.addArrangedSubview(textView)
+            textView.setState(TextViewState(text: "pane \(i)\nsecond line \(i)", theme: DefaultTheme()))
+            textView.isMetalRenderingEnabled = true
+            textView.layoutIfNeeded()
+            textViews.append(textView)
+        }
+        window.layoutIfNeeded()
+        for textView in textViews {
+            textView.layoutIfNeeded()
+            XCTAssertTrue(textView.isMetalRenderingActive)
+            XCTAssertGreaterThanOrEqual(textView.metalFragmentCount, 1)
+        }
+    }
+
     func testCanvasLeavingWindowDoesNotCrash() throws {
         try skipUnlessMetalActivatable()
         let textView = makeFocusedTextView(text: "detached")

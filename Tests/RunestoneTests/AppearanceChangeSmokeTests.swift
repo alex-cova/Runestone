@@ -56,6 +56,35 @@ final class AppearanceChangeSmokeTests: XCTestCase {
         exerciseAppearanceChange(on: textInputView)
     }
 
+    func testMetalTextViewSurvivesAppearanceChange() throws {
+        guard MetalContext.isAvailable,
+              MetalActivation.resolved(
+                property: true,
+                deviceAvailable: true,
+                defaults: UserDefaults.standard.object(forKey: MetalActivation.defaultsKey) as? Bool
+              ) else {
+            throw XCTSkip("Metal is not available")
+        }
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 400, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        window.contentView = textView
+        textView.setState(TextViewState(text: "let x = 1\nlet y = 2", theme: DefaultTheme()))
+        textView.isMetalRenderingEnabled = true
+        textView.layoutIfNeeded()
+        XCTAssertTrue(textView.isMetalRenderingActive)
+
+        textView.appearance = NSAppearance(named: .aqua)
+        textView.viewDidChangeEffectiveAppearance()
+        textView.layoutIfNeeded()
+        textView.appearance = NSAppearance(named: .darkAqua)
+        textView.viewDidChangeEffectiveAppearance()
+        textView.layoutIfNeeded()
+
+        XCTAssertTrue(textView.isMetalRenderingActive, "appearance change must not knock Metal offline")
+        XCTAssertGreaterThanOrEqual(textView.metalFragmentCount, 1)
+    }
+
     func testFindPanelBarViewRebakesBackgroundWithoutCrashing() {
         exerciseAppearanceChange(on: FindPanelBarView(frame: .zero))
     }

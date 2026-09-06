@@ -60,6 +60,11 @@ final class LayoutManager {
                     lineController.estimatedLineFragmentHeight = theme.font.totalLineHeight
                     lineController.invalidateSyntaxHighlighting()
                 }
+                if theme.font != oldValue.font {
+                    // Drop the old face's tiles from the shared glyph atlas; the re-typeset above
+                    // makes every visible fragment re-extract with the new font.
+                    metalRenderer?.handleThemeFontChange(previousFont: oldValue.font as CTFont)
+                }
                 // Dirty only — never layoutIfNeeded here. Theme is assigned from
                 // setState during SwiftUI updateNSView; sync layout aborts AppKit.
                 setNeedsLayout()
@@ -691,12 +696,8 @@ extension LayoutManager {
         guard isMetalRenderingActive, let metalCanvasView else {
             return
         }
-        let scale = metalCanvasView.window?.backingScaleFactor
-            ?? metalCanvasView.window?.screen?.backingScaleFactor
-            ?? NSScreen.main?.backingScaleFactor
-            ?? 2
         metalCanvasView.frame = viewport
-        paintBackend.setViewport(viewport, canvasFrame: viewport, scale: scale)
+        paintBackend.setViewport(viewport, canvasFrame: viewport, scale: metalCanvasView.effectiveBackingScale)
     }
 
     /// Rebuild the paint spec for every visible line fragment without running a full viewport

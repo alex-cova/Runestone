@@ -324,6 +324,17 @@ final class MetalRenderer: LinePaintBackend, MetalCanvasGlyphEncoding {
         RunestoneSignposts.event("MetalRenderer.skippedOffscreen")
         compactInstanceBuffers()
     }
+
+    /// `theme.font` changed: drop the old face's shared-atlas tiles and force a re-extract of every
+    /// visible fragment (the layout pass that follows re-typesets with the new font).
+    func handleThemeFontChange(previousFont: CTFont) {
+        atlas.invalidate(for: previousFont)
+        for id in fragments.keys {
+            fragments[id]?.cacheKey = nil
+        }
+        needsInstanceRebuild = true
+        canvasView?.setNeedsDisplay()
+    }
 }
 
 private extension MetalRenderer {

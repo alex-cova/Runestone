@@ -35,6 +35,11 @@ struct GlyphKey: Hashable, Sendable {
         )
     }
 
+    /// Stable identity for `font`'s underlying `CGFont`, matching the `fontID` `make(...)` stores.
+    static func fontID(for font: CTFont) -> ObjectIdentifier {
+        CGFontIntern.shared.id(for: font)
+    }
+
     static func matrixHash(fontMatrix: CGAffineTransform, runMatrix: CGAffineTransform) -> UInt64 {
         var hasher = Hasher()
         combine(fontMatrix, into: &hasher)

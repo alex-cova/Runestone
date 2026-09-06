@@ -93,6 +93,26 @@ final class GlyphAtlasTests: XCTestCase {
     }
 
     @MainActor
+    func testInvalidateForFontDropsOnlyThatFontsTiles() throws {
+        let atlas = try makeAtlas()
+        let menlo = makeMenlo(pointSize: 16)
+        let courier = CTFontCreateWithName("Courier" as CFString, 16, nil)
+        let menloGlyph = try XCTUnwrap(GlyphRasterizer.glyph(for: "A", font: menlo))
+        let courierGlyph = try XCTUnwrap(GlyphRasterizer.glyph(for: "A", font: courier))
+        _ = atlas.lookup(font: menlo, glyph: menloGlyph, scale: 2, isColor: false)
+        _ = atlas.lookup(font: courier, glyph: courierGlyph, scale: 2, isColor: false)
+        let menloKey = GlyphKey.make(font: menlo, glyph: menloGlyph, scale: 2, isColor: false)
+        let courierKey = GlyphKey.make(font: courier, glyph: courierGlyph, scale: 2, isColor: false)
+        XCTAssertTrue(atlas.contains(menloKey))
+        XCTAssertTrue(atlas.contains(courierKey))
+
+        atlas.invalidate(for: menlo)
+
+        XCTAssertFalse(atlas.contains(menloKey), "Menlo tile should be gone")
+        XCTAssertTrue(atlas.contains(courierKey), "Courier tile should survive")
+    }
+
+    @MainActor
     func testMissRasterHit() throws {
         let atlas = try makeAtlas()
         let font = makeMenlo(pointSize: 16)

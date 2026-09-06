@@ -147,6 +147,27 @@ final class GlyphAtlas {
         hitCount = 0
         missCount = 0
     }
+
+    /// Drops every cached tile for `font` (all sizes/matrices/scales) and evicts any page that
+    /// becomes empty as a result. Called when `theme.font` changes so a swapped-out face does not
+    /// keep occupying the shared atlas until LRU catches up.
+    func invalidate(for font: CTFont) {
+        let fontID = GlyphKey.fontID(for: font)
+        let victims = cache.keys.filter { $0.fontID == fontID }
+        guard !victims.isEmpty else {
+            return
+        }
+        for key in victims {
+            cache.removeValue(forKey: key)
+        }
+        for page in coveragePages + colorPages {
+            let hadKeys = !page.keys.isEmpty
+            page.keys.subtract(victims)
+            if hadKeys && page.keys.isEmpty {
+                evict(page)
+            }
+        }
+    }
     var cachedGlyphCount: Int {
         cache.values.reduce(0) { count, entry in
             if case .slot = entry {
