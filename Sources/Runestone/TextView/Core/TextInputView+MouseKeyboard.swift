@@ -98,13 +98,21 @@ extension TextInputView {
             return
         }
         let point = convert(event.locationInWindow, from: nil)
+        // Mirror `mouseDown`: take first responder for editable *and* read-only panes, and
+        // switch a read-only pane's selection overlay on. Without this a right-click that
+        // lands before any left-click leaves the overlay disabled, so "Select All" (and any
+        // other selecting item) from the context menu updates the model range but never
+        // paints a highlight.
+        if window?.firstResponder !== self {
+            window?.makeFirstResponder(self)
+        }
+        if !(delegate?.textInputViewIsEditable(self) ?? true) {
+            delegate?.textInputView(self, didRequestSelectionInteraction: true)
+        }
         if let index = characterIndex(at: point) {
             if selection?.contains(index) != true {
                 selection = NSRange(location: index, length: 0)
             }
-        }
-        if delegate?.textInputViewIsEditable(self) ?? true, window?.firstResponder !== self {
-            window?.makeFirstResponder(self)
         }
         showContextMenu(with: event)
     }
