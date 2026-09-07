@@ -330,7 +330,9 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
             EditorCommand(id: "demo.splitRight", title: "Split Editor Right", group: "View",
                           action: { [weak self] in self?.splitRight() }),
             EditorCommand(id: "demo.toggleTypewriter", title: "Toggle Typewriter Scrolling", group: "View",
-                          action: { [weak self] in self?.adapter.textView.map { $0.isTypewriterScrollingEnabled.toggle() } })
+                          action: { [weak self] in self?.adapter.textView.map { $0.isTypewriterScrollingEnabled.toggle() } }),
+            EditorCommand(id: "demo.toggleMinimap", title: "Toggle Minimap", group: "View",
+                          action: { [weak self] in self?.adapter.textView.map { $0.showMinimap.toggle() } })
         ])
     }
 
@@ -440,6 +442,7 @@ final class PaneHost: NSView {
         textView = TextView()
         textView.autolayout()
         textView.theme = DefaultTheme()
+        textView.showMinimap = true
         // IntelliJ-style keymap: ⇧⇧ Search Everywhere, ⌘⇧A Find Action, ⌥↑/↓ extend selection,
         // ⌃⇧J join, ⌥⌘T surround, ⌘[ / ⌘] navigation history, ⌘⇧8 column mode…
         textView.keymap = .intelliJ
@@ -581,5 +584,23 @@ private extension NSView {
 }
 
 private func makeJavaScriptLanguage() -> TreeSitterLanguage {
-    TreeSitterLanguage(tree_sitter_javascript())
+    // A compact highlights query so the editor — and the minimap — show syntax colors.
+    let highlights = """
+    (comment) @comment
+    (string) @string
+    (template_string) @string
+    (number) @number
+    [
+      "const" "let" "var" "function" "return" "if" "else" "for" "while"
+      "class" "new" "import" "export" "from" "await" "async"
+    ] @keyword
+    (function_declaration name: (identifier) @function)
+    (call_expression function: (identifier) @function)
+    (member_expression property: (property_identifier) @property)
+    (identifier) @variable
+    """
+    return TreeSitterLanguage(
+        tree_sitter_javascript(),
+        highlightsQuery: TreeSitterLanguage.Query(string: highlights)
+    )
 }

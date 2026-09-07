@@ -972,6 +972,10 @@ import CoreText
     private let textInputView: TextInputView
     private let writeLock = DocumentWriteLock()
     private let minimapView = MinimapView(frame: .zero)
+    #if DEBUG
+    /// Test hook — the minimap overlay, so tests can render and probe it directly.
+    var minimapViewForTesting: MinimapView { minimapView }
+    #endif
     private let tapGestureRecognizer = QuickTapGestureRecognizer()
     private var _inputAccessoryView: UIView?
     private var delegateAllowsEditingToBegin: Bool {
@@ -1065,6 +1069,12 @@ import CoreText
         minimapView.isHidden = true
         minimapView.applyTheme()
         addFixedOverlaySubview(minimapView)
+        // Keep the minimap's indicator in sync with programmatic and animated scrolls, which
+        // don't necessarily trigger a layout pass (see `scrollWheel`'s note).
+        onDidScroll = { [weak self] in
+            guard let self, self.showMinimap else { return }
+            self.minimapView.setNeedsDisplayForContentChange()
+        }
         _ = findPanelController.panelView
         tapGestureRecognizer.delegate = self
         tapGestureRecognizer.addTarget(self, action: #selector(handleTap(_:)))
@@ -1128,6 +1138,7 @@ import CoreText
         }
         if showMinimap {
             minimapView.frame = CGRect(x: bounds.maxX - minimapWidth, y: 0, width: minimapWidth, height: bounds.height)
+            bringSubviewToFront(minimapView)
             minimapView.setNeedsDisplayForContentChange()
         }
         let panelHeight = findPanelController.isVisible ? findPanelController.panelHeight : 0
@@ -2314,6 +2325,10 @@ extension TextView: TextInputViewDelegate {
     }
 
     func textInputViewDidFinishSyntaxParse(_ view: TextInputView) {
+        if showMinimap {
+            minimapView.invalidateSyntaxColors()
+            minimapView.setNeedsDisplayForContentChange()
+        }
         editorDelegate?.textViewDidFinishSyntaxParse(self)
     }
 

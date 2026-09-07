@@ -1,5 +1,6 @@
 import AppKit
 import Runestone
+import RunestoneMarkdownLanguage
 
 let application = NSApplication.shared
 application.setActivationPolicy(.accessory)
@@ -107,6 +108,26 @@ func generateVariedDocument(lineCount: Int) -> String {
     return lines.joined(separator: "\n")
 }
 
+// A varied Markdown document so the minimap crop shows real syntax colors (headings, emphasis,
+// inline code, quotes) and clear indentation structure.
+func generateMarkdownDocument(lineCount: Int) -> String {
+    var lines = [String]()
+    lines.reserveCapacity(lineCount)
+    for i in 0 ..< lineCount {
+        switch i % 8 {
+        case 0: lines.append("# Section \(i)")
+        case 1: lines.append("Prose with **bold**, _italic_, and `inline code` on line \(i).")
+        case 2: lines.append("    indented code block sample \(i)")
+        case 3: lines.append("")
+        case 4: lines.append("- bullet \(i) referencing [a link](https://example.com/\(i))")
+        case 5: lines.append("> A blockquote paragraph number \(i) that runs on for a while to exercise long lines and the trailing fade past the minimap's own width budget.")
+        case 6: lines.append("## Subsection \(i)")
+        default: lines.append("1. ordered item \(i)")
+        }
+    }
+    return lines.joined(separator: "\n")
+}
+
 let minimapWindow = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 700, height: 500),
                               styleMask: [.titled],
                               backing: .buffered,
@@ -114,10 +135,14 @@ let minimapWindow = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 700, height:
 minimapWindow.orderFrontRegardless()
 let minimapTextView = TextView(frame: CGRect(x: 0, y: 0, width: 700, height: 500))
 minimapWindow.contentView = minimapTextView
-minimapTextView.theme = DefaultTheme()
-minimapTextView.text = generateVariedDocument(lineCount: 500)
 minimapTextView.showMinimap = true
 minimapTextView.minimapWidth = 100
+minimapTextView.setState(TextViewState(
+    text: generateMarkdownDocument(lineCount: 500),
+    theme: DefaultTheme(),
+    language: .markdown,
+    languageProvider: MarkdownLanguageProvider()
+))
 
 // contentSize is applied via a DispatchQueue.main.async block (see
 // TextView.handleContentSizeUpdateIfNeeded), and nothing else in this executable pumps the run
@@ -131,10 +156,6 @@ minimapWindow.layoutIfNeeded()
 minimapTextView.layoutSubtreeIfNeeded()
 pumpRunLoop()
 print("contentSize after pump: \(minimapTextView.contentSize)")
-minimapTextView.contentOffset = CGPoint(x: 0, y: minimapTextView.contentSize.height * 0.4)
-minimapWindow.layoutIfNeeded()
-minimapTextView.layoutSubtreeIfNeeded()
-pumpRunLoop()
 
 func writePNG(_ bitmap: NSBitmapImageRep, to path: String) {
     guard let pngData = bitmap.representation(using: .png, properties: [:]) else {
@@ -149,26 +170,41 @@ func writePNG(_ bitmap: NSBitmapImageRep, to path: String) {
     }
 }
 
-let scratchDir = "/private/tmp/claude-501/-Users-alex-Developer-Runestone/a82bbf14-16aa-442b-98b9-b76894fcf973/scratchpad"
+// Output directory: first CLI arg, else $SMOKETEST_OUT_DIR, else the system temp dir.
+let scratchDir: String = {
+    if CommandLine.arguments.count > 1 { return CommandLine.arguments[1] }
+    if let env = ProcessInfo.processInfo.environment["SMOKETEST_OUT_DIR"] { return env }
+    return NSTemporaryDirectory()
+}()
 
-if let bitmap = minimapTextView.bitmapImageRepForCachingDisplay(in: minimapTextView.bounds) {
+@MainActor
+func captureMinimap(atProgress progress: CGFloat, suffix: String) {
+    let maxOffset = max(minimapTextView.contentSize.height - minimapTextView.bounds.height, 0)
+    minimapTextView.contentOffset = CGPoint(x: 0, y: maxOffset * progress)
+    minimapWindow.layoutIfNeeded()
+    minimapTextView.layoutSubtreeIfNeeded()
+    pumpRunLoop()
+
+    guard let bitmap = minimapTextView.bitmapImageRepForCachingDisplay(in: minimapTextView.bounds) else {
+        fputs("Failed to create bitmap for minimap screenshot\n", stderr)
+        return
+    }
     minimapTextView.cacheDisplay(in: minimapTextView.bounds, to: bitmap)
-    writePNG(bitmap, to: "\(scratchDir)/minimap-screenshot.png")
+    writePNG(bitmap, to: "\(scratchDir)/minimap-screenshot-\(suffix).png")
 
-    // Also crop out just the minimap strip (the trailing minimapWidth points, scaled by the
-    // bitmap's actual pixel scale) for a clearer close-up look.
+    // Crop the trailing minimapWidth points (the minimap strip) for a close-up look.
     if let cgImage = bitmap.cgImage {
         let scale = CGFloat(cgImage.width) / minimapTextView.bounds.width
         let cropWidth = minimapTextView.minimapWidth * scale
         let cropRect = CGRect(x: CGFloat(cgImage.width) - cropWidth, y: 0, width: cropWidth, height: CGFloat(cgImage.height))
         if let croppedCGImage = cgImage.cropping(to: cropRect) {
-            let croppedBitmap = NSBitmapImageRep(cgImage: croppedCGImage)
-            writePNG(croppedBitmap, to: "\(scratchDir)/minimap-crop.png")
+            writePNG(NSBitmapImageRep(cgImage: croppedCGImage), to: "\(scratchDir)/minimap-crop-\(suffix).png")
         }
     }
-} else {
-    fputs("Failed to create bitmap for minimap screenshot\n", stderr)
 }
+
+captureMinimap(atProgress: 0.0, suffix: "top")
+captureMinimap(atProgress: 0.4, suffix: "mid")
 
 // MARK: - Folding visual verification
 //

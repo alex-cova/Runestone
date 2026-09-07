@@ -1,47 +1,66 @@
 @preconcurrency import AppKit
 import Foundation
 
-/// A miniature overview of the document rendered along the trailing edge of the text view,
-/// similar to the minimap in Xcode, VS Code, and CodeEditSourceEditor. Each line is drawn as a
-/// small horizontal bar approximating the line's length; a draggable box shows which portion of
-/// the document is currently visible in the main editor, and dragging it — or clicking elsewhere
-/// in the minimap — scrolls the editor.
+/// A miniature, syntax-colored overview of the document rendered along the trailing edge of the
+/// text view, like the minimap in Xcode and VS Code. Each source line becomes one fixed-height
+/// row of small colored blocks — one block per run of non-whitespace characters, filled with that
+/// token's syntax color — so the minimap reads like the code it mirrors, indentation included. A
+/// draggable box frames the portion visible in the editor; dragging it, or clicking elsewhere,
+/// scrolls the editor.
 ///
-/// The minimap does not typeset or render real glyphs. It only reads each line's cached length
-/// (`DocumentLineNode.data.length`, an O(1) property already maintained by the line manager's
-/// red-black tree), so drawing it is cheap regardless of document size.
+/// It never typesets or renders glyphs. Colors come straight from tree-sitter captures
+/// (`MinimapContentSource.minimapCaptures(inByteRange:)`) mapped through the theme — one query and
+/// one string fetch per cold band — and finished rows are cached per line
+/// (``MinimapRowCache``), so scrolling back over visited ground is nearly free and an unchanged
+/// frame is skipped entirely.
 ///
-/// Every source line maps to a fixed-height row (``rowHeight``). For documents whose minimap
-/// content would be taller than the minimap's own bounds, the minimap's drawn content scrolls in
-/// lock-step with the editor (see `minimapContentOffsetY`) rather than compressing every line
-/// into the available height — the same behavior as the minimaps in the editors above, where a
-/// visible row always represents exactly one source line. This also means `draw(_:)` only ever
-/// has to iterate the rows visible within the minimap's own (small, fixed) bounds — at most
-/// `bounds.height / rowHeight` of them — regardless of how many lines the document has, so unlike
-/// the main editor's gutter this view doesn't need dirty-rect-scoped redraws to stay cheap.
+/// All scroll geometry goes through ``MinimapGeometry``, which places the viewport indicator
+/// first (always inside the minimap's bounds) and derives the drawn content's offset from it, so
+/// the box can neither leave the view nor drift away from the rows it frames — regardless of
+/// `textContainerInset`, typewriter overscroll, line wrapping, or folding.
 final class MinimapView: UIView {
-    /// Source of line/string data this minimap reflects. Not owned by the minimap.
+    /// Source of line/string/syntax data this minimap reflects. Not owned by the minimap.
     weak var lineDataSource: TextInputView?
     /// The scroll view whose `contentOffset`/`contentSize` this minimap reflects and controls.
     weak var scrollView: TextView?
     /// Called before the minimap changes `scrollView.contentOffset` from a click or drag.
     var onUserScroll: (() -> Void)?
 
-    /// Height, in points, of each line's row.
-    var rowHeight: CGFloat = 3
-    /// Width, in points, allotted per character when drawing a line's bar.
+    /// Height, in points, of each source line's row.
+    var minimapRowHeight: CGFloat = 3
+    /// Width, in points, allotted per character column.
     var characterWidth: CGFloat = 1
-    /// Horizontal inset before the first bar.
+    /// Horizontal inset before the first block.
     var leadingInset: CGFloat = 4
-    /// Longest line length, in characters, a bar will be drawn to represent. Longer lines are
-    /// capped so a single very long line (e.g. a minified file) doesn't dominate the minimap.
-    var maximumLineLength = 200
+    /// Horizontal inset kept clear at the trailing edge (the fade lives inside it).
+    var trailingInset: CGFloat = 2
 
     private let hairlineView = UIView()
     private let viewportIndicatorView = UIView()
     private var isDraggingIndicator = false
     private var dragStartLocalY: CGFloat = 0
     private var dragStartContentOffsetY: CGFloat = 0
+
+    private let cache = MinimapRowCache()
+    private var palette = MinimapPalette(baseColor: .textColor)
+    /// Bumped whenever theme colors change or the effective appearance flips, so the palette and
+    /// row cache are rebuilt against fresh colors.
+    private var themeGeneration: UInt64 = 0
+    private var paletteGeneration: UInt64 = .max
+
+    private struct PaintKey: Hashable {
+        let colorIndex: Int
+        let fadeStep: Int
+    }
+
+    private struct RenderKey: Equatable {
+        var offsetY: CGFloat
+        var size: CGSize
+        var contentGeneration: UInt64
+        var contentHeight: CGFloat
+        var themeGeneration: UInt64
+    }
+    private var lastRenderKey: RenderKey?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -64,38 +83,295 @@ final class MinimapView: UIView {
         layoutViewportIndicator()
     }
 
+    // MARK: - Geometry
+
+    private var maxColumns: Int {
+        Int((bounds.width - leadingInset - trailingInset) / max(characterWidth, 0.5))
+    }
+
+    private var currentGeometry: MinimapGeometry? {
+        guard let source = lineDataSource, let scrollView, bounds.height > 0 else {
+            return nil
+        }
+        let lineManager = source.lineManager
+        let estimated = max(lineManager.estimatedLineHeight, 1)
+        let inset = source.textContainerInset
+        let documentHeight = max(scrollView.contentSize.height, inset.top + lineManager.contentHeight + inset.bottom)
+        let geometry = MinimapGeometry(
+            boundsHeight: bounds.height,
+            viewportHeight: scrollView.bounds.height,
+            contentOffsetY: scrollView.visibleContentOffset.y,
+            minimumContentOffsetY: scrollView.minimumContentOffset.y,
+            maximumContentOffsetY: scrollView.maximumContentOffset.y,
+            documentHeight: documentHeight,
+            textContainerInsetTop: inset.top,
+            scale: minimapRowHeight / estimated,
+            minIndicatorHeight: 6
+        )
+        return geometry.isValid ? geometry : nil
+    }
+
+    // MARK: - Drawing
+
+    private struct VisibleLine {
+        let line: DocumentLineNode
+        let bandY: CGFloat
+        let barHeight: CGFloat
+    }
+
     override func draw(_ dirtyRect: CGRect) {
         super.draw(dirtyRect)
-        guard let context = NSGraphicsContext.current?.cgContext, let lineDataSource else {
+        guard let source = lineDataSource,
+              let geometry = currentGeometry,
+              let context = NSGraphicsContext.current?.cgContext else {
             return
         }
-        let lineManager = lineDataSource.lineManager
-        let lineCount = lineManager.lineCount
-        guard lineCount > 0 else {
+        let columns = maxColumns
+        guard columns > 0 else {
             return
         }
-        context.setFillColor(lineDataSource.theme.textColor.withAlphaComponent(0.45).cgColor)
-        let offsetY = minimapContentOffsetY
-        let firstRow = max(0, Int(floor((dirtyRect.minY + offsetY) / rowHeight)))
-        let lastRow = min(lineCount - 1, Int(ceil((dirtyRect.maxY + offsetY) / rowHeight)))
-        guard firstRow <= lastRow else {
+        rebuildPaletteIfNeeded(theme: source.theme)
+
+        let lineManager = source.lineManager
+        let estimated = max(lineManager.estimatedLineHeight, 1)
+        let visible = visibleLines(source: source, geometry: geometry, estimated: estimated)
+        guard !visible.isEmpty else {
+            lastRenderKey = makeRenderKey(geometry: geometry, source: source)
             return
         }
-        for row in firstRow ... lastRow {
-            let line = lineManager.line(atRow: row)
-            let length = min(line.data.length, maximumLineLength)
-            guard length > 0 else {
+
+        let tabLength = max(source.indentStrategy.tabLength, 1)
+        cache.beginFrame(
+            contentGeneration: source.stringView.contentGeneration,
+            themeGeneration: themeGeneration,
+            parseGeneration: source.syntaxParseGeneration,
+            maxColumns: columns,
+            tabLength: tabLength
+        )
+        let builder = MinimapRowBuilder(
+            maxColumns: columns,
+            characterWidth: characterWidth,
+            leadingInset: leadingInset,
+            tabLength: tabLength
+        )
+        var rowByLineID: [DocumentLineNodeID: MinimapRow] = [:]
+        rowByLineID.reserveCapacity(visible.count)
+        var chunkStart = 0
+        while chunkStart < visible.count {
+            var chunkEnd = chunkStart + 1
+            while chunkEnd < visible.count,
+                  chunkEnd - chunkStart < 64,
+                  visible[chunkEnd].line.row == visible[chunkEnd - 1].line.row + 1 {
+                chunkEnd += 1
+            }
+            resolveRows(visible[chunkStart ..< chunkEnd], source: source, builder: builder, into: &rowByLineID)
+            chunkStart = chunkEnd
+        }
+        cache.endFrame()
+
+        var rectsByKey: [PaintKey: [CGRect]] = [:]
+        for entry in visible {
+            guard let row = rowByLineID[entry.line.id] else {
                 continue
             }
-            let width = CGFloat(length) * characterWidth
-            let y = CGFloat(row) * rowHeight - offsetY
-            context.fill(CGRect(x: leadingInset, y: y, width: width, height: max(rowHeight - 1, 1)))
+            for segment in row.segments {
+                let key = PaintKey(colorIndex: segment.colorIndex, fadeStep: segment.fadeStep)
+                rectsByKey[key, default: []].append(CGRect(
+                    x: segment.x,
+                    y: entry.bandY,
+                    width: segment.width,
+                    height: entry.barHeight
+                ))
+            }
+        }
+        for (key, rects) in rectsByKey {
+            let baseColor = key.colorIndex >= 0 && key.colorIndex < palette.colors.count
+                ? palette.colors[key.colorIndex]
+                : palette.colors[0]
+            let cgColor = baseColor.cgColor
+            let alpha = MinimapFade.alpha(forStep: key.fadeStep)
+            context.setFillColor(alpha < 1 ? (cgColor.copy(alpha: alpha) ?? cgColor) : cgColor)
+            context.fill(rects)
+        }
+
+        lastRenderKey = makeRenderKey(geometry: geometry, source: source)
+        #if DEBUG
+        debugLastDrawnRowCount = visible.count
+        #endif
+    }
+
+    /// Walks the document in y-space (never by row index) so a collapsed fold spanning tens of
+    /// thousands of rows costs O(1), not O(hidden lines) — iterating those rows would also thrash
+    /// `LineManager`'s handle table and permanently slow every later edit.
+    private func visibleLines(source: TextInputView, geometry: MinimapGeometry, estimated: CGFloat) -> [VisibleLine] {
+        let lineManager = source.lineManager
+        var result: [VisibleLine] = []
+        let yRange = geometry.visibleDocumentYRange
+        var docY = yRange.lowerBound
+        var iterations = 0
+        // The y-range naturally holds about `bounds.height / minimapRowHeight` rows; this is only
+        // a safety net against a non-advancing lookup, so give it generous slack.
+        let iterationLimit = Int(bounds.height / max(minimapRowHeight, 0.5)) * 2 + 64
+        while docY <= yRange.upperBound, iterations <= iterationLimit {
+            iterations += 1
+            guard let line = lineManager.line(containingYOffset: docY) else {
+                break
+            }
+            let height = line.data.lineHeight
+            if height > 0, !source.isLineHidden(line.id) {
+                let bandY = geometry.bandY(forLineYPosition: line.yPosition)
+                let barHeight = max(geometry.bandHeight(forDocumentHeight: min(height, estimated)) - 1, 1)
+                if bandY + barHeight >= 0, bandY <= bounds.height {
+                    result.append(VisibleLine(line: line, bandY: bandY, barHeight: barHeight))
+                }
+            }
+            // Advance by the line's real height so no short line is skipped; `max(_, 1)` (and the
+            // `docY + 1` floor) guarantees forward progress across a run of zero-height folded
+            // lines.
+            docY = max(line.yPosition + max(height, 1), docY + 1)
+        }
+        return result
+    }
+
+    private func resolveRows(_ slice: ArraySlice<VisibleLine>,
+                             source: TextInputView,
+                             builder: MinimapRowBuilder,
+                             into rowByLineID: inout [DocumentLineNodeID: MinimapRow]) {
+        var misses: [DocumentLineNode] = []
+        for entry in slice {
+            if let cached = cache.cachedRow(for: entry.line.id) {
+                rowByLineID[entry.line.id] = cached
+            } else {
+                misses.append(entry.line)
+            }
+        }
+        guard let first = misses.first, let last = misses.last else {
+            return
+        }
+        let spanStart = first.location
+        let spanEnd = last.location + last.data.totalLength
+        let spanRange = NSRange(location: spanStart, length: max(0, spanEnd - spanStart))
+        guard spanRange.length > 0, spanRange.length <= 1 << 16 else {
+            for line in misses {
+                rowByLineID[line.id] = flatRow(for: line, source: source, builder: builder)
+            }
+            return
+        }
+
+        switch source.minimapSyntaxAvailability(forUTF16Range: spanRange) {
+        case .unavailable:
+            for line in misses {
+                let row = flatRow(for: line, source: source, builder: builder)
+                rowByLineID[line.id] = row
+                cache.store(row, for: line.id, provisional: false)
+            }
+        case .pending:
+            for line in misses {
+                let row = flatRow(for: line, source: source, builder: builder)
+                rowByLineID[line.id] = row
+                cache.store(row, for: line.id, provisional: true)
+            }
+        case .ready:
+            source.stringView.prefetch(utf16Range: spanRange)
+            guard let text = source.stringView.substring(in: spanRange) else {
+                for line in misses {
+                    rowByLineID[line.id] = flatRow(for: line, source: source, builder: builder)
+                }
+                return
+            }
+            let chars = Array(text.utf16)
+            let captures = source.minimapCaptures(inByteRange: ByteRange(utf16Range: spanRange))
+            let colored: [(range: Range<Int>, colorIndex: Int)] = captures.compactMap { capture -> (range: Range<Int>, colorIndex: Int)? in
+                let range = NSRange(capture.byteRange)
+                guard range.length > 0 else {
+                    return nil
+                }
+                let colorIndex = palette.index(forCaptureName: capture.name, theme: source.theme)
+                guard colorIndex != palette.baseColorIndex else {
+                    return nil
+                }
+                return (range.location ..< range.location + range.length, colorIndex)
+            }
+            for line in misses {
+                let localStart = line.location - spanStart
+                let lineLength = line.data.length
+                guard localStart >= 0, localStart + lineLength <= chars.count else {
+                    rowByLineID[line.id] = flatRow(for: line, source: source, builder: builder)
+                    continue
+                }
+                let lineSlice = chars[localStart ..< localStart + lineLength]
+                let spans: [(range: Range<Int>, colorIndex: Int)] = colored.compactMap { entry -> (range: Range<Int>, colorIndex: Int)? in
+                    let lower = max(0, entry.range.lowerBound - line.location)
+                    let upper = min(lineLength, entry.range.upperBound - line.location)
+                    guard lower < upper else {
+                        return nil
+                    }
+                    return (lower ..< upper, entry.colorIndex)
+                }
+                let row = builder.makeRow(utf16: lineSlice, colorSpans: spans)
+                rowByLineID[line.id] = row
+                cache.store(row, for: line.id, provisional: false)
+            }
         }
     }
 
+    private func flatRow(for line: DocumentLineNode, source: TextInputView, builder: MinimapRowBuilder) -> MinimapRow {
+        let range = NSRange(location: line.location, length: line.data.length)
+        guard range.length > 0, let text = source.stringView.substring(in: range) else {
+            return .empty
+        }
+        let units = Array(text.utf16)
+        return builder.makeFlatRow(utf16: units[units.startIndex ..< units.endIndex])
+    }
+
+    #if DEBUG
+    /// Number of source-line rows the last `draw(_:)` touched. Test hook for the folding
+    /// regression — a collapsed fold must not inflate this.
+    private(set) var debugLastDrawnRowCount = 0
+    #endif
+
+    // MARK: - Invalidation
+
+    private func makeRenderKey(geometry: MinimapGeometry, source: TextInputView) -> RenderKey {
+        RenderKey(
+            offsetY: geometry.contentOffsetY,
+            size: bounds.size,
+            contentGeneration: source.stringView.contentGeneration,
+            contentHeight: source.lineManager.contentHeight,
+            themeGeneration: themeGeneration
+        )
+    }
+
+    /// Call whenever the document's content, scroll position, or size changes.
+    func setNeedsDisplayForContentChange() {
+        if let source = lineDataSource, let geometry = currentGeometry {
+            let key = makeRenderKey(geometry: geometry, source: source)
+            if key != lastRenderKey {
+                needsDisplay = true
+            }
+        } else {
+            needsDisplay = true
+        }
+        layoutViewportIndicator()
+    }
+
+    /// Call when a syntax parse finishes so provisional (uncolored) rows recolor next draw.
+    func invalidateSyntaxColors() {
+        cache.invalidateProvisionalRows()
+        lastRenderKey = nil
+        needsDisplay = true
+    }
+
+    private func rebuildPaletteIfNeeded(theme: Theme) {
+        guard paletteGeneration != themeGeneration else {
+            return
+        }
+        palette = MinimapPalette(baseColor: theme.textColor)
+        paletteGeneration = themeGeneration
+    }
+
     /// Applies the current theme's colors to the minimap's chrome (background, hairline, and
-    /// viewport indicator). The line bars themselves are colored directly in `draw(_:)` since
-    /// they're redrawn far more often than the theme changes.
+    /// viewport indicator) and drops the color caches so bars are rebuilt against the new theme.
     func applyTheme() {
         guard let theme = lineDataSource?.theme else {
             return
@@ -104,7 +380,11 @@ final class MinimapView: UIView {
         hairlineView.backgroundColor = theme.gutterHairlineColor
         viewportIndicatorView.backgroundColor = theme.selectionColor.withAlphaComponent(0.25)
         applyViewportIndicatorBorderColor(theme: theme)
-        setNeedsDisplayForContentChange()
+        themeGeneration &+= 1
+        cache.removeAll()
+        lastRenderKey = nil
+        needsDisplay = true
+        layoutViewportIndicator()
     }
 
     /// `viewportIndicatorView.layer?.borderColor` isn't a `UIView.backgroundColor`, so it isn't
@@ -119,81 +399,58 @@ final class MinimapView: UIView {
         if let theme = lineDataSource?.theme {
             applyViewportIndicatorBorderColor(theme: theme)
         }
-    }
-
-    /// Call whenever the document's content, scroll position, or size changes.
-    func setNeedsDisplayForContentChange() {
+        // Theme colors resolve differently under the new appearance — rebuild the palette and
+        // every cached row.
+        themeGeneration &+= 1
+        cache.removeAll()
+        lastRenderKey = nil
         needsDisplay = true
-        layoutViewportIndicator()
     }
 
-    // MARK: - Scroll <-> minimap mapping
-
-    private var minimapContentHeight: CGFloat {
-        CGFloat(max(lineDataSource?.lineManager.lineCount ?? 0, 1)) * rowHeight
-    }
-    private var mainContentHeight: CGFloat {
-        max(scrollView?.contentSize.height ?? 1, 1)
-    }
-    private var mainViewportHeight: CGFloat {
-        max(scrollView?.bounds.height ?? 0, 0)
-    }
-    private var mainScrollableRange: CGFloat {
-        max(mainContentHeight - mainViewportHeight, 0)
-    }
-    private var minimapScrollableRange: CGFloat {
-        max(minimapContentHeight - bounds.height, 0)
-    }
-    /// The minimap's own virtual scroll offset — how far its drawn content is scrolled to keep
-    /// the indicator visible, derived directly from the editor's scroll position. The minimap
-    /// has no independent scroll state of its own; this is always a pure function of
-    /// `scrollView.contentOffset.y`.
-    private var minimapContentOffsetY: CGFloat {
-        guard mainScrollableRange > 0 else {
-            return 0
-        }
-        let progress = min(max((scrollView?.contentOffset.y ?? 0) / mainScrollableRange, 0), 1)
-        return progress * minimapScrollableRange
-    }
+    // MARK: - Viewport indicator
 
     private func layoutViewportIndicator() {
-        guard mainContentHeight > 0, mainViewportHeight > 0 else {
+        guard let geometry = currentGeometry else {
             viewportIndicatorView.isHidden = true
             return
         }
-        let scale = minimapContentHeight / mainContentHeight
-        let indicatorHeight = min(bounds.height, mainViewportHeight * scale)
-        let indicatorY = (scrollView?.contentOffset.y ?? 0) * scale - minimapContentOffsetY
         viewportIndicatorView.isHidden = false
-        viewportIndicatorView.frame = CGRect(x: 0, y: indicatorY, width: bounds.width, height: max(indicatorHeight, 4))
+        viewportIndicatorView.frame = geometry.indicatorRect(width: bounds.width)
     }
 
     // MARK: - Mouse handling
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        guard let geometry = currentGeometry, let scrollView else {
+            return
+        }
         if viewportIndicatorView.frame.contains(point) {
             isDraggingIndicator = true
             dragStartLocalY = point.y
-            dragStartContentOffsetY = scrollView?.contentOffset.y ?? 0
+            dragStartContentOffsetY = scrollView.contentOffset.y
         } else {
             isDraggingIndicator = false
-            scrollToContent(atLocalY: point.y, centered: true)
+            onUserScroll?()
+            scrollView.contentOffset = CGPoint(
+                x: scrollView.contentOffset.x,
+                y: geometry.contentOffsetY(forClickAtLocalY: point.y)
+            )
+            setNeedsDisplayForContentChange()
         }
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard isDraggingIndicator else {
+        guard isDraggingIndicator, let geometry = currentGeometry, let scrollView else {
             return
         }
         let point = convert(event.locationInWindow, from: nil)
-        let deltaLocalY = point.y - dragStartLocalY
-        guard minimapContentHeight > 0 else {
-            return
-        }
-        let scale = mainContentHeight / minimapContentHeight
-        let deltaMainY = deltaLocalY * scale
-        scrollTo(contentOffsetY: dragStartContentOffsetY + deltaMainY)
+        onUserScroll?()
+        scrollView.contentOffset = CGPoint(
+            x: scrollView.contentOffset.x,
+            y: geometry.contentOffsetY(forDragDelta: point.y - dragStartLocalY, from: dragStartContentOffsetY)
+        )
+        setNeedsDisplayForContentChange()
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -203,27 +460,5 @@ final class MinimapView: UIView {
     override func scrollWheel(with event: NSEvent) {
         // The minimap doesn't scroll independently — forward wheel events to the real editor.
         scrollView?.scrollWheel(with: event)
-    }
-
-    private func scrollToContent(atLocalY localY: CGFloat, centered: Bool) {
-        guard minimapContentHeight > 0 else {
-            return
-        }
-        let contentY = localY + minimapContentOffsetY
-        let scale = mainContentHeight / minimapContentHeight
-        var targetY = contentY * scale
-        if centered {
-            targetY -= mainViewportHeight / 2
-        }
-        scrollTo(contentOffsetY: targetY)
-    }
-
-    private func scrollTo(contentOffsetY: CGFloat) {
-        guard let scrollView else {
-            return
-        }
-        onUserScroll?()
-        let clampedY = min(max(contentOffsetY, 0), mainScrollableRange)
-        scrollView.contentOffset = CGPoint(x: scrollView.contentOffset.x, y: clampedY)
     }
 }

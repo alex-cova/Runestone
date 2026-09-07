@@ -66,7 +66,7 @@ let package = Package(
             .copy("PrivacyInfo.xcprivacy"),
             .process("TextView/Appearance/Theme.xcassets")
         ], swiftSettings: swift6),
-        .executableTarget(name: "SmokeTest", dependencies: ["Runestone"], swiftSettings: swift6),
+        .executableTarget(name: "SmokeTest", dependencies: ["Runestone", "RunestoneMarkdownLanguage"], swiftSettings: swift6),
         .executableTarget(
             name: "PerfHarness",
             dependencies: ["Runestone", "RunestoneMarkdownLanguage"],

@@ -17,8 +17,23 @@ open class UIScrollView: UIView {
             guard newValue != storedContentOffset else { return }
             storedContentOffset = newValue
             clipView.scroll(to: newValue)
+            onDidScroll?()
         }
     }
+
+    /// The clip view's actual bounds origin. Equal to `contentOffset` for direct scrolls, but
+    /// during an animated `setContentOffset(_:animationDuration:)` this tracks the in-flight
+    /// position while `contentOffset` already holds the target. Read-only — the minimap uses it
+    /// to keep its indicator glued to the text while an animated scroll is still gliding.
+    open var visibleContentOffset: CGPoint {
+        clipView.bounds.origin
+    }
+
+    /// Invoked after `contentOffset` changes and, if `observesClipViewBoundsChanges` is enabled,
+    /// on every frame of an animated scroll. Never mutates scroll state.
+    open var onDidScroll: (() -> Void)?
+
+    private var isInLayout = false
     open var contentInset: UIEdgeInsets = .zero
     open var adjustedContentInset: UIEdgeInsets { contentInset }
     open var isDragging = false
@@ -40,8 +55,27 @@ open class UIScrollView: UIView {
         clipView.autoresizingMask = [.width, .height]
         clipView.frame = bounds
         super.addSubview(clipView)
+        // Strictly read-only: the handler only calls `onDidScroll` (never mutates scroll state or
+        // a frame, never triggers layout), scoped to this clip view, so an animated scroll's
+        // in-flight frames reach the minimap without any of the re-entrancy the frame-mutating
+        // paths in this file guard against.
+        clipView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(clipViewBoundsDidChange),
+            name: NSView.boundsDidChangeNotification,
+            object: clipView
+        )
     }
     required public init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func clipViewBoundsDidChange(_ notification: Notification) {
+        guard !isInLayout else { return }
+        onDidScroll?()
+    }
     open override func addSubview(_ view: NSView) { documentContainer.addSubview(view) }
     /// Adds a view directly to the scroll view itself, outside the scrollable document
     /// container, so it stays fixed on screen instead of scrolling with content. `addSubview(_:)`
@@ -57,6 +91,7 @@ open class UIScrollView: UIView {
             return
         }
         storedContentOffset = offset
+        onDidScroll?()
         NSAnimationContext.runAnimationGroup { context in
             context.duration = animationDuration
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -88,6 +123,8 @@ open class UIScrollView: UIView {
         }
     }
     override open func layout() {
+        isInLayout = true
+        defer { isInLayout = false }
         layoutSubviews()
         if clipView.frame != bounds {
             clipView.frame = bounds

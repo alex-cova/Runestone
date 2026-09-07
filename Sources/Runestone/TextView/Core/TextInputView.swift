@@ -799,7 +799,9 @@ final class TextInputView: UIView, UITextInput {
     }
     /// Bumped on every ``setState`` / ``setLanguageMode`` so a stale deferred parse cannot
     /// invalidate highlighting or notify after the view has moved on to a newer document.
-    private var syntaxParseGeneration = 0
+    /// Readable module-wide so the minimap can negative-cache a "no syntax yet" answer without
+    /// re-querying every frame.
+    private(set) var syntaxParseGeneration = 0
     private var syntaxParsePolicy: SyntaxParsePolicy = .eager
     private var hasNotifiedSyntaxParse = false
     /// Window last handed to ``startViewportParse``. Prevents layout + `contentOffset` from
@@ -1130,6 +1132,32 @@ final class TextInputView: UIView, UITextInput {
 
     func cancelSyntaxParse() {
         languageMode.cancelParse()
+    }
+
+    // MARK: - Minimap content source
+
+    /// Tree-sitter captures for an arbitrary byte range, or `[]` when there is no tree-sitter
+    /// language mode. Used by the minimap to color its bars without going through
+    /// `LineController`/Core Text.
+    func minimapCaptures(inByteRange range: ByteRange) -> [TreeSitterCapture] {
+        (languageMode as? TreeSitterInternalLanguageMode)?.captures(in: range) ?? []
+    }
+
+    /// Whether syntax colors can be produced for `range` right now.
+    func minimapSyntaxAvailability(forUTF16Range range: NSRange) -> MinimapSyntaxAvailability {
+        guard let treeSitterMode = languageMode as? TreeSitterInternalLanguageMode else {
+            return .unavailable
+        }
+        guard treeSitterMode.isSyntaxTreeReady else {
+            return .pending
+        }
+        return treeSitterMode.parsedRangeContains(range) ? .ready : .pending
+    }
+
+    /// Whether a line is currently hidden inside a collapsed fold. The minimap skips these so
+    /// its rows line up with what the editor shows.
+    func isLineHidden(_ lineID: DocumentLineNodeID) -> Bool {
+        foldingController.isLineHidden(lineID)
     }
 
     func setState(_ state: TextViewState, addUndoAction: Bool = false) {
