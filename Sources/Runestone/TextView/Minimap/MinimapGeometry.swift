@@ -5,11 +5,13 @@ import Foundation
 /// drawing space, as a pure value type so every mapping is unit-testable without a window.
 ///
 /// The design mirrors VS Code: the viewport **indicator** is placed first, always inside the
-/// minimap's bounds (`indicatorY ∈ [0, boundsHeight - indicatorHeight]` for every input), and the
-/// minimap's drawn content is then offset by whatever amount keeps the rows the indicator frames
-/// aligned with the rows currently visible in the editor. Nothing here can push the indicator off
-/// screen or let it drift away from the bars it sits over, regardless of `textContainerInset`,
-/// typewriter overscroll, line wrapping, or folding — those all live inside `documentHeight`.
+/// drawn content — `indicatorY ∈ [0, min(boundsHeight, scaledDocumentHeight) - indicatorHeight]`
+/// for every input — and the minimap's drawn content is then offset by whatever amount keeps the
+/// rows the indicator frames aligned with the rows currently visible in the editor. Nothing here
+/// can push the indicator off screen, let it drift away from the bars it sits over, or slide the
+/// bars themselves when the whole document already fits in the minimap, regardless of
+/// `textContainerInset`, typewriter overscroll, line wrapping, or folding — those all live inside
+/// `documentHeight`.
 struct MinimapGeometry {
     /// Height of the minimap view itself, in points.
     let boundsHeight: CGFloat
@@ -57,12 +59,19 @@ struct MinimapGeometry {
     }
 
     var indicatorHeight: CGFloat {
-        min(max(viewportHeight * scale, minIndicatorHeight), boundsHeight)
+        // A document shorter than the viewport can't fill the box — frame the bars that
+        // exist rather than overhanging them. (No effect once the document is taller than
+        // the viewport, which is the scrollable case.)
+        min(max(min(viewportHeight, documentHeight) * scale, minIndicatorHeight), boundsHeight)
     }
 
-    /// The indicator's travel range — how far its top can move within the minimap.
+    /// The indicator's travel range — how far its top can move. Bounded by the content
+    /// actually drawn: when the whole document fits in the minimap the bars stay put and only
+    /// the indicator moves, so travel is the scaled document's height, not the minimap's.
+    /// Using `boundsHeight` unconditionally drives `contentOffset` negative on a short but
+    /// scrollable document and slides every bar down the view.
     private var indicatorTravel: CGFloat {
-        max(boundsHeight - indicatorHeight, 0)
+        max(min(boundsHeight, scaledDocumentHeight) - indicatorHeight, 0)
     }
 
     var indicatorY: CGFloat {

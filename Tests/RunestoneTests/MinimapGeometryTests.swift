@@ -40,7 +40,7 @@ final class MinimapGeometryTests: XCTestCase {
     }
 
     func testIndicatorStaysInsideBoundsAcrossFullScrollRange() {
-        for documentHeight: CGFloat in [120, 500, 4_000, 200_000] {
+        for documentHeight: CGFloat in [120, 500, 700, 1_000, 2_000, 4_000, 200_000] {
             let maxOffset = Swift.max(documentHeight - 500, 0)
             sweep({ offset in
                 let g = geometry(contentOffsetY: offset, documentHeight: documentHeight)
@@ -81,13 +81,15 @@ final class MinimapGeometryTests: XCTestCase {
     }
 
     func testClickRoundTripsToTheSameContentOffset() {
-        let documentHeight: CGFloat = 60_000
-        let maxOffset = documentHeight - 500
-        sweep({ offset in
-            let g = geometry(contentOffsetY: offset, documentHeight: documentHeight)
-            let midY = g.indicatorRect(width: 100).midY
-            XCTAssertEqual(g.contentOffsetY(forClickAtLocalY: midY), offset, accuracy: 0.01, "offset \(offset)")
-        }, min: 0, max: maxOffset)
+        for documentHeight: CGFloat in [700, 1_000, 2_000, 60_000] {
+            let maxOffset = documentHeight - 500
+            sweep({ offset in
+                let g = geometry(contentOffsetY: offset, documentHeight: documentHeight)
+                let midY = g.indicatorRect(width: 100).midY
+                XCTAssertEqual(g.contentOffsetY(forClickAtLocalY: midY), offset, accuracy: 0.01,
+                               "doc \(documentHeight) offset \(offset)")
+            }, min: 0, max: maxOffset)
+        }
     }
 
     func testDragIsMonotonicAndFullTravelCoversEntireScrollRange() {
@@ -134,6 +136,49 @@ final class MinimapGeometryTests: XCTestCase {
             XCTAssertFalse(g.contentOffset.isNaN)
             XCTAssertFalse(g.contentOffsetY(forClickAtLocalY: 42).isNaN)
             XCTAssertFalse(g.contentOffsetY(forDragDelta: 42, from: 0).isNaN)
+        }
+    }
+
+    /// The reported bug: a short file that is nonetheless scrollable (short editor pane, a
+    /// split, or typewriter overscroll) made the whole block of bars slide down the minimap
+    /// as you scrolled, because `indicatorTravel` used the full minimap height even though
+    /// the scaled document only filled part of it. When the scaled document fits inside the
+    /// minimap nothing needs to scroll, so `contentOffset` must stay pinned at `0`.
+    func testShortScrollableDocumentDoesNotSlideItsContent() {
+        for documentHeight: CGFloat in [700, 1_000, 2_000] {
+            let maxOffset = documentHeight - 500
+            XCTAssertGreaterThan(maxOffset, 0, "doc \(documentHeight) must be scrollable for this test")
+            sweep({ offset in
+                let g = geometry(contentOffsetY: offset, documentHeight: documentHeight)
+                XCTAssertLessThan(g.scaledDocumentHeight, 500,
+                                  "doc \(documentHeight) must be scaled-shorter than the minimap")
+                XCTAssertEqual(g.contentOffset, 0, accuracy: 0.001, "doc \(documentHeight) offset \(offset)")
+            }, min: 0, max: maxOffset)
+        }
+    }
+
+    /// The drawn content may only ever be scrolled within the minimap's own overflow — never
+    /// negative (bars pushed below their home) and never past the point where the last bar
+    /// reaches the bottom edge.
+    func testContentOffsetNeverExceedsScrollableMinimapRange() {
+        for documentHeight: CGFloat in [120, 500, 700, 1_000, 2_000, 4_000, 60_000, 200_000] {
+            let maxOffset = Swift.max(documentHeight - 500, 0)
+            sweep({ offset in
+                let g = geometry(contentOffsetY: offset, documentHeight: documentHeight)
+                let upperBound = Swift.max(g.scaledDocumentHeight - 500, 0)
+                XCTAssertGreaterThanOrEqual(g.contentOffset, -0.001, "doc \(documentHeight) offset \(offset)")
+                XCTAssertLessThanOrEqual(g.contentOffset, upperBound + 0.001, "doc \(documentHeight) offset \(offset)")
+            }, min: 0, max: maxOffset)
+        }
+    }
+
+    /// When the document is shorter than the viewport it can't fill the indicator box, so the
+    /// box is sized to the bars that exist rather than overhanging them.
+    func testIndicatorNeverExtendsPastTheDrawnContent() {
+        for documentHeight: CGFloat in [60, 120, 300, 480] {
+            let g = geometry(contentOffsetY: 0, documentHeight: documentHeight)
+            XCTAssertLessThanOrEqual(g.indicatorRect(width: 100).maxY, g.scaledDocumentHeight + 0.001,
+                                     "doc \(documentHeight)")
         }
     }
 }
