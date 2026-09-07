@@ -70,6 +70,9 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
 
         adapter = RunestoneWorkbenchEditorAdapter(workbench: workbench)
         adapter.forwardingDelegate = self
+        adapter.onOpenHistoryEntry = { [weak self] entry in
+            self?.openHistoryEntry(entry) ?? false
+        }
         layoutHost.onPaneActivated = { [weak self] paneID in
             self?.activatePane(paneID)
         }
@@ -140,6 +143,11 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
         stack.addArrangedSubview(typewriter)
         stack.addArrangedSubview(distractionFree)
         stack.addArrangedSubview(metal)
+
+        let hint = NSTextField(labelWithString: "IntelliJ keymap · ⇧⇧ Search Everywhere · ⌘⇧A Find Action")
+        hint.font = .systemFont(ofSize: 11)
+        hint.textColor = .secondaryLabelColor
+        stack.addArrangedSubview(hint)
         return stack
     }
 
@@ -232,6 +240,25 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Cross-document ⌘[ / ⌘]: switch to the tab holding `entry.documentID` and focus the line.
+    private func openHistoryEntry(_ entry: NavigationEntry) -> Bool {
+        guard let documentID = entry.documentID,
+              let pane = workbench.panes.first(where: { $0.documents.contains { $0.id == documentID } }),
+              let host = paneHosts[pane.id] else {
+            return false
+        }
+        workbench.activatePane(pane.id)
+        pane.selectDocument(documentID)
+        showDocument(in: pane, host: host)
+        rebuildTabBars()
+        if let location = host.textView.location(at: entry.location) {
+            host.textView.selectedRange = NSRange(location: location, length: 0)
+            host.textView.scrollRangeToVisible(NSRange(location: location, length: 0))
+        }
+        _ = host.textView.focusTextInput()
+        return true
+    }
+
     @objc private func splitRight() {
         workbench.splitActivePane(edge: .trailing)
         rebuildLayoutHosts()
@@ -268,6 +295,7 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
                     self.rebuildTabBars()
                     Task { await self.workspaceBridge.syncPane(pane) }
                 }
+                self.configurePalette(host.paletteController)
                 return host
             }
         )
@@ -278,6 +306,32 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         updatePaneDimming()
+    }
+
+    private func configurePalette(_ palette: CommandPaletteController) {
+        palette.recentFileEntriesProvider = { [weak self] in
+            guard let self else { return [] }
+            return self.workbench.recentDocuments(limit: 15).compactMap { document in
+                document.url.map { PaletteFileEntry(url: $0, displayName: document.displayName) }
+            }
+        }
+        palette.fileEntriesProvider = { [weak self] in
+            guard let self else { return [] }
+            return self.workbench.allDocuments().compactMap { document in
+                document.url.map { PaletteFileEntry(url: $0, displayName: document.displayName) }
+            }
+        }
+        palette.onOpenFile = { [weak self] url in
+            guard let self else { return }
+            Task { await self.openDocument(from: url) }
+        }
+        // A couple of demo Search Everywhere entries beyond the built-ins.
+        palette.commandRegistry.register([
+            EditorCommand(id: "demo.splitRight", title: "Split Editor Right", group: "View",
+                          action: { [weak self] in self?.splitRight() }),
+            EditorCommand(id: "demo.toggleTypewriter", title: "Toggle Typewriter Scrolling", group: "View",
+                          action: { [weak self] in self?.adapter.textView.map { $0.isTypewriterScrollingEnabled.toggle() } })
+        ])
     }
 
     private func rebuildTabBars() {
@@ -313,6 +367,8 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
         reloadOnlyIfNeeded: Bool = false
     ) {
         guard let document = pane.selectedDocument else { return }
+        // Share the workbench's cursor history across panes so ⌘[ / ⌘] cross documents.
+        adapter.bindNavigationHistory(to: host.textView, document: document)
         if reloadOnlyIfNeeded, host.loadedDocumentID == document.id {
             return
         }
@@ -370,6 +426,7 @@ final class PaneHost: NSView {
     let pane: EditorPane
     let textView: TextView
     let tabBar: NSStackView
+    let paletteController: CommandPaletteController
     let applyGate = RunestoneStateBuilder.GenerationGate()
     var loadedDocumentID: UUID?
     var onTabSelected: ((UUID) -> Void)?
@@ -383,6 +440,10 @@ final class PaneHost: NSView {
         textView = TextView()
         textView.autolayout()
         textView.theme = DefaultTheme()
+        // IntelliJ-style keymap: ⇧⇧ Search Everywhere, ⌘⇧A Find Action, ⌥↑/↓ extend selection,
+        // ⌃⇧J join, ⌥⌘T surround, ⌘[ / ⌘] navigation history, ⌘⇧8 column mode…
+        textView.keymap = .intelliJ
+        paletteController = CommandPaletteController(textView: textView)
         super.init(frame: .zero)
         autolayout()
         addSubview(tabBar)

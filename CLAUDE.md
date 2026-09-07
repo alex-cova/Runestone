@@ -22,15 +22,23 @@ Requires macOS 12+, Swift 5.5+/Xcode 13+. Tree-sitter (v0.26.12) is vendored in 
 - TextFormation integration for tab expansion, bracket pairing, and whitespace cleanup (`TextFormationController`).
 - Language-aware indent on line break, block indent/unindent (`shiftLeft`/`shiftRight`), and auto-detect tab vs. spaces (`detectIndentStrategy`).
 - Move selected lines up/down (`moveSelectedLinesUp`/`moveSelectedLinesDown`).
-- Configurable `keyDownHandler` for custom keybindings.
+- Move statement up/down respecting syntax (`EditorActionID.moveStatementUp`/`Down`, `StatementRangeService` walks the tree-sitter node then reuses `MoveLinesService`; falls back to line movement without a tree).
+- Duplicate lines (`duplicateSelectedLines`/⌘D) and delete lines (`deleteSelectedLines`/⌘⌫) — multi-caret aware, one undo step each.
+- Join lines (`EditorActionID.joinLines`, `JoinLinesService`) — collapses the line break + next line's indent to one space, comment-aware, multi-line aware, multi-caret aware (each caret ends at its own join point), one undo step.
+- Surround selection with a template (`TextView.surroundSelection(with:)`, `SurroundTemplate` — if/while/for/try-catch/brackets/quotes, per-language + registerable, expanded via `EditorIntelligence`'s `SnippetExpander` with `$TM_SELECTED_TEXT`).
+- Reindent fallback (`TextView.reindentSelectedLines()`) — bracket-depth reindent used for `EditorActionID.reformatCode` when no LSP formatter is wired.
+- **Keymap layer** (`Sources/Runestone/TextView/Keymap/`): `TextView.keymap` holds `[KeyStroke: EditorActionID]` bindings resolved by `KeymapDispatcher` (generic two-step chords like ⌘K ⌘D, plus double-⇧ via `DoubleModifierDetector` on `flagsChanged`). Presets `Keymap.default_` (historical shortcuts) and `Keymap.intelliJ`. Actions the core doesn't own return `false` from `TextInputView.performKeymapAction` and fall through to `TextView.editorActionHandler` / registered `addKeyDownInterceptor`s. Invoke any action directly with `TextView.perform(_:)`.
+- Configurable `keyDownHandler` (single) or `addKeyDownInterceptor` (composable) for custom keybindings, both run before the keymap.
 - Floating caret (long-press drag) for precise cursor placement on touch/trackpad.
 - Smart text substitutions: autocorrection, smart quotes/dashes, spell checking (via UIKit-compat properties).
 
 **Selection**
 - Single and multiple cursors (`selectedRanges`, Option-click to add cursors, ⌥⌘↑/↓ to clone a caret vertically, `undoLastCaretChange()`/⌘U to step back).
-- Column/block (rectangular) selection: Option-drag or ⌃⇧-arrows (`beginBlockSelection(at:)`/`extendBlockSelection(to:)`/`extendBlockSelection(in:)`), with multi-caret-aware copy/cut/paste.
+- Column/block (rectangular) selection: Option-drag or ⌃⇧-arrows (`beginBlockSelection(at:)`/`extendBlockSelection(to:)`/`extendBlockSelection(in:)`), with multi-caret-aware copy/cut/paste. Sticky column mode (`TextView.isColumnSelectionModeEnabled` / `EditorActionID.toggleColumnSelectionMode` / ⌘⇧8): the rectangle survives ordinary selection assignment and grows with plain arrows until toggled off.
+- Progressive semantic selection (`EditorActionID.expandSelection`/`shrinkSelection`, ⌥↑/⌥↓ in the IntelliJ keymap): `SemanticSelectionController` walks a ladder of word → enclosing tree-sitter node ancestors (injection-aware via `TreeSitterInternalLanguageMode.treeSitterNode(at:)`); without a tree it degrades to word → line → paragraph → document.
 - Select word (double-click), paragraph (triple-click), and line selections (`addSelectionsOnEachLine`).
-- Select next occurrence (`selectNextOccurrence`/⌘D), skip the current one (`skipCurrentOccurrence`/⌘K ⌘D), or select all occurrences (`selectAllOccurrences`/⌘⇧L).
+- Select whole line(s) touched by each caret (`selectLines`/⌘L), including the trailing break.
+- Select next occurrence (`selectNextOccurrence`/⌘⇧D), skip the current one (`skipCurrentOccurrence`/⌘K ⌘D), or select all occurrences (`selectAllOccurrences`/⌘⇧L).
 - Selection handles and caret rendering with customizable colors.
 - Shift-click range extension; column-aware line movement.
 - Multi-cursor-aware indent/outdent, move-line, newline, and undo (the whole caret set is restored, not just the primary caret).
@@ -66,6 +74,8 @@ Requires macOS 12+, Swift 5.5+/Xcode 13+. Tree-sitter (v0.26.12) is vendored in 
 **Navigation**
 - Go to line (`goToLine`) with selection-at-beginning/end options.
 - `TextLocation` ↔ byte-offset conversion for line/column addressing.
+- Cursor history (`TextView.navigationHistory`, `NavigationHistory`, `EditorActionID.navigateBack`/`navigateForward`, ⌘[ / ⌘]): a bounded back/forward stack of `NavigationEntry` (documentID/url/`TextLocation`) fed by significant cursor moves and `recordNavigationCheckpoint()` before programmatic jumps (`goToLine`, `selectHighlightedRange`). `TextView.navigationHistory` is settable, so `EditorWorkbench.navigationHistory` (one shared instance) + `RunestoneWorkbenchEditorAdapter.bindNavigationHistory(to:document:)` + `onOpenHistoryEntry` give cross-document ⌘[ end-to-end (wired in `Example/MacExample`).
+- Command palette (`Sources/Runestone/Workbench/CommandPalette/`, `Sources/Runestone/UIBridge/CommandPaletteView.swift`, `CommandPaletteController`): Search Everywhere (⇧⇧), Find Action (⌘⇧A), Recent Files (⌘E), Go to File — a `SearchEverywhereEngine` fans a debounced query to concurrent `SearchEverywhereProvider`s (built-ins: commands/files/recent/symbols; host-extensible) and renders grouped results with `FuzzyMatcher.rankedWithMatches`-driven character highlighting. Inside Search Everywhere a leading sigil narrows the sources per keystroke (`PaletteQueryScope`: `>` actions, `@` symbols, `/`+`#` files). `CommandRegistry.registerBuiltInActions(for:)` populates Find Action with every `EditorActionID` + its current shortcut.
 
 **Diagnostics (rendering)**
 - Squiggle underlines for `TextViewDiagnostic` values by severity (`DiagnosticEmphasisController`).
@@ -96,8 +106,9 @@ Requires macOS 12+, Swift 5.5+/Xcode 13+. Tree-sitter (v0.26.12) is vendored in 
 - `HoverEngine` with caching; symbol documentation (`SymbolHoverProvider`), LSP (`LSPHoverProvider`), and AI (`AIHoverProvider`) backends.
 
 **Navigation**
-- `NavigationEngine` with Go to Definition (`GoToDefinitionProvider`), Find References (`FindReferencesProvider`), and breadcrumbs (`BreadcrumbProvider`).
-- LSP definition, references, rename, and signature-help providers (`LSPDefinitionProvider`, `LSPReferencesProvider`, `LSPRenameProvider`, `LSPSignatureHelpProvider`).
+- `NavigationEngine` with Go to Definition (`GoToDefinitionProvider`), Find References (`FindReferencesProvider`), and breadcrumbs (`BreadcrumbProvider`). `NavigationContext.kind` (`.definition`/`.implementation`/`.references`) lets one engine hold providers for all three; providers ignore contexts whose `kind` they don't serve.
+- LSP definition, implementation, references, rename, and signature-help providers (`LSPDefinitionProvider`, `LSPImplementationProvider`, `LSPReferencesProvider`, `LSPRenameProvider`, `LSPSignatureHelpProvider`); `LSPClient.requestImplementation` maps to `textDocument/implementation`.
+- `EditorIntelligenceController` wires `EditorActionID.goToDefinition`/`goToImplementation`/`findUsages`/`reformatCode` to the engines via `editorActionHandler`; `navigate(kind:)` focuses a single result or hands multiple to `onPresentNavigationChoices` (e.g. the command palette). `onOpenLocationInOtherDocument` routes cross-file targets.
 - `SymbolSearchEngine` for workspace symbol search.
 
 **Diagnostics**
@@ -193,4 +204,4 @@ The `Example/MacExample` app is a standalone Xcode/SPM workspace demonstrating u
 
 ### Tests
 
-`Tests/RunestoneTests` is a single XCTest target covering both `Runestone` and `EditorIntelligence` (243+ tests), plus `TestTreeSitterLanguages` (bundled grammars: html/javascript/json/python/yaml) and `RunestoneGraphQLLanguage` used as fixtures. Test files are one-class-per-file and named `<SubjectUnderTest>Tests.swift`; mocks live in `Tests/RunestoneTests/Mock` and `MockTextInput.swift`.
+`Tests/RunestoneTests` is a single XCTest target covering both `Runestone` and `EditorIntelligence` (798+ tests), plus `TestTreeSitterLanguages` (bundled grammars: html/javascript/json/python/yaml) and `RunestoneGraphQLLanguage` used as fixtures. Test files are one-class-per-file and named `<SubjectUnderTest>Tests.swift`; mocks live in `Tests/RunestoneTests/Mock` and `MockTextInput.swift`.

@@ -2,4 +2,10 @@
 "undo.action_name.replace_all" = "Replace All";
 "undo.action_name.move_lines_up" = "Move Lines Up";
 "undo.action_name.move_lines_down" = "Move Lines Down";
+"undo.action_name.duplicate_lines" = "Duplicate Lines";
+"undo.action_name.delete_lines" = "Delete Lines";
 "menu.item_title.replace" = "Replace";
+"undo.action_name.join_lines" = "Join Lines";
+"undo.action_name.move_statement_up" = "Move Statement Up";
+"undo.action_name.move_statement_down" = "Move Statement Down";
+"undo.action_name.surround_with" = "Surround With";

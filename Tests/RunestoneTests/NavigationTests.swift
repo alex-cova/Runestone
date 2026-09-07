@@ -28,7 +28,7 @@ final class NavigationTests: XCTestCase {
         await index.index([first, second], for: documentID)
 
         let provider = FindReferencesProvider(index: index)
-        let context = makeNavigationContext(documentID: documentID, text: "greet()", offset: 2)
+        let context = makeNavigationContext(documentID: documentID, text: "greet()", offset: 2, kind: .references)
         let result = await provider.provide(context: context)
 
         guard case .multiple(let locations) = result else {
@@ -105,7 +105,12 @@ private actor MockNavigationProvider: NavigationProvider {
     }
 }
 
-private func makeNavigationContext(documentID: DocumentID, text: String, offset: Int) -> NavigationContext {
+private func makeNavigationContext(
+    documentID: DocumentID,
+    text: String,
+    offset: Int,
+    kind: NavigationKind = .definition
+) -> NavigationContext {
     let snapshot = TextSnapshot(version: 0, text: text)
     let position = TextPosition(line: 0, column: offset, utf16Offset: offset)
     let document = Document(
@@ -120,7 +125,8 @@ private func makeNavigationContext(documentID: DocumentID, text: String, offset:
     return NavigationContext(
         document: document,
         cursor: Cursor(position: position),
-        selection: Selection(range: TextRange(start: position, end: position))
+        selection: Selection(range: TextRange(start: position, end: position)),
+        kind: kind
     )
 }
 

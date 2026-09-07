@@ -23,30 +23,39 @@ import Foundation
 public final class EditorHostCache<Key: Hashable, Host: AnyObject> {
     private final class Entry {
         let host: Host
-        var lastAccess: Date
+        /// Monotonic access sequence number — higher means more recently used. A counter
+        /// rather than `Date()` so two accesses in the same clock tick still order correctly
+        /// (an LRU tie-break on wall-clock time is otherwise non-deterministic).
+        var lastAccess: UInt64
 
-        init(host: Host) {
+        init(host: Host, lastAccess: UInt64) {
             self.host = host
-            self.lastAccess = Date()
+            self.lastAccess = lastAccess
         }
     }
 
     private var entries: [Key: Entry] = [:]
     private var maxEntries: Int
+    private var accessCounter: UInt64 = 0
 
     public init(maxEntries: Int = 8) {
         self.maxEntries = max(maxEntries, 1)
+    }
+
+    private func nextAccessStamp() -> UInt64 {
+        accessCounter += 1
+        return accessCounter
     }
 
     /// Returns the cached host for `key`, creating it via `make` on a cache miss. `make` is not
     /// called on a hit.
     public func host(for key: Key, make: () -> Host) -> Host {
         if let entry = entries[key] {
-            entry.lastAccess = Date()
+            entry.lastAccess = nextAccessStamp()
             return entry.host
         }
         let host = make()
-        entries[key] = Entry(host: host)
+        entries[key] = Entry(host: host, lastAccess: nextAccessStamp())
         evictIfNeeded(keeping: key)
         return host
     }

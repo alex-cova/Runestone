@@ -2,4 +2,10 @@
 "undo.action_name.replace_all" = "すべて置き換え";
 "undo.action_name.move_lines_up" = "行を上に移動";
 "undo.action_name.move_lines_down" = "行を下に移動";
+"undo.action_name.duplicate_lines" = "行を複製";
+"undo.action_name.delete_lines" = "行を削除";
 "menu.item_title.replace" = "置換";
+"undo.action_name.join_lines" = "行を結合";
+"undo.action_name.move_statement_up" = "ステートメントを上に移動";
+"undo.action_name.move_statement_down" = "ステートメントを下に移動";
+"undo.action_name.surround_with" = "囲む";

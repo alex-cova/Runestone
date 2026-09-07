@@ -5,6 +5,10 @@ public final class EditorWorkbench: Identifiable, @unchecked Sendable {
     public let id: UUID
     public var layout: EditorLayout
     public var activePaneID: UUID
+    /// Cross-document back/forward cursor history (⌘[ / ⌘]). Assign this instance to every
+    /// pane's `TextView.navigationHistory` (see `RunestoneWorkbenchEditorAdapter`) so ⌘[ can
+    /// step back into a previously visited document.
+    public let navigationHistory = NavigationHistory()
 
     public var panes: [EditorPane] {
         layout.flattenedPanes()
@@ -45,6 +49,26 @@ public final class EditorWorkbench: Identifiable, @unchecked Sendable {
             }
         }
         return documents
+    }
+
+    /// Open documents in most-recently-used order, for a ⌘E "recent files" palette. Ordering
+    /// comes from the active pane's tab history (`EditorTabHistory`); documents never selected
+    /// yet trail in tab order.
+    public func recentDocuments(limit: Int = 20) -> [WorkbenchDocument] {
+        let byID = Dictionary(uniqueKeysWithValues: allDocuments().map { ($0.id, $0) })
+        var ordered: [WorkbenchDocument] = []
+        var seen = Set<UUID>()
+        for id in activePane.tabHistory.snapshotEntries() where !seen.contains(id) {
+            if let document = byID[id] {
+                seen.insert(id)
+                ordered.append(document)
+            }
+        }
+        for document in allDocuments() where !seen.contains(document.id) {
+            seen.insert(document.id)
+            ordered.append(document)
+        }
+        return Array(ordered.prefix(limit))
     }
 
     @discardableResult

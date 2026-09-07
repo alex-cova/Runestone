@@ -21,6 +21,11 @@ final class BlockSelectionController {
     private(set) var anchor: BlockSelectionAnchor?
     private(set) var active: BlockSelectionAnchor?
 
+    /// Sticky column-selection mode (⌘⇧8). While enabled, an ordinary selection assignment does
+    /// *not* tear down the rectangle — see `TextInputView._selectedRange`'s `didSet` — so
+    /// arrows and drags keep growing a column selection until the mode is turned off.
+    var isStickyModeEnabled = false
+
     var isActive: Bool {
         anchor != nil
     }
@@ -42,6 +47,7 @@ final class BlockSelectionController {
     func end() {
         anchor = nil
         active = nil
+        isStickyModeEnabled = false
     }
 
     /// Materializes the rectangle into one `NSRange` per covered document row.

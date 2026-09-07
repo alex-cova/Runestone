@@ -60,6 +60,13 @@ public final class CommandRegistry {
         FuzzyMatcher.ranked(query: query, items: commands, key: \.title, limit: 40)
     }
 
+    /// Like ``filtered(query:)`` but also returns each command's ``FuzzyMatcher/Match`` so a
+    /// palette can highlight the matched characters.
+    public func filteredWithMatches(query: String, limit: Int = 40) -> [(command: EditorCommand, match: FuzzyMatcher.Match)] {
+        FuzzyMatcher.rankedWithMatches(query: query, items: commands, key: \.title, limit: limit)
+            .map { ($0.item, $0.match) }
+    }
+
     /// Commands grouped by `group`, preserving the order each group was first seen in
     /// `commands` — not alphabetical, and not affected by re-registering an existing command.
     public var commandGroups: [CommandGroup] {

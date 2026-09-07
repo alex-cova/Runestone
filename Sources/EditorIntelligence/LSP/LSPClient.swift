@@ -20,6 +20,10 @@ public protocol LSPClient: Sendable {
     /// Request reference locations for the symbol at the given position.
     func requestReferences(for document: Document, at position: TextPosition) async throws -> [LSPLocation]
 
+    /// Request the implementation location(s) for the symbol at the given position
+    /// (`textDocument/implementation`).
+    func requestImplementation(for document: Document, at position: TextPosition) async throws -> [LSPLocation]
+
     /// Request a workspace-wide rename of the symbol at the given position.
     func requestRename(for document: Document, at position: TextPosition, to newName: String) async throws -> LSPWorkspaceEdit?
 
@@ -46,6 +50,7 @@ public protocol LSPClient: Sendable {
 public extension LSPClient {
     func requestDefinition(for document: Document, at position: TextPosition) async throws -> [LSPLocation] { [] }
     func requestReferences(for document: Document, at position: TextPosition) async throws -> [LSPLocation] { [] }
+    func requestImplementation(for document: Document, at position: TextPosition) async throws -> [LSPLocation] { [] }
     func requestRename(for document: Document, at position: TextPosition, to newName: String) async throws -> LSPWorkspaceEdit? { nil }
     func requestFormatting(for document: Document, in range: TextRange?) async throws -> [LSPTextEdit] { [] }
     func requestCodeActions(

@@ -19,9 +19,12 @@ public enum PaletteQueryScope: Equatable {
         if let remainder = query.strippingPrefix("@") { return .symbols(remainder) }
         switch mode {
         case .commands: return .commands(query)
-        case .quickOpen: return .files(query)
+        case .quickOpen, .recentFiles: return .files(query)
         case .symbols: return .symbols(query)
         case .textActions: return .textActions(query)
+        // "Search Everywhere" and the fixed-list modes have no single scope; treat a
+        // prefix-less query as free text routed to whatever the palette is showing.
+        case .searchEverywhere, .locations: return .textActions(query)
         }
     }
 

@@ -53,6 +53,15 @@ final class PaletteQueryScopeTests: XCTestCase {
         XCTAssertEqual(PaletteQueryScope.resolve(query: "json", mode: .commands), .commands("json"))
         XCTAssertEqual(PaletteQueryScope.resolve(query: "json", mode: .quickOpen), .files("json"))
         XCTAssertEqual(PaletteQueryScope.resolve(query: "json", mode: .symbols), .symbols("json"))
+        // Modes added for the IntelliJ palette.
+        XCTAssertEqual(PaletteQueryScope.resolve(query: "json", mode: .recentFiles), .files("json"))
+        XCTAssertEqual(PaletteQueryScope.resolve(query: "json", mode: .searchEverywhere), .textActions("json"))
+    }
+
+    func testAtPrefixResolvesToSymbolsFromSearchEverywhere() {
+        XCTAssertEqual(PaletteQueryScope.resolve(query: "@Widget", mode: .searchEverywhere), .symbols("Widget"))
+        XCTAssertEqual(PaletteQueryScope.resolve(query: "> reformat", mode: .searchEverywhere), .commands("reformat"))
+        XCTAssertEqual(PaletteQueryScope.resolve(query: "/main", mode: .searchEverywhere), .files("main"))
     }
 
     func testLoneCommandsPrefixYieldsAnEmptyRemainder() {

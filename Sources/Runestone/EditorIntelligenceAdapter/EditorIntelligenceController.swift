@@ -125,11 +125,92 @@ public final class EditorIntelligenceController {
 
         installOverlayViews(on: textView)
         configureAccessoryViews()
-        textView.keyDownHandler = { [weak self] event in
+        textView.addKeyDownInterceptor { [weak self] event in
             self?.handleKeyDown(event) ?? false
+        }
+        let previousActionHandler = textView.editorActionHandler
+        textView.editorActionHandler = { [weak self] action in
+            if self?.handleEditorAction(action) == true {
+                return true
+            }
+            return previousActionHandler?(action) ?? false
         }
         forwarding.attach(controller: self)
         startObservingEvents()
+    }
+
+    /// Invoked with the candidates when "Go to Definition/Implementation" resolves to more than
+    /// one location. Wire this to a picker (e.g. `CommandPaletteController.presentList`); if
+    /// unset, the first location is used.
+    public var onPresentNavigationChoices: (([Location]) -> Void)?
+    /// Invoked when a navigation target is in a different document (`Location.url` set and
+    /// different). Return `true` if the host opened it; otherwise the target is focused in the
+    /// current text view.
+    public var onOpenLocationInOtherDocument: ((Location) -> Bool)?
+
+    private func handleEditorAction(_ action: EditorActionID) -> Bool {
+        switch action {
+        case .reformatCode:
+            guard formattingProvider != nil else { return false }
+            formatDocument()
+            return true
+        case .goToDefinition:
+            return navigate(kind: .definition)
+        case .goToImplementation:
+            return navigate(kind: .implementation)
+        case .findUsages:
+            return navigate(kind: .references)
+        default:
+            return false
+        }
+    }
+
+    /// Runs the navigation engine for `kind` at the current cursor and focuses the result.
+    @discardableResult
+    public func navigate(kind: NavigationKind) -> Bool {
+        guard let navigationEngine, let document = adapter.currentDocument else {
+            return false
+        }
+        let context = NavigationContext(
+            document: document,
+            cursor: document.cursor,
+            selection: document.selection,
+            trigger: .manual,
+            kind: kind
+        )
+        Task { [weak self] in
+            let result = await navigationEngine.navigate(context: context)
+            await MainActor.run {
+                guard let self else { return }
+                switch result {
+                case .single(let location):
+                    self.focus(location)
+                case .multiple(let locations) where locations.count == 1:
+                    self.focus(locations[0])
+                case .multiple(let locations):
+                    if let onPresentNavigationChoices = self.onPresentNavigationChoices {
+                        onPresentNavigationChoices(locations)
+                    } else if let first = locations.first {
+                        self.focus(first)
+                    }
+                case .none:
+                    break
+                }
+            }
+        }
+        return true
+    }
+
+    private func focus(_ location: Location) {
+        guard let textView else { return }
+        if let url = location.url, url != textView.documentURL,
+           onOpenLocationInOtherDocument?(location) == true {
+            return
+        }
+        textView.recordNavigationCheckpoint()
+        let range = TextEditApplicator.nsRange(for: location.range, in: textView)
+        textView.selectedRanges = [range]
+        textView.scrollRangeToVisible(range)
     }
 
     deinit {

@@ -10,6 +10,7 @@ public actor FindReferencesProvider: NavigationProvider {
     }
 
     public func provide(context: NavigationContext) async -> NavigationResult? {
+        guard context.kind == .references else { return nil }
         let target = context.document.wordAtCursor()
         guard !target.isEmpty else { return nil }
         let symbols = await index.search(exact: target)

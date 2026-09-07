@@ -49,4 +49,18 @@ final class FuzzyMatcherTests: XCTestCase {
         let ranked = FuzzyMatcher.ranked(query: "match", items: items, key: { $0 }, limit: 3)
         XCTAssertEqual(ranked.count, 3)
     }
+
+    func testRankedWithMatchesReturnsMatchedIndicesPerItem() {
+        let items = ["Reformat Code", "Reindent Lines", "Toggle Find Panel"]
+        let ranked = FuzzyMatcher.rankedWithMatches(query: "rc", items: items, key: { $0 }, limit: 10)
+        XCTAssertEqual(ranked.first?.item, "Reformat Code")
+        XCTAssertEqual(ranked.first?.match.matchedIndices, [0, 9]) // R…C
+        XCTAssertFalse(ranked.contains { $0.item == "Toggle Find Panel" })
+    }
+
+    func testRankedWithMatchesBlankQueryReturnsPrefixWithEmptyMatches() {
+        let ranked = FuzzyMatcher.rankedWithMatches(query: "", items: ["a", "b", "c"], key: { $0 }, limit: 2)
+        XCTAssertEqual(ranked.map(\.item), ["a", "b"])
+        XCTAssertTrue(ranked.allSatisfy { $0.match.matchedIndices.isEmpty })
+    }
 }

@@ -75,6 +75,34 @@ public enum FuzzyMatcher {
         return scored.prefix(limit).map(\.2)
     }
 
+    /// Like ``ranked(query:items:key:limit:)`` but also returns each surviving item's
+    /// ``Match`` — needed to highlight the matched characters in a picker row. An empty query
+    /// returns the first `limit` items each with an empty match.
+    public static func rankedWithMatches<T>(
+        query: String,
+        items: [T],
+        key: (T) -> String,
+        limit: Int = 50
+    ) -> [(item: T, match: Match)] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return items.prefix(limit).map { ($0, Match(score: 0, matchedIndices: [])) }
+        }
+
+        var scored: [(score: Int, index: Int, item: T, match: Match)] = []
+        scored.reserveCapacity(min(items.count, limit * 2))
+        for (index, item) in items.enumerated() {
+            if let match = match(query: trimmed, in: key(item)) {
+                scored.append((match.score, index, item, match))
+            }
+        }
+        scored.sort { lhs, rhs in
+            if lhs.score != rhs.score { return lhs.score > rhs.score }
+            return lhs.index < rhs.index
+        }
+        return scored.prefix(limit).map { ($0.item, $0.match) }
+    }
+
     private static func isSeparator(_ ch: Character) -> Bool {
         ch == "/" || ch == "." || ch == "_" || ch == "-" || ch == " "
     }

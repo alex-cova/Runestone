@@ -1,0 +1,119 @@
+import Foundation
+
+/// Identifies an editor action that a keystroke can be bound to.
+///
+/// Actions are the stable vocabulary shared by ``Keymap`` (keystroke → action), the
+/// command palette's "Find Action" mode (action → keystroke, via ``Keymap/stroke(for:)``),
+/// and ``TextView/perform(_:)`` (action → behavior). Host apps can define their own IDs with
+/// ``init(_:)`` and handle them through ``TextView/editorActionHandler``.
+public struct EditorActionID: Hashable, Sendable, RawRepresentable, CustomStringConvertible {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public init(_ rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public var description: String { rawValue }
+
+    /// A short, human-readable title, shown by the command palette's "Find Action" mode.
+    /// Falls back to a spaced-out form of ``rawValue`` for host-defined actions.
+    public var title: String {
+        Self.builtInTitles[self] ?? Self.humanized(rawValue)
+    }
+
+    private static func humanized(_ raw: String) -> String {
+        var result = ""
+        for character in raw {
+            if character.isUppercase, !result.isEmpty {
+                result.append(" ")
+            }
+            result.append(character)
+        }
+        return result.prefix(1).uppercased() + result.dropFirst()
+    }
+}
+
+public extension EditorActionID {
+    // Selection & multi-caret
+    static let selectLines = EditorActionID("selectLines")
+    static let selectNextOccurrence = EditorActionID("selectNextOccurrence")
+    static let selectAllOccurrences = EditorActionID("selectAllOccurrences")
+    static let skipCurrentOccurrence = EditorActionID("skipCurrentOccurrence")
+    static let addCaretsToLineEnds = EditorActionID("addCaretsToLineEnds")
+    static let addCaretAbove = EditorActionID("addCaretAbove")
+    static let addCaretBelow = EditorActionID("addCaretBelow")
+    static let undoLastCaretChange = EditorActionID("undoLastCaretChange")
+    static let expandSelection = EditorActionID("expandSelection")
+    static let shrinkSelection = EditorActionID("shrinkSelection")
+    static let toggleColumnSelectionMode = EditorActionID("toggleColumnSelectionMode")
+
+    // Line & block editing
+    static let duplicateLines = EditorActionID("duplicateLines")
+    static let deleteLines = EditorActionID("deleteLines")
+    static let moveLineUp = EditorActionID("moveLineUp")
+    static let moveLineDown = EditorActionID("moveLineDown")
+    static let moveStatementUp = EditorActionID("moveStatementUp")
+    static let moveStatementDown = EditorActionID("moveStatementDown")
+    static let joinLines = EditorActionID("joinLines")
+    static let surroundWith = EditorActionID("surroundWith")
+    static let indentLines = EditorActionID("indentLines")
+    static let outdentLines = EditorActionID("outdentLines")
+    static let reformatCode = EditorActionID("reformatCode")
+
+    // Find
+    static let toggleFindPanel = EditorActionID("toggleFindPanel")
+    static let toggleReplacePanel = EditorActionID("toggleReplacePanel")
+
+    // Palette / navigation
+    static let searchEverywhere = EditorActionID("searchEverywhere")
+    static let findAction = EditorActionID("findAction")
+    static let quickOpenFile = EditorActionID("quickOpenFile")
+    static let recentFiles = EditorActionID("recentFiles")
+    static let goToLine = EditorActionID("goToLine")
+    static let goToDefinition = EditorActionID("goToDefinition")
+    static let goToImplementation = EditorActionID("goToImplementation")
+    static let findUsages = EditorActionID("findUsages")
+    static let navigateBack = EditorActionID("navigateBack")
+    static let navigateForward = EditorActionID("navigateForward")
+
+    internal static let builtInTitles: [EditorActionID: String] = [
+        .selectLines: "Select Line(s)",
+        .selectNextOccurrence: "Select Next Occurrence",
+        .selectAllOccurrences: "Select All Occurrences",
+        .skipCurrentOccurrence: "Skip Current Occurrence",
+        .addCaretsToLineEnds: "Add Carets to Line Ends",
+        .addCaretAbove: "Add Caret Above",
+        .addCaretBelow: "Add Caret Below",
+        .undoLastCaretChange: "Undo Last Caret Change",
+        .expandSelection: "Extend Selection",
+        .shrinkSelection: "Shrink Selection",
+        .toggleColumnSelectionMode: "Column Selection Mode",
+        .duplicateLines: "Duplicate Line(s)",
+        .deleteLines: "Delete Line(s)",
+        .moveLineUp: "Move Line Up",
+        .moveLineDown: "Move Line Down",
+        .moveStatementUp: "Move Statement Up",
+        .moveStatementDown: "Move Statement Down",
+        .joinLines: "Join Lines",
+        .surroundWith: "Surround With…",
+        .indentLines: "Indent Line(s)",
+        .outdentLines: "Unindent Line(s)",
+        .reformatCode: "Reformat Code",
+        .toggleFindPanel: "Find…",
+        .toggleReplacePanel: "Replace…",
+        .searchEverywhere: "Search Everywhere",
+        .findAction: "Find Action…",
+        .quickOpenFile: "Go to File…",
+        .recentFiles: "Recent Files",
+        .goToLine: "Go to Line…",
+        .goToDefinition: "Go to Definition",
+        .goToImplementation: "Go to Implementation(s)",
+        .findUsages: "Find Usages",
+        .navigateBack: "Back",
+        .navigateForward: "Forward"
+    ]
+}

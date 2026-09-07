@@ -2,4 +2,10 @@
 "undo.action_name.replace_all" = "Remplacer tout";
 "undo.action_name.move_lines_up" = "Déplacer les lignes vers le haut";
 "undo.action_name.move_lines_down" = "Déplacer les lignes vers le bas";
+"undo.action_name.duplicate_lines" = "Dupliquer les lignes";
+"undo.action_name.delete_lines" = "Supprimer les lignes";
 "menu.item_title.replace" = "Remplacer";
+"undo.action_name.join_lines" = "Fusionner les lignes";
+"undo.action_name.move_statement_up" = "Déplacer l'instruction vers le haut";
+"undo.action_name.move_statement_down" = "Déplacer l'instruction vers le bas";
+"undo.action_name.surround_with" = "Entourer de";

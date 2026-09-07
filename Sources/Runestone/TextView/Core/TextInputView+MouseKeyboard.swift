@@ -20,6 +20,7 @@ extension TextInputView {
         }
         isMouseSelecting = true
         pendingOptionClickPoint = nil
+        doubleShiftDetector.noteOtherInput()
         if isPointOnSelectionHandle(point) {
             return
         }
@@ -128,31 +129,63 @@ extension TextInputView {
         }
 
         delegate?.textInputView(self, didReceiveKeyDown: event)
+        // A key press cancels a half-formed double-modifier tap (e.g. ⇧ x ⇧).
+        doubleShiftDetector.noteOtherInput()
 
         if delegate?.textInputView(self, shouldInterceptKeyDown: event) == true {
             return
         }
 
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if flags.contains(.command), handleCommandKeyDown(event) {
+
+        // ⌘A stays hard-wired: it is the standard Select All and is intentionally matched
+        // loosely (any ⌘ + "a"), unlike the exact-modifier keymap bindings.
+        if flags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "a" {
+            selectAll(nil)
             return
         }
 
-        // ⌥⌘↑/↓ clone a caret vertically; ⌃⇧←/→/↑/↓ grow/shrink a block selection. Both are
-        // checked before the plain arrow-key switch below, where ⌥ and ⇧ each already mean
-        // something else (word movement, linear selection extension).
-        if flags == [.command, .option] {
+        switch keymapDispatcher.resolve(event: event, keymap: keymap) {
+        case .pendingChord:
+            return
+        case .action(let action):
+            if performKeymapAction(action, isEditable: isEditable) {
+                return
+            }
+            if delegate?.textInputView(self, didRequestAction: action) == true {
+                return
+            }
+            // Neither core nor host handled it — try a built-in fallback, then swallow so the
+            // key doesn't fall through to text insertion.
+            _ = performFallbackAction(action, isEditable: isEditable)
+            return
+        case .unhandled:
+            break
+        }
+
+        // Sticky column-selection mode (⌘⇧8): arrows grow the rectangle, Esc is handled below.
+        if blockSelectionController.isStickyModeEnabled {
             switch event.keyCode {
-            case 0x7E:
-                addCaretAbove()
+            case 0x7B:
+                extendBlockSelection(in: .left)
+                return
+            case 0x7C:
+                extendBlockSelection(in: .right)
                 return
             case 0x7D:
-                addCaretBelow()
+                extendBlockSelection(in: .down)
+                return
+            case 0x7E:
+                extendBlockSelection(in: .up)
                 return
             default:
                 break
             }
         }
+
+        // ⌃⇧←/→/↑/↓ grow/shrink a block selection. Checked before the plain arrow-key switch
+        // below, where ⇧ already means linear selection extension. Not expressed through the
+        // keymap because it is a continuous directional gesture, not a discrete action.
         if flags == [.control, .shift] {
             switch event.keyCode {
             case 0x7B:
@@ -236,6 +269,16 @@ extension TextInputView {
         }
     }
 
+    override func flagsChanged(with event: NSEvent) {
+        if doubleShiftDetector.handleFlagsChanged(event) {
+            if performKeymapAction(.searchEverywhere, isEditable: delegate?.textInputViewIsEditable(self) ?? true)
+                || delegate?.textInputView(self, didRequestAction: .searchEverywhere) == true {
+                return
+            }
+        }
+        super.flagsChanged(with: event)
+    }
+
     override func doCommand(by selector: Selector) {
         let isEditable = delegate?.textInputViewIsEditable(self) ?? true
         switch selector {
@@ -285,7 +328,7 @@ extension TextInputView {
     }
 }
 
-private extension TextInputView {
+extension TextInputView {
     private func setSelectedRange(from anchor: Int, to index: Int) {
         let start = min(anchor, index)
         let end = max(anchor, index)
@@ -324,51 +367,81 @@ private extension TextInputView {
         inputDelegate?.selectionDidChange(self)
     }
 
-    private func handleCommandKeyDown(_ event: NSEvent) -> Bool {
-        guard let characters = event.charactersIgnoringModifiers?.lowercased() else {
+    /// Performs a keymap action the editor core owns. Returns `false` for actions that need a
+    /// host (palette, LSP navigation, formatting) so the delegate gets a chance at them.
+    func performKeymapAction(_ action: EditorActionID, isEditable: Bool) -> Bool {
+        switch action {
+        case .selectLines:
+            selectLines()
+        case .selectNextOccurrence:
+            selectNextOccurrence()
+        case .selectAllOccurrences:
+            selectAllOccurrences()
+        case .skipCurrentOccurrence:
+            skipCurrentOccurrence()
+        case .addCaretsToLineEnds:
+            addSelectionsOnEachLine()
+        case .addCaretAbove:
+            addCaretAbove()
+        case .addCaretBelow:
+            addCaretBelow()
+        case .undoLastCaretChange:
+            undoLastCaretChange()
+        case .expandSelection:
+            expandSemanticSelection()
+        case .shrinkSelection:
+            shrinkSemanticSelection()
+        case .toggleColumnSelectionMode:
+            toggleColumnSelectionMode()
+        case .toggleFindPanel:
+            delegate?.textInputViewDidRequestToggleFindPanel(self, mode: .find)
+        case .toggleReplacePanel:
+            delegate?.textInputViewDidRequestToggleFindPanel(self, mode: .replace)
+        case .duplicateLines:
+            guard isEditable else { return true }
+            duplicateSelectedLines()
+        case .deleteLines:
+            guard isEditable else { return true }
+            deleteSelectedLines()
+        case .moveLineUp:
+            guard isEditable else { return true }
+            moveSelectedLinesUp()
+        case .moveLineDown:
+            guard isEditable else { return true }
+            moveSelectedLinesDown()
+        case .moveStatementUp:
+            guard isEditable else { return true }
+            moveSelectedStatements(byOffset: -1)
+        case .moveStatementDown:
+            guard isEditable else { return true }
+            moveSelectedStatements(byOffset: 1)
+        case .joinLines:
+            guard isEditable else { return true }
+            joinSelectedLines()
+        case .indentLines:
+            guard isEditable else { return true }
+            shiftRight()
+        case .outdentLines:
+            guard isEditable else { return true }
+            shiftLeft()
+        default:
+            // Not a core action (palette, navigation, formatting, surround-with…).
             return false
         }
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return true
+    }
 
-        // ⌘K ⌘D: a bare ⌘K arms a short window for the next ⌘-key to complete the chord. Any
-        // other ⌘-key (including a second ⌘K) drops it rather than accumulating stale state.
-        if let pending = pendingChordPrefix {
-            pendingChordPrefix = nil
-            if pending.key == "k", Date().timeIntervalSince1970 - pending.timestamp < 2, characters == "d", flags == .command {
-                skipCurrentOccurrence()
-                return true
-            }
-        }
-        if characters == "k", flags == .command {
-            pendingChordPrefix = (key: "k", timestamp: Date().timeIntervalSince1970)
+    /// Built-in fallbacks for actions no host handled — currently a local reindent when there
+    /// is no LSP formatter.
+    func performFallbackAction(_ action: EditorActionID, isEditable: Bool) -> Bool {
+        guard isEditable else { return false }
+        switch action {
+        case .reformatCode:
+            reindentSelectedLines()
             return true
+        default:
+            return false
         }
-        if characters == "a" {
-            selectAll(nil)
-            return true
-        }
-        if characters == "f" {
-            let mode: FindPanelMode = event.modifierFlags.contains(.option) ? .replace : .find
-            delegate?.textInputViewDidRequestToggleFindPanel(self, mode: mode)
-            return true
-        }
-        if characters == "l", flags == [.command, .shift] {
-            selectAllOccurrences()
-            return true
-        }
-        if characters == "l", flags == [.command, .option] {
-            addSelectionsOnEachLine()
-            return true
-        }
-        if characters == "d", flags == .command {
-            selectNextOccurrence()
-            return true
-        }
-        if characters == "u", flags == .command {
-            undoLastCaretChange()
-            return true
-        }
-        return false
     }
 
     private func moveSelectionForArrowKey(direction: UITextLayoutDirection, flags: NSEvent.ModifierFlags) {

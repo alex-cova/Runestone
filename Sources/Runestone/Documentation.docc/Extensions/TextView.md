@@ -94,6 +94,55 @@
 - ``moveSelectedLinesDown()``
 - ``scrollRangeToVisible(_:)``
 
+### Navigation History
+
+- ``navigationHistory``
+- ``NavigationHistory``
+- ``NavigationEntry``
+- ``navigateBack()``
+- ``navigateForward()``
+- ``recordNavigationCheckpoint()``
+- ``currentNavigationEntry()``
+- ``documentIdentifier``
+- ``documentURL``
+- ``onNavigateToHistoryEntry``
+
+### Key Bindings
+
+- ``keymap``
+- ``Keymap``
+- ``EditorActionID``
+- ``KeyStroke``
+- ``KeyChord``
+- ``perform(_:)``
+- ``editorActionHandler``
+- ``keyDownHandler``
+- ``addKeyDownInterceptor(_:)``
+
+### Line Operations
+
+- ``selectLines()``
+- ``duplicateSelectedLines()``
+- ``deleteSelectedLines()``
+- ``reindentSelectedLines()``
+
+### Semantic Selection & Column Mode
+
+- ``isColumnSelectionModeEnabled``
+- ``toggleColumnSelectionMode()``
+- ``beginBlockSelection(at:)``
+- ``extendBlockSelection(to:)``
+- ``endBlockSelection()``
+- ``isBlockSelectionActive``
+
+### Surround With
+
+- ``SurroundTemplate``
+- ``surroundTemplates``
+- ``applicableSurroundTemplates()``
+- ``surroundSelection(with:)``
+- ``languageIdentifier``
+
 ### Indenting Text
 
 - ``shiftLeft()``

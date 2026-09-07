@@ -12,7 +12,7 @@ Based on [simonbs/Runestone](https://github.com/simonbs/Runestone) (originally f
 * **macOS-Native AppKit Design**: Built with native text input handling (`NSTextInputClient` / `UITextInput`), full IME and accented character support, smooth scrolling, and customizable keybindings (`keyDownHandler`).
 * **Multi-Cursor & Column Selection**:
   * **Multiple Carets**: Place carets with Option-click, clone carets vertically (⌥⌘↑ / ⌥⌘↓), or undo caret additions (⌘U).
-  * **Occurrence Selection**: Select next occurrence (⌘D), skip occurrence (⌘K ⌘D), or select all occurrences (⌘⇧L).
+  * **Occurrence Selection**: Select next occurrence (⌘⇧D), skip occurrence (⌘K ⌘D), or select all occurrences (⌘⇧L).
   * **Column / Block Selection**: Rectangular selection via Option-drag or ⌃⇧-arrow keys.
   * **Multi-Caret Operations**: Synchronized typing, multi-caret copy/cut/paste, line shifting, indent/outdent, and full caret set undo/redo restoration.
 * **Tree-sitter Syntax Highlighting**: Fast, asynchronous incremental syntax highlighting with language layers and injected languages (e.g. JavaScript/CSS in HTML).
@@ -24,7 +24,7 @@ Based on [simonbs/Runestone](https://github.com/simonbs/Runestone) (originally f
 * **Editing & Formatting**:
   * **TextFormation Integration**: Auto-closing bracket/character pairs (`CharacterPair`), skip-over closing delimiters, tab expansion, and whitespace cleanup.
   * **Smart Indentation**: Language-aware indent on newline, block indent/unindent (shift left/right), and automatic indentation strategy detection (tabs vs. spaces).
-  * **Line Manipulation**: Move selected lines up/down (⌥↑ / ⌥↓).
+  * **Line Manipulation**: Select (⌘L), duplicate (⌘D), delete (⌘⌫), and move selected lines up/down (⌥↑ / ⌥↓).
   * **Timed Undo Coalescing**: `TimedUndoManager` groups rapid typing into single undo steps.
 * **Gutter & Display Customization**: Dynamic-width line numbers, line selection highlights, page guide columns, invisible character rendering (spaces, tabs, line breaks), and custom themes (`Theme`, `DefaultTheme`).
 * **Search & Replace**: Programmatic search API (`SearchQuery`) supporting plain text, full-word, and regular expressions with capture groups (`$0`, `$1`), batch replacement, built-in find/replace panel, and system `UIFindInteraction` integration.
@@ -210,7 +210,7 @@ DispatchQueue.global(qos: .userInitiated).async {
 `TextView` natively supports multi-cursor and column selection:
 
 ```swift
-// Select next occurrence of current word (⌘D)
+// Select next occurrence of current word (⌘⇧D)
 textView.selectNextOccurrence()
 
 // Skip current occurrence and move to next (⌘K ⌘D)
@@ -230,6 +230,11 @@ textView.undoLastCaretChange()
 for range in textView.selectedRanges {
     print("Caret at: \(range.location)")
 }
+
+// Line operations — all multi-caret aware, each a single undo step
+textView.selectLines()            // ⌘L  — snap every selection out to whole lines
+textView.duplicateSelectedLines() // ⌘D  — copy each line below, caret follows the copy
+textView.deleteSelectedLines()    // ⌘⌫  — remove every line the selection touches
 ```
 
 ### 4. Wiring the Editor Intelligence Controller
@@ -303,22 +308,52 @@ workbench.restore(from: state)
 
 ## Keyboard Shortcuts Reference
 
+Key bindings are driven by a `Keymap` assigned to `textView.keymap`. Two presets ship:
+`.default_` (below) and `.intelliJ` (an IntelliJ IDEA–style layout). `Keymap` values are
+editable (`bind(_:to:)` / `unbind(_:)`), and every binding maps to an `EditorActionID` you can
+also invoke directly with `textView.perform(_:)`.
+
+### `.default_` keymap
+
 | Shortcut | Action |
 | :--- | :--- |
 | **⌥ + Click** | Add caret at click position |
 | **⌥⌘↑ / ⌥⌘↓** | Clone caret one line above / below |
-| **⌘D** | Select next occurrence of current word |
+| **⌘⇧D** | Select next occurrence of current word |
 | **⌘K ⌘D** | Skip current occurrence and select next |
 | **⌘⇧L** | Select all occurrences in document |
 | **⌘U** | Undo last caret change |
 | **⌥ + Drag** / **⌃⇧↑↓←→** | Rectangular column / block selection |
-| **⌥↑ / ⌥↓** | Move selected line(s) up / down |
-| **Tab / ⇧Tab** | Indent / unindent selected block |
+| **⌘L** | Select current line(s) |
+| **⌘D** | Duplicate current line(s) |
+| **⌘⌫** | Delete current line(s) |
+| **⌥⇧↑ / ⌥⇧↓** | Move selected line(s) up / down |
 | **⌘F** / **⌥⌘F** | Open Find / Replace panel |
-| **⌘G** / **⌘⇧G** | Find next / previous match |
+| **⌃Space** / **Esc** | Trigger / dismiss code completion (with `EditorIntelligence`) |
+| **⌘ + Click** | Go to definition (with `EditorIntelligence`) |
+
+### `.intelliJ` keymap (differences from `.default_`)
+
+| Shortcut | Action |
+| :--- | :--- |
+| **⇧⇧** (double tap) / **⌘⇧A** | Search Everywhere / Find Action |
+| **⌘E** | Recent files |
+| **⌥↑ / ⌥↓** | Extend / shrink selection by syntax node |
+| **⌥⇧↑ / ⌥⇧↓** | Move line up / down |
+| **⌘⇧↑ / ⌘⇧↓** | Move statement up / down (syntax-aware) |
+| **⌃G** / **⌃⌘G** | Add caret at next occurrence / select all occurrences |
+| **⌘⇧8** | Toggle column (block) selection mode |
+| **⌃⇧J** | Join lines |
+| **⌥⌘T** | Surround with… |
+| **⌥⌘L** | Reformat code (LSP, or a bracket-depth reindent fallback) |
 | **⌘L** | Go to line |
-| **⌃Space** / **Esc** | Trigger / dismiss code completion |
-| **⌘ + Click** | Go to definition |
+| **⌘B** / **⌥⌘B** / **⌥⇧⌘B** | Go to definition / implementation(s) / find usages |
+| **⌘[ / ⌘]** | Navigate back / forward through cursor history |
+
+Palette actions (Search Everywhere, Find Action, Recent Files, Surround With…) need a
+`CommandPaletteController` attached to the text view; LSP navigation and Reformat Code need an
+`EditorIntelligenceController`. Cursor-history back/forward (`⌘[` / `⌘]`) works on a bare
+`TextView`.
 
 ---
 

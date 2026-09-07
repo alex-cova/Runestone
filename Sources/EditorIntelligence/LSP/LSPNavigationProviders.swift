@@ -9,6 +9,7 @@ public actor LSPDefinitionProvider: NavigationProvider {
     }
 
     public func provide(context: NavigationContext) async -> NavigationResult? {
+        guard context.kind == .definition else { return nil }
         do {
             let locations = try await client.requestDefinition(for: context.document, at: context.cursor.position)
             guard !locations.isEmpty else { return nil }
@@ -31,9 +32,33 @@ public actor LSPReferencesProvider: NavigationProvider {
     }
 
     public func provide(context: NavigationContext) async -> NavigationResult? {
+        guard context.kind == .references else { return nil }
         do {
             let locations = try await client.requestReferences(for: context.document, at: context.cursor.position)
             guard !locations.isEmpty else { return nil }
+            return .multiple(locations.map { navigationLocation(from: $0, documentID: context.document.id) })
+        } catch {
+            return nil
+        }
+    }
+}
+
+public actor LSPImplementationProvider: NavigationProvider {
+    public let name = "LSPImplementation"
+    private let client: LSPClient
+
+    public init(client: LSPClient) {
+        self.client = client
+    }
+
+    public func provide(context: NavigationContext) async -> NavigationResult? {
+        guard context.kind == .implementation else { return nil }
+        do {
+            let locations = try await client.requestImplementation(for: context.document, at: context.cursor.position)
+            guard !locations.isEmpty else { return nil }
+            if locations.count == 1, let lspLocation = locations.first {
+                return .single(navigationLocation(from: lspLocation, documentID: context.document.id))
+            }
             return .multiple(locations.map { navigationLocation(from: $0, documentID: context.document.id) })
         } catch {
             return nil

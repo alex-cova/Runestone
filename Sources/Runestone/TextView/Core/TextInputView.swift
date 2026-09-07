@@ -2,6 +2,7 @@ import Foundation
 @preconcurrency import AppKit
 // swiftlint:disable file_length
 import Combine
+import EditorIntelligence
 
 @MainActor
 protocol TextInputViewDelegate: AnyObject {
@@ -26,6 +27,9 @@ protocol TextInputViewDelegate: AnyObject {
     func textInputViewDidRequestToggleFindPanel(_ view: TextInputView, mode: FindPanelMode)
     func textInputView(_ view: TextInputView, shouldInterceptKeyDown event: NSEvent) -> Bool
     func textInputView(_ view: TextInputView, didReceiveKeyDown event: NSEvent)
+    /// Asks the host to perform a keymap action the editor core does not handle itself
+    /// (e.g. `.searchEverywhere`, `.goToDefinition`). Return `true` if consumed.
+    func textInputView(_ view: TextInputView, didRequestAction action: EditorActionID) -> Bool
     func textInputViewDidReceiveCaretRepositioningClick(_ view: TextInputView)
     func textInputViewDidFinishSyntaxParse(_ view: TextInputView)
     func textInputView(_ view: TextInputView, didChangeContent change: TextContentChange)
@@ -681,7 +685,7 @@ final class TextInputView: UIView, UITextInput {
                    multiSelectionController.selections != [selectedRange] {
                     multiSelectionController.setSelections([selectedRange])
                 }
-                if !isApplyingBlockSelectionUpdate, blockSelectionController.isActive {
+                if !isApplyingBlockSelectionUpdate, blockSelectionController.isActive, !blockSelectionController.isStickyModeEnabled {
                     blockSelectionController.end()
                 }
                 layoutManager.selectedRange = _selectedRange
@@ -816,6 +820,7 @@ final class TextInputView: UIView, UITextInput {
     private let bracketMatchingController: BracketMatchingController
     private let diagnosticEmphasisController = DiagnosticEmphasisController()
     private let multiSelectionController = MultiSelectionController()
+    let semanticSelectionController = SemanticSelectionController()
     private var isApplyingMultipleSelectionUpdate = false
     let blockSelectionController = BlockSelectionController()
     private var isApplyingBlockSelectionUpdate = false
@@ -855,9 +860,14 @@ final class TextInputView: UIView, UITextInput {
     /// click (add a caret) or a drag (start a block/column selection). See
     /// `TextInputView+MouseKeyboard.swift`.
     var pendingOptionClickPoint: CGPoint?
-    /// Armed by a bare ⌘K, consumed by the next ⌘-key within the window — implements the ⌘K ⌘D
-    /// "skip current occurrence" chord. See `handleCommandKeyDown(_:)`.
-    var pendingChordPrefix: (key: String, timestamp: TimeInterval)?
+    /// Active keystroke → action bindings. Set from ``TextView/keymap``.
+    var keymap: Keymap = .default_ {
+        didSet { keymapDispatcher.reset() }
+    }
+    /// Resolves key events against ``keymap``, including two-step chords (e.g. ⌘K ⌘D).
+    var keymapDispatcher = KeymapDispatcher()
+    /// Detects a double tap of bare Shift for Search Everywhere.
+    var doubleShiftDetector = DoubleModifierDetector()
 
     // MARK: - Lifecycle
     init(theme: Theme) {
@@ -2284,7 +2294,7 @@ extension TextInputView {
         return resultingRange
     }
 
-    private func replaceText(in range: NSRange,
+    func replaceText(in range: NSRange,
                              with newString: String,
                              selectedRangeAfterUndo: NSRange? = nil,
                              selectedRangesAfterUndo: [NSRange]? = nil,
@@ -2351,7 +2361,7 @@ extension TextInputView {
         setNeedsLayout()
     }
 
-    private func shouldChangeText(in range: NSRange, replacementText text: String) -> Bool {
+    func shouldChangeText(in range: NSRange, replacementText text: String) -> Bool {
         delegate?.textInputView(self, shouldChangeTextIn: range, replacementText: text) ?? true
     }
 
@@ -2726,14 +2736,37 @@ extension TextInputView {
 
     /// Resolves a (row, column) pair — as produced by `LineManager.linePosition(at:)` — back to a
     /// document offset, clamping the column to the row's own length. Shared by the multi-cursor
-    /// indent and move-line batch operations, which both need to reconstruct carets from
-    /// pre-edit (row, column) captures once their edits are done.
-    private func location(forRow row: Int, column: Int) -> Int? {
+    /// indent, move-line, and line (duplicate/delete/select) batch operations, which all need to
+    /// reconstruct carets from pre-edit (row, column) captures once their edits are done.
+    func location(forRow row: Int, column: Int) -> Int? {
         guard row >= 0, row < lineManager.lineCount else {
             return nil
         }
         let line = lineManager.line(atRow: row)
         return line.location + min(max(column, 0), line.data.length)
+    }
+
+    /// Collapses every row touched by `ranges` into ascending, strictly-contiguous row groups.
+    /// A group spans rows `n...m` only when every row between is also touched or adjacent, so
+    /// two carets on directly neighbouring lines merge into one group while a gap of >=1 row
+    /// keeps them separate. Shared by the move-line and line (duplicate/delete) batch paths,
+    /// which both apply one edit per group and then rebuild carets.
+    func contiguousRowGroups(in ranges: [NSRange]) -> [ClosedRange<Int>] {
+        var rows = Set<Int>()
+        for range in ranges {
+            for line in lineManager.lines(in: range) {
+                rows.insert(line.index)
+            }
+        }
+        var groups: [ClosedRange<Int>] = []
+        for row in rows.sorted() {
+            if let last = groups.last, row == last.upperBound + 1 {
+                groups[groups.count - 1] = last.lowerBound...row
+            } else {
+                groups.append(row...row)
+            }
+        }
+        return groups
     }
 }
 
@@ -2778,7 +2811,7 @@ extension TextInputView {
     /// becomes `row + lineOffset` afterward with its column unchanged — no per-character delta
     /// bookkeeping is needed here, unlike indent.
     ///
-    /// Groups are built from strictly contiguous rows, same as `shiftAllSelections`. Each group
+    /// Groups come from `contiguousRowGroups(in:)` — strictly contiguous rows. Each group
     /// also touches one row *beyond* itself — its target row, immediately above (up) or below
     /// (down) the group — but that never collides with a neighboring group's own rows as long as
     /// the two aren't directly adjacent: a gap of >=1 row always leaves at least one full row of
@@ -2796,13 +2829,8 @@ extension TextInputView {
         guard !originalSelections.isEmpty else {
             return
         }
-        var rows = Set<Int>()
-        for range in originalSelections {
-            for line in lineManager.lines(in: range) {
-                rows.insert(line.index)
-            }
-        }
-        guard !rows.isEmpty else {
+        let groups = contiguousRowGroups(in: originalSelections)
+        guard !groups.isEmpty else {
             return
         }
         var boundPairs: [(start: LinePosition, end: LinePosition)] = []
@@ -2812,15 +2840,6 @@ extension TextInputView {
                 return
             }
             boundPairs.append((startPosition, endPosition))
-        }
-        let sortedRows = rows.sorted()
-        var groups: [ClosedRange<Int>] = []
-        for row in sortedRows {
-            if let last = groups.last, row == last.upperBound + 1 {
-                groups[groups.count - 1] = last.lowerBound...row
-            } else {
-                groups.append(row...row)
-            }
         }
         let orderedGroups = lineOffset < 0
             ? groups.sorted { $0.lowerBound < $1.lowerBound }
@@ -2868,6 +2887,195 @@ extension TextInputView {
             return
         }
         applySelectedRanges(newSelections.sorted { $0.location < $1.location })
+    }
+}
+
+// MARK: - Line Operations
+extension TextInputView {
+    /// Snaps every selection out to the full extent of the line(s) it touches, trailing line
+    /// break included (⌘L). Single-shot: because `startAndEndLine(in:)` resolves the end line
+    /// from `upperBound - 1`, running it again on the resulting range reproduces that same range.
+    /// Works per selection when multiple carets are active; colliding line spans are merged by
+    /// `MultiSelectionController.normalize`.
+    func selectLines() {
+        let ranges = selectedRanges
+        guard !ranges.isEmpty else {
+            return
+        }
+        var newRanges: [NSRange] = []
+        for range in ranges {
+            guard let (startLine, endLine) = lineManager.startAndEndLine(in: range) else {
+                continue
+            }
+            let location = startLine.location
+            let length = endLine.location + endLine.data.totalLength - location
+            newRanges.append(NSRange(location: location, length: length))
+        }
+        guard !newRanges.isEmpty else {
+            return
+        }
+        pushCaretHistory()
+        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        applySelectedRanges(newRanges)
+    }
+
+    /// Inserts a copy of every line touched by the current selection immediately below it, in one
+    /// undo step (⌘D). Each contiguous run of touched rows is copied as a block; the caret set
+    /// moves onto the copy (VS Code / Sublime behaviour) — a selection at row `r` in a group ends
+    /// up shifted down by that group's own height plus the combined height of every group above
+    /// it. When the last line has no trailing line break the copy is prefixed with one so it
+    /// still lands on its own line. Multi-caret aware; a plain caret is just the one-selection
+    /// case.
+    func duplicateSelectedLines() {
+        let originalSelections = selectedRanges
+        guard !originalSelections.isEmpty else {
+            return
+        }
+        let groups = contiguousRowGroups(in: originalSelections)
+        guard !groups.isEmpty else {
+            return
+        }
+        var boundPairs: [(start: LinePosition, end: LinePosition)] = []
+        for range in originalSelections {
+            guard let startPosition = lineManager.linePosition(at: range.location),
+                  let endPosition = lineManager.linePosition(at: range.upperBound) else {
+                return
+            }
+            boundPairs.append((startPosition, endPosition))
+        }
+        var insertions: [(location: Int, text: String)] = []
+        for group in groups {
+            let firstLine = lineManager.line(atRow: group.lowerBound)
+            let lastLine = lineManager.line(atRow: group.upperBound)
+            let blockRange = NSRange(location: firstLine.location,
+                                     length: lastLine.location + lastLine.data.totalLength - firstLine.location)
+            guard let blockText = stringView.substring(in: blockRange) else {
+                return
+            }
+            let text = lastLine.data.delimiterLength == 0 ? lineEndings.symbol + blockText : blockText
+            insertions.append((location: blockRange.upperBound, text: text))
+        }
+        guard insertions.allSatisfy({ shouldChangeText(in: NSRange(location: $0.location, length: 0), replacementText: $0.text) }) else {
+            return
+        }
+        timedUndoManager.beginIsolatedUndoGrouping()
+        let primaryIndex = multiSelectionController.primaryIndex
+        // Bottom-to-top so an earlier insertion never shifts a later one's location.
+        for insertion in insertions.sorted(by: { $0.location > $1.location }) {
+            replaceText(in: NSRange(location: insertion.location, length: 0),
+                       with: insertion.text,
+                       selectedRangesAfterUndo: originalSelections,
+                       primaryIndexAfterUndo: primaryIndex,
+                       undoActionName: L10n.Undo.ActionName.duplicateLines,
+                       updateSelection: false)
+        }
+        timedUndoManager.endUndoGrouping()
+        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        let sortedGroups = groups.sorted { $0.lowerBound < $1.lowerBound }
+        var newSelections: [NSRange] = []
+        for pair in boundPairs {
+            let shift = duplicateRowShift(forRow: pair.start.row, groups: sortedGroups)
+            guard let startLocation = location(forRow: pair.start.row + shift, column: pair.start.column),
+                  let endLocation = location(forRow: pair.end.row + shift, column: pair.end.column) else {
+                continue
+            }
+            newSelections.append(NSRange(location: min(startLocation, endLocation), length: abs(endLocation - startLocation)))
+        }
+        guard !newSelections.isEmpty else {
+            return
+        }
+        applySelectedRanges(newSelections.sorted { $0.location < $1.location })
+    }
+
+    /// Deletes every line touched by the current selection, in one undo step (⌘⌫). Each
+    /// contiguous run of touched rows is removed as a block; each caret then lands at the start
+    /// of whatever line slid up into the group's first row, column preserved and clamped, shifted
+    /// up by every row deleted above it. When the block ends at a final line that has no trailing
+    /// line break the preceding delimiter is swallowed too, so no blank line is left behind.
+    /// Deleting the whole document leaves a single empty line with the caret at the start.
+    func deleteSelectedLines() {
+        let originalSelections = selectedRanges
+        guard !originalSelections.isEmpty else {
+            return
+        }
+        let groups = contiguousRowGroups(in: originalSelections)
+        guard !groups.isEmpty else {
+            return
+        }
+        var targets: [(row: Int, column: Int)] = []
+        for range in originalSelections {
+            guard let position = lineManager.linePosition(at: range.location) else {
+                return
+            }
+            targets.append((position.row, position.column))
+        }
+        var deleteRanges: [NSRange] = []
+        for group in groups {
+            let firstLine = lineManager.line(atRow: group.lowerBound)
+            let lastLine = lineManager.line(atRow: group.upperBound)
+            var start = firstLine.location
+            let end = lastLine.location + lastLine.data.totalLength
+            if lastLine.data.delimiterLength == 0, group.lowerBound > 0 {
+                let previousLine = lineManager.line(atRow: group.lowerBound - 1)
+                start = previousLine.location + previousLine.data.length
+            }
+            deleteRanges.append(NSRange(location: start, length: end - start))
+        }
+        guard deleteRanges.allSatisfy({ shouldChangeText(in: $0, replacementText: "") }) else {
+            return
+        }
+        timedUndoManager.beginIsolatedUndoGrouping()
+        let primaryIndex = multiSelectionController.primaryIndex
+        for range in deleteRanges.sorted(by: { $0.location > $1.location }) {
+            replaceText(in: range,
+                       with: "",
+                       selectedRangesAfterUndo: originalSelections,
+                       primaryIndexAfterUndo: primaryIndex,
+                       undoActionName: L10n.Undo.ActionName.deleteLines,
+                       updateSelection: false)
+        }
+        timedUndoManager.endUndoGrouping()
+        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        let sortedGroups = groups.sorted { $0.lowerBound < $1.lowerBound }
+        let newLineCount = lineManager.lineCount
+        var newSelections: [NSRange] = []
+        for target in targets {
+            var rowsDeletedAbove = 0
+            var landingRow = target.row
+            for group in sortedGroups {
+                if group.contains(target.row) {
+                    landingRow = group.lowerBound - rowsDeletedAbove
+                    break
+                }
+                if group.upperBound < target.row {
+                    rowsDeletedAbove += group.count
+                }
+            }
+            let clampedRow = max(0, min(landingRow, newLineCount - 1))
+            guard let caretLocation = location(forRow: clampedRow, column: target.column) else {
+                continue
+            }
+            newSelections.append(NSRange(location: caretLocation, length: 0))
+        }
+        if newSelections.isEmpty {
+            newSelections = [NSRange(location: 0, length: 0)]
+        }
+        applySelectedRanges(newSelections.sorted { $0.location < $1.location })
+    }
+
+    /// Downward row shift a caret at `row` receives from `duplicateSelectedLines()`: the height of
+    /// its own (sorted, ascending) group plus the combined height of every group above it. `row`
+    /// is guaranteed to fall inside exactly one group, since the groups are derived from the
+    /// selections themselves.
+    private func duplicateRowShift(forRow row: Int, groups: [ClosedRange<Int>]) -> Int {
+        var cumulative = 0
+        for group in groups {
+            if group.contains(row) {
+                return cumulative + group.count
+            }
+            cumulative += group.count
+        }
+        return cumulative
     }
 }
 
@@ -3148,5 +3356,327 @@ extension TextInputView: EditMenuControllerDelegate {
 
     func editMenuControllerIsEditable(_ controller: EditMenuController) -> Bool {
         delegate?.textInputViewIsEditable(self) ?? true
+    }
+}
+
+// MARK: - IntelliJ-style actions
+extension TextInputView {
+    /// Toggles sticky column/block selection mode (⌘⇧8).
+    func toggleColumnSelectionMode() {
+        if blockSelectionController.isStickyModeEnabled {
+            endBlockSelection()
+            collapseMultiSelectionToPrimary()
+        } else {
+            beginBlockSelectionAtCurrentCaretIfNeeded()
+            blockSelectionController.isStickyModeEnabled = true
+            applyMaterializedBlockSelectionIfActive()
+        }
+    }
+
+    private func applyMaterializedBlockSelectionIfActive() {
+        guard blockSelectionController.isActive else { return }
+        extendBlockSelection(in: .right)
+        extendBlockSelection(in: .left)
+    }
+
+    // MARK: Semantic selection
+
+    private var treeSitterLanguageMode: TreeSitterInternalLanguageMode? {
+        languageMode as? TreeSitterInternalLanguageMode
+    }
+
+    func expandSemanticSelection() {
+        guard let current = selection else { return }
+        pushCaretHistory()
+        guard let next = semanticSelectionController.expand(from: current, candidates: { [weak self] in
+            self?.semanticSelectionCandidates(for: current) ?? []
+        }) else {
+            return
+        }
+        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        selection = next
+        selectionAnchor = next.location
+    }
+
+    func shrinkSemanticSelection() {
+        guard let current = selection, let previous = semanticSelectionController.shrink(from: current) else {
+            return
+        }
+        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        selection = previous
+        selectionAnchor = previous.location
+    }
+
+    /// Increasing ranges that each strictly contain `current`: the word at the caret, then
+    /// every enclosing syntax-node range, or word → line → paragraph → document without a tree.
+    private func semanticSelectionCandidates(for current: NSRange) -> [NSRange] {
+        var result: [NSRange] = []
+        let documentRange = NSRange(location: 0, length: string.length)
+
+        if let word = SelectNextOccurrence.wordRange(at: current.location, in: string, tokenizer: tokenizer) {
+            result.append(word)
+        }
+
+        // Probe from inside the current selection (its midpoint) so a zero-width query at a
+        // token boundary doesn't resolve to the previous token.
+        let probe = min(max(current.location + current.length / 2, current.location), max(string.length - 1, 0))
+        if let languageMode = treeSitterLanguageMode,
+           let probePosition = lineManager.linePosition(at: probe),
+           var node = languageMode.treeSitterNode(at: probePosition) {
+            var visited = 0
+            while visited < 512 {
+                visited += 1
+                let byteRange = node.byteRange
+                let range = NSRange(location: byteRange.location.utf16Length, length: byteRange.length.utf16Length)
+                if range.location <= current.location, range.upperBound >= current.upperBound, range.length > current.length {
+                    result.append(range)
+                }
+                guard let parent = node.parent else { break }
+                node = parent
+            }
+        } else {
+            if let (startLine, endLine) = lineManager.startAndEndLine(in: current) {
+                let location = startLine.location
+                let length = endLine.location + endLine.data.totalLength - location
+                result.append(NSRange(location: location, length: length))
+            }
+        }
+
+        result.append(documentRange)
+        // Trim whitespace edges (a semantic selection shouldn't start or end on a space),
+        // then keep only ranges that still strictly enclose `current`; de-dup; sort ascending.
+        var seen = Set<NSRange>()
+        return result
+            .map { trimmingWhitespace($0) }
+            .filter { $0.location <= current.location && $0.upperBound >= current.upperBound && $0.length > current.length }
+            .filter { seen.insert($0).inserted }
+            .sorted { $0.length < $1.length }
+    }
+
+    private func trimmingWhitespace(_ range: NSRange) -> NSRange {
+        var start = range.location
+        var end = range.upperBound
+        let whitespace = CharacterSet.whitespacesAndNewlines
+        while start < end,
+              let scalar = string.substring(with: NSRange(location: start, length: 1)).unicodeScalars.first,
+              whitespace.contains(scalar) {
+            start += 1
+        }
+        while end > start,
+              let scalar = string.substring(with: NSRange(location: end - 1, length: 1)).unicodeScalars.first,
+              whitespace.contains(scalar) {
+            end -= 1
+        }
+        return NSRange(location: start, length: end - start)
+    }
+
+    // MARK: Move statement
+
+    func moveSelectedStatements(byOffset offset: Int) {
+        guard let current = selection else { return }
+        let rowRange = statementRowRange(for: current) ?? fallbackRowRange(for: current)
+        guard let rowRange else {
+            return
+        }
+        let firstLine = lineManager.line(atRow: rowRange.lowerBound)
+        let lastLine = lineManager.line(atRow: rowRange.upperBound)
+        let statementRange = NSRange(
+            location: firstLine.location,
+            length: lastLine.location + lastLine.data.totalLength - firstLine.location
+        )
+        let service = MoveLinesService(stringView: stringView, lineManager: lineManager, lineEndingSymbol: lineEndings.symbol)
+        guard let operation = service.operationForMovingLines(in: statementRange, byOffset: offset) else {
+            return
+        }
+        let undoName = offset < 0 ? L10n.Undo.ActionName.moveStatementUp : L10n.Undo.ActionName.moveStatementDown
+        timedUndoManager.endUndoGrouping()
+        timedUndoManager.beginUndoGrouping()
+        replaceText(in: operation.removeRange, with: "", undoActionName: undoName)
+        replaceText(in: operation.replacementRange, with: operation.replacementString, undoActionName: undoName)
+        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        selection = operation.selectedRange
+        timedUndoManager.endUndoGrouping()
+    }
+
+    private func statementRowRange(for range: NSRange) -> ClosedRange<Int>? {
+        guard let languageMode = treeSitterLanguageMode,
+              let position = lineManager.linePosition(at: range.location),
+              let node = languageMode.treeSitterNode(at: position) else {
+            return nil
+        }
+        return StatementRangeService().statementRowRange(around: node)
+    }
+
+    private func fallbackRowRange(for range: NSRange) -> ClosedRange<Int>? {
+        guard let start = lineManager.linePosition(at: range.location),
+              let end = lineManager.linePosition(at: range.upperBound) else {
+            return nil
+        }
+        return min(start.row, end.row)...max(start.row, end.row)
+    }
+
+    // MARK: Join lines
+
+    /// Joins lines for every caret (⌃⇧J). A single-row caret joins its line with the next; a
+    /// multi-row selection joins every line it spans. Multi-caret aware, one undo step; each
+    /// caret ends at its own join point.
+    func joinSelectedLines() {
+        let ranges = selectedRanges
+        guard !ranges.isEmpty else { return }
+
+        // How many joins each starting row needs (dedup overlapping selections, keep the max).
+        var joinsByRow: [Int: Int] = [:]
+        for range in ranges {
+            guard let start = lineManager.linePosition(at: range.location),
+                  let end = lineManager.linePosition(at: range.upperBound) else {
+                continue
+            }
+            let lastRow = end.row == start.row ? start.row + 1 : end.row
+            joinsByRow[start.row] = max(joinsByRow[start.row] ?? 0, max(1, lastRow - start.row))
+        }
+        guard !joinsByRow.isEmpty else { return }
+
+        let service = JoinLinesService(stringView: stringView, lineManager: lineManager)
+        timedUndoManager.endUndoGrouping()
+        timedUndoManager.beginUndoGrouping()
+
+        // Process top-to-bottom, shifting each later start row up by the joins already done
+        // above it; record each caret target as (row, column) to resolve once at the end.
+        var caretTargets: [(row: Int, column: Int)] = []
+        var rowShift = 0
+        for originalRow in joinsByRow.keys.sorted() {
+            let firstRow = originalRow - rowShift
+            var joinsRemaining = joinsByRow[originalRow] ?? 0
+            var joinsDone = 0
+            var caretColumn = 0
+            while joinsRemaining > 0,
+                  firstRow >= 0,
+                  firstRow + 1 < lineManager.lineCount,
+                  let operation = service.joinOperation(atRow: firstRow) {
+                joinsRemaining -= 1
+                guard shouldChangeText(in: operation.range, replacementText: operation.replacement) else {
+                    break
+                }
+                replaceText(in: operation.range,
+                           with: operation.replacement,
+                           undoActionName: L10n.Undo.ActionName.joinLines,
+                           updateSelection: false)
+                joinsDone += 1
+                caretColumn = operation.caretLocation - lineManager.line(atRow: firstRow).location
+            }
+            if joinsDone > 0 {
+                caretTargets.append((row: firstRow, column: caretColumn))
+                rowShift += joinsDone
+            }
+        }
+        timedUndoManager.endUndoGrouping()
+        guard !caretTargets.isEmpty else { return }
+
+        let newSelections = caretTargets
+            .compactMap { location(forRow: $0.row, column: $0.column) }
+            .map { NSRange(location: min($0, string.length), length: 0) }
+            .sorted { $0.location < $1.location }
+        guard !newSelections.isEmpty else { return }
+        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        if newSelections.count == 1 {
+            selection = newSelections[0]
+            selectionAnchor = newSelections[0].location
+        } else {
+            applySelectedRanges(MultiSelectionController.normalize(newSelections))
+        }
+    }
+}
+
+// MARK: - Surround with / reindent
+extension TextInputView {
+    func surroundSelection(with template: SurroundTemplate) {
+        guard let range = selection else { return }
+        let selectedText = string.substring(with: NSRange(location: range.location, length: range.length))
+        let anchorLine = lineManager.line(containingCharacterAt: range.location) ?? lineManager.line(atRow: 0)
+        let anchorLineText = string.substring(with: NSRange(location: anchorLine.location, length: anchorLine.data.length))
+        let indent = String(anchorLineText.prefix { $0 == " " || $0 == "\t" })
+        let softTab = indentStrategy.string(indentLevel: 1)
+
+        let nodes = SnippetParser().parse(template.body)
+        let context = SnippetExpansionContext(selectedText: selectedText, softTab: softTab)
+        let expansion = SnippetExpander(nodes: nodes, context: context).expand()
+
+        let expandedLines = expansion.text.components(separatedBy: "\n")
+        let reindented = expandedLines.enumerated()
+            .map { index, line in index == 0 || line.isEmpty ? line : indent + line }
+            .joined(separator: "\n")
+
+        guard shouldChangeText(in: range, replacementText: reindented) else { return }
+        timedUndoManager.endUndoGrouping()
+        timedUndoManager.beginUndoGrouping()
+        replaceText(in: range, with: reindented, undoActionName: L10n.Undo.ActionName.surroundWith)
+
+        let caretOffset: Int
+        if let finalCursorOffset = expansion.finalCursorOffset {
+            let prefixUnits = Array(expansion.text.utf16.prefix(finalCursorOffset))
+            let newlineCount = prefixUnits.filter { $0 == 0x0A }.count
+            caretOffset = finalCursorOffset + newlineCount * (indent as NSString).length
+        } else {
+            caretOffset = (reindented as NSString).length
+        }
+        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        selection = NSRange(location: min(range.location + caretOffset, string.length), length: 0)
+        selectionAnchor = selection?.location
+        timedUndoManager.endUndoGrouping()
+    }
+
+    /// Bracket-depth reindent of the selected lines. A deliberately small non-LSP fallback:
+    /// it derives each line's indent from the running `([{` / `)]}` nesting depth (quotes and
+    /// comments are not tracked), so it helps C-family and JSON and leaves brace-free languages
+    /// essentially untouched.
+    func reindentSelectedLines() {
+        guard let range = selection,
+              let (startLine, endLine) = lineManager.startAndEndLine(in: range) else {
+            return
+        }
+        let indentUnit = indentStrategy.string(indentLevel: 1)
+        // Nesting depth at the start of `startLine`, from the document beginning.
+        var depth = bracketDepth(in: NSRange(location: 0, length: startLine.location))
+        var edits: [(range: NSRange, replacement: String)] = []
+        var row = startLine.index
+        let lastRow = endLine.index
+        while row <= lastRow {
+            let line = lineManager.line(atRow: row)
+            let content = string.substring(with: NSRange(location: line.location, length: line.data.length))
+            let trimmed = content.drop { $0 == " " || $0 == "\t" }
+            let leadingCount = content.count - trimmed.count
+            let closesFirst = trimmed.first.map { ")]}".contains($0) } ?? false
+            let effectiveDepth = max(0, closesFirst ? depth - 1 : depth)
+            let desiredIndent = trimmed.isEmpty ? "" : String(repeating: indentUnit, count: effectiveDepth)
+            if String(content.prefix(leadingCount)) != desiredIndent {
+                edits.append((NSRange(location: line.location, length: leadingCount), desiredIndent))
+            }
+            depth = max(0, depth + bracketDelta(in: String(trimmed)))
+            row += 1
+        }
+        guard !edits.isEmpty else { return }
+        timedUndoManager.endUndoGrouping()
+        timedUndoManager.beginUndoGrouping()
+        for edit in edits.sorted(by: { $0.range.location > $1.range.location }) {
+            replaceText(in: edit.range, with: edit.replacement, undoActionName: L10n.Undo.ActionName.typing, updateSelection: false)
+        }
+        timedUndoManager.endUndoGrouping()
+        setNeedsLayout()
+    }
+
+    private func bracketDepth(in range: NSRange) -> Int {
+        max(0, bracketDelta(in: string.substring(with: range)))
+    }
+
+    private func bracketDelta(in text: String) -> Int {
+        var delta = 0
+        for character in text {
+            if "([{".contains(character) {
+                delta += 1
+            } else if ")]}".contains(character) {
+                delta -= 1
+            }
+        }
+        return delta
     }
 }

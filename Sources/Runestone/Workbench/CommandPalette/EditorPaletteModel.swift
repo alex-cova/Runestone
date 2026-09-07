@@ -6,6 +6,13 @@ public enum EditorPaletteMode: Equatable {
     case quickOpen
     case symbols
     case textActions
+    /// Every source at once — files, symbols, actions, recent files (double ⇧).
+    case searchEverywhere
+    /// Most-recently-used documents (⌘E).
+    case recentFiles
+    /// A list of jump targets, e.g. the results of "Go to Definition" when there is more than
+    /// one, or the surround-with templates.
+    case locations
 }
 
 /// Presentation/navigation state for a command palette — which mode it's in, the current query,
@@ -38,6 +45,21 @@ public final class EditorPaletteModel {
 
     public func showTextActions() {
         mode = .textActions
+        resetForShow()
+    }
+
+    public func showSearchEverywhere() {
+        mode = .searchEverywhere
+        resetForShow()
+    }
+
+    public func showRecentFiles() {
+        mode = .recentFiles
+        resetForShow()
+    }
+
+    public func showLocations() {
+        mode = .locations
         resetForShow()
     }
 

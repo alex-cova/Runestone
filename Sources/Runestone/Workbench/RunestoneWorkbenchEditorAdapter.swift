@@ -11,6 +11,12 @@ public final class RunestoneWorkbenchEditorAdapter: EditorAdapter, @unchecked Se
     public weak var textView: TextView?
     public weak var forwardingDelegate: TextViewDelegate?
 
+    /// Invoked (on the main actor) when ⌘[ / ⌘] lands on an entry belonging to a document
+    /// other than the one currently shown. Open that document, focus `entry.location`, and
+    /// return `true`; return `false` to let the current text view handle it locally.
+    @MainActor
+    public var onOpenHistoryEntry: ((NavigationEntry) -> Bool)?
+
     private let eventBus = EventBus<EditorEvent>()
     private let lock = NSLock()
     private var liveDocumentID: DocumentID?
@@ -31,6 +37,19 @@ public final class RunestoneWorkbenchEditorAdapter: EditorAdapter, @unchecked Se
             textView.editorDelegate = self
         }
         refreshCachedDocuments(emitEvents: false)
+    }
+
+    /// Wires the shared workbench cursor history and document identity into `textView` so
+    /// ⌘[ / ⌘] step across documents. Call whenever a pane's text view starts showing
+    /// `document`.
+    @MainActor
+    public func bindNavigationHistory(to textView: TextView, document: WorkbenchDocument) {
+        textView.navigationHistory = workbench.navigationHistory
+        textView.documentIdentifier = document.id
+        textView.documentURL = document.url
+        textView.onNavigateToHistoryEntry = { [weak self] entry in
+            self?.onOpenHistoryEntry?(entry) ?? false
+        }
     }
 
     public var currentDocument: Document? {

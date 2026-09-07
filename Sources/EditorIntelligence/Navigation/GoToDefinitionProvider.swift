@@ -10,6 +10,9 @@ public actor GoToDefinitionProvider: NavigationProvider {
     }
 
     public func provide(context: NavigationContext) async -> NavigationResult? {
+        // Symbol-index lookup is a name match, so it can stand in for "go to
+        // implementation" too when no LSP is configured.
+        guard context.kind == .definition || context.kind == .implementation else { return nil }
         let target = context.document.wordAtCursor()
         guard !target.isEmpty else { return nil }
         let symbols = await index.search(exact: target)

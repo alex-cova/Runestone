@@ -18,10 +18,22 @@ internal enum L10n {
   }
   internal enum Undo {
     internal enum ActionName {
+      /// Delete Lines
+      internal static let deleteLines = L10n.tr("Localizable", "undo.action_name.delete_lines", fallback: "Delete Lines")
+      /// Duplicate Lines
+      internal static let duplicateLines = L10n.tr("Localizable", "undo.action_name.duplicate_lines", fallback: "Duplicate Lines")
+      /// Join Lines
+      internal static let joinLines = L10n.tr("Localizable", "undo.action_name.join_lines", fallback: "Join Lines")
       /// Move Lines Down
       internal static let moveLinesDown = L10n.tr("Localizable", "undo.action_name.move_lines_down", fallback: "Move Lines Down")
       /// Move Lines Up
       internal static let moveLinesUp = L10n.tr("Localizable", "undo.action_name.move_lines_up", fallback: "Move Lines Up")
+      /// Move Statement Down
+      internal static let moveStatementDown = L10n.tr("Localizable", "undo.action_name.move_statement_down", fallback: "Move Statement Down")
+      /// Move Statement Up
+      internal static let moveStatementUp = L10n.tr("Localizable", "undo.action_name.move_statement_up", fallback: "Move Statement Up")
+      /// Surround With
+      internal static let surroundWith = L10n.tr("Localizable", "undo.action_name.surround_with", fallback: "Surround With")
       /// Replace All
       internal static let replaceAll = L10n.tr("Localizable", "undo.action_name.replace_all", fallback: "Replace All")
       /// Typing

@@ -18,6 +18,24 @@ import CoreText
     public weak var editorDelegate: TextViewDelegate?
     /// Optional handler invoked before default key handling. Return `true` to consume the event.
     public var keyDownHandler: ((NSEvent) -> Bool)?
+    /// Keystroke → action bindings. Defaults to ``Keymap/default_`` (Runestone's historical
+    /// shortcuts). Assign ``Keymap/intelliJ`` for an IntelliJ-style set.
+    public var keymap: Keymap = .default_ {
+        didSet { textInputView.keymap = keymap }
+    }
+    /// Invoked for keymap actions the editor core does not perform itself (palette, LSP
+    /// navigation, formatting, surround-with). Return `true` if handled. `EditorIntelligenceController`
+    /// and the command-palette controller install handlers here.
+    public var editorActionHandler: ((EditorActionID) -> Bool)?
+    private var keyDownInterceptors: [(NSEvent) -> Bool] = []
+
+    /// Registers an additional key-down interceptor. Interceptors run after ``keyDownHandler``,
+    /// in registration order; the first to return `true` consumes the event. Unlike assigning
+    /// ``keyDownHandler`` this composes, so several features (completion, command palette) can
+    /// each observe keys.
+    public func addKeyDownInterceptor(_ interceptor: @escaping (NSEvent) -> Bool) {
+        keyDownInterceptors.append(interceptor)
+    }
     /// Whether the text view is in a state where the contents can be edited.
     public private(set) var isEditing = false {
         didSet {
@@ -296,6 +314,15 @@ import CoreText
     /// Ends block-selection mode without changing the current selection.
     public func endBlockSelection() {
         textInputView.endBlockSelection()
+    }
+    /// Whether sticky column (block) selection mode is on (⌘⇧8). While on, the block rectangle
+    /// survives ordinary selection assignment and grows with plain arrow keys.
+    public var isColumnSelectionModeEnabled: Bool {
+        textInputView.blockSelectionController.isStickyModeEnabled
+    }
+    /// Toggles sticky column selection mode.
+    public func toggleColumnSelectionMode() {
+        textInputView.toggleColumnSelectionMode()
     }
     /// Replaces, at every selected range, the range beginning `relativeStartOffset` UTF-16 units
     /// from that selection's own start and extending `length` units — the same relative edit
@@ -1348,6 +1375,114 @@ import CoreText
         textInputView.syntaxNode(at: location)
     }
 
+    /// Performs a keymap action programmatically — the same entry point key bindings use.
+    /// Core actions run directly; anything else is offered to ``editorActionHandler``.
+    /// - Returns: `true` if the action was handled.
+    @discardableResult
+    public func perform(_ action: EditorActionID) -> Bool {
+        if textInputView.performKeymapAction(action, isEditable: isEditable) {
+            return true
+        }
+        if editorActionHandler?(action) == true {
+            return true
+        }
+        switch action {
+        case .navigateBack:
+            return navigateBack()
+        case .navigateForward:
+            return navigateForward()
+        case .reformatCode:
+            return textInputView.performFallbackAction(action, isEditable: isEditable)
+        default:
+            return false
+        }
+    }
+
+    /// A plain language identifier (`"swift"`, `"python"`, …) for features that vary by
+    /// language, currently ``applicableSurroundTemplates()``. Not derived automatically — set
+    /// it alongside ``setLanguageMode(_:completion:)`` if you use those features. See
+    /// ``LanguageIdentifier``.
+    public var languageIdentifier: String?
+
+    /// Templates offered by ``EditorActionID/surroundWith``. Defaults to
+    /// ``SurroundTemplate/builtIns``.
+    public var surroundTemplates: [SurroundTemplate] = SurroundTemplate.builtIns
+
+    /// ``surroundTemplates`` filtered to those applicable to ``languageIdentifier``.
+    public func applicableSurroundTemplates() -> [SurroundTemplate] {
+        surroundTemplates.filter { $0.applies(to: languageIdentifier) }
+    }
+
+    /// Wraps the current selection using `template`, expanding its snippet body with the
+    /// selection substituted for `$TM_SELECTED_TEXT` and re-indenting to the current line.
+    public func surroundSelection(with template: SurroundTemplate) {
+        textInputView.surroundSelection(with: template)
+    }
+
+    /// Re-indents the lines touched by the current selection using the active language mode's
+    /// indentation rules. This is the non-LSP fallback for ``EditorActionID/reformatCode``;
+    /// prefer an LSP formatter when one is available.
+    public func reindentSelectedLines() {
+        textInputView.reindentSelectedLines()
+    }
+
+    // MARK: - Navigation history
+
+    /// Back/forward stack of caret positions for ``EditorActionID/navigateBack`` /
+    /// ``navigateForward`` (⌘[ / ⌘]). Fed automatically by significant cursor moves and by
+    /// ``recordNavigationCheckpoint()`` before programmatic jumps. Assign a shared instance
+    /// across several text views (e.g. a workbench's panes) to get cross-document history.
+    public var navigationHistory = NavigationHistory()
+    /// Identifier the host assigns to the current document, copied onto every
+    /// ``NavigationEntry`` so a multi-document host can route a cross-file back/forward jump.
+    public var documentIdentifier: UUID?
+    /// URL of the current document, if any — also copied onto ``NavigationEntry`` values.
+    public var documentURL: URL?
+    /// Invoked when back/forward lands on an entry belonging to a *different* document. Return
+    /// `true` if the host performed the navigation (opened the file and focused the location);
+    /// otherwise `TextView` falls back to moving within the current document.
+    public var onNavigateToHistoryEntry: ((NavigationEntry) -> Bool)?
+    private var isApplyingHistoryNavigation = false
+
+    /// The current caret position as a ``NavigationEntry``.
+    public func currentNavigationEntry() -> NavigationEntry {
+        let location = selectedRange.location
+        let position = textLocation(at: location) ?? TextLocation(lineNumber: 0, column: 0)
+        return NavigationEntry(documentID: documentIdentifier, url: documentURL, location: position)
+    }
+
+    /// Records the current caret position as a history stop — call right before any
+    /// programmatic jump the user should be able to step back from.
+    public func recordNavigationCheckpoint() {
+        guard !isApplyingHistoryNavigation else { return }
+        navigationHistory.recordCheckpoint(currentNavigationEntry())
+    }
+
+    @discardableResult
+    public func navigateBack() -> Bool {
+        guard let target = navigationHistory.goBack(from: currentNavigationEntry()) else { return false }
+        return applyHistoryEntry(target)
+    }
+
+    @discardableResult
+    public func navigateForward() -> Bool {
+        guard let target = navigationHistory.goForward(from: currentNavigationEntry()) else { return false }
+        return applyHistoryEntry(target)
+    }
+
+    private func applyHistoryEntry(_ entry: NavigationEntry) -> Bool {
+        if entry.documentID != documentIdentifier || entry.url != documentURL,
+           onNavigateToHistoryEntry?(entry) == true {
+            return true
+        }
+        guard let location = location(at: entry.location) else { return false }
+        isApplyingHistoryNavigation = true
+        defer { isApplyingHistoryNavigation = false }
+        textInputView.selection = NSRange(location: location, length: 0)
+        scrollRangeToVisible(NSRange(location: location, length: 0))
+        return true
+    }
+
     /// Checks if the specified locations is within the indentation of the line.
     ///
     /// - Parameter location: A location in the document.
@@ -1380,6 +1515,25 @@ import CoreText
         textInputView.moveSelectedLinesDown()
     }
 
+    /// Expands the selection to the full contents of every line it touches, including each line's
+    /// trailing line break (⌘L). Runs per caret when multiple selections are active. Calling it
+    /// again with the resulting selection has no further effect.
+    public func selectLines() {
+        textInputView.selectLines()
+    }
+
+    /// Inserts a copy of every line touched by the current selection immediately below it, in a
+    /// single undo step, leaving the caret set on the inserted copy (⌘D).
+    public func duplicateSelectedLines() {
+        textInputView.duplicateSelectedLines()
+    }
+
+    /// Deletes every line touched by the current selection, in a single undo step (⌘⌫). Deleting
+    /// the whole document leaves one empty line with the caret at the start.
+    public func deleteSelectedLines() {
+        textInputView.deleteSelectedLines()
+    }
+
     /// Attempts to detect the indent strategy used in the document. This may return an unknown strategy even
     /// when the document contains indentation.
     public func detectIndentStrategy() -> DetectedIndentStrategy {
@@ -1396,6 +1550,7 @@ import CoreText
         guard lineIndex >= 0 && lineIndex < textInputView.lineManager.lineCount else {
             return false
         }
+        recordNavigationCheckpoint()
         // I'm not exactly sure why this is necessary but if the text view is the first responder as we jump
         // to the line and we don't resign the first responder first, the caret will disappear after we have
         // jumped to the specified line.
@@ -1480,6 +1635,7 @@ import CoreText
     /// Selects the highlighed range at the specified index.
     /// - Parameter index: Index of highlighted range to select.
     public func selectHighlightedRange(at index: Int) {
+        recordNavigationCheckpoint()
         highlightNavigationController.selectRange(at: index)
     }
 
@@ -2028,6 +2184,9 @@ extension TextView: TextInputViewDelegate {
 
     func textInputViewDidChangeSelection(_ view: TextInputView) {
         UIMenuController.shared.hideMenu(from: self)
+        if !isApplyingHistoryNavigation {
+            navigationHistory.noteCursor(currentNavigationEntry())
+        }
         highlightNavigationController.selectedRange = view.selection
         if isAutomaticScrollEnabled, let newRange = textInputView.selection, newRange.length == 0 {
             // Never mutate contentOffset synchronously from selection changes —
@@ -2120,7 +2279,27 @@ extension TextView: TextInputViewDelegate {
     }
 
     func textInputView(_ view: TextInputView, shouldInterceptKeyDown event: NSEvent) -> Bool {
-        keyDownHandler?(event) ?? false
+        if keyDownHandler?(event) == true {
+            return true
+        }
+        for interceptor in keyDownInterceptors where interceptor(event) {
+            return true
+        }
+        return false
+    }
+
+    func textInputView(_ view: TextInputView, didRequestAction action: EditorActionID) -> Bool {
+        if let handler = editorActionHandler, handler(action) {
+            return true
+        }
+        switch action {
+        case .navigateBack:
+            return navigateBack()
+        case .navigateForward:
+            return navigateForward()
+        default:
+            return false
+        }
     }
 
     func textInputView(_ view: TextInputView, didReceiveKeyDown event: NSEvent) {

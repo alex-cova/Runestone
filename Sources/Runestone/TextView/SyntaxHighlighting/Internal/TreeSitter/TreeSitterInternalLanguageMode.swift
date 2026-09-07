@@ -294,6 +294,25 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
     var rootSyntaxNode: TreeSitterNode? {
         rootLanguageLayer.tree?.rootNode
     }
+
+    /// The smallest (injection-aware) tree-sitter node at `linePosition`, for callers that need
+    /// the live tree structure — parent chain, sibling rows — rather than the flattened
+    /// ``SyntaxNode``. Returns `nil` while a parse is in flight or the position is outside a
+    /// viewport parse window.
+    ///
+    /// - Important: The returned node points into a tree that is freed on the next reparse.
+    ///   Read what you need from it immediately; never hold it across a text edit.
+    func treeSitterNode(at linePosition: LinePosition) -> TreeSitterNode? {
+        let parsed = parseLock.withLock { parseInFlight ? nil : parsedUTF16Range }
+        if let parsed, parsed.length < stringView.length {
+            let line = lineManager.line(atRow: linePosition.row)
+            let location = Int(line.location) + linePosition.column
+            if !NSLocationInRange(location, parsed) {
+                return nil
+            }
+        }
+        return rootLanguageLayer.layerAndNode(at: linePosition)?.node
+    }
 }
 
 extension TreeSitterInternalLanguageMode: TreeSitterParserDelegate {

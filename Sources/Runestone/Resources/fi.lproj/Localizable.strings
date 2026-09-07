@@ -2,4 +2,10 @@
 "undo.action_name.replace_all" = "Korvaa kaikki";
 "undo.action_name.move_lines_up" = "Siirrä rivit ylöspäin";
 "undo.action_name.move_lines_down" = "Siirrä rivejä alaspäin";
+"undo.action_name.duplicate_lines" = "Monista rivit";
+"undo.action_name.delete_lines" = "Poista rivit";
 "menu.item_title.replace" = "Korvaa";
+"undo.action_name.join_lines" = "Yhdistä rivit";
+"undo.action_name.move_statement_up" = "Siirrä lause ylöspäin";
+"undo.action_name.move_statement_down" = "Siirrä lause alaspäin";
+"undo.action_name.surround_with" = "Ympäröi";

@@ -2,4 +2,10 @@
 "undo.action_name.replace_all" = "Alles Ersetzen";
 "undo.action_name.move_lines_up" = "Zeilen nach oben verschieben";
 "undo.action_name.move_lines_down" = "Zeilen nach unten verschieben";
+"undo.action_name.duplicate_lines" = "Zeilen duplizieren";
+"undo.action_name.delete_lines" = "Zeilen löschen";
 "menu.item_title.replace" = "Ersetzen";
+"undo.action_name.join_lines" = "Zeilen zusammenführen";
+"undo.action_name.move_statement_up" = "Anweisung nach oben verschieben";
+"undo.action_name.move_statement_down" = "Anweisung nach unten verschieben";
+"undo.action_name.surround_with" = "Umschließen mit";

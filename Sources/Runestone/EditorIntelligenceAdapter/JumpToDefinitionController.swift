@@ -1,14 +1,24 @@
 @preconcurrency import AppKit
 import EditorIntelligence
 
-/// Handles cmd+click navigation to symbol definitions.
+/// Handles ⌘-click navigation to symbol definitions (and, on request, implementations /
+/// references).
 @MainActor
 public final class JumpToDefinitionController {
     private weak var textView: TextView?
     private let navigationEngine: NavigationEngine
     private let adapter: RunestoneEditorAdapter
 
+    /// Called for the resolved single target.
     public var onNavigate: ((Location) -> Void)?
+    /// Called with the candidates when a request resolves to more than one location. Wire this
+    /// to a picker (e.g. `CommandPaletteController.presentList`). If unset, the first location
+    /// is used.
+    public var onPresentChoices: (([Location]) -> Void)?
+    /// Called when a target belongs to a different document (`Location.url` set and different
+    /// from `textView.documentURL`). Return `true` if the host opened it; otherwise the target
+    /// is focused in the current text view.
+    public var onOpenInOtherDocument: ((Location) -> Bool)?
 
     public init(textView: TextView, adapter: RunestoneEditorAdapter, navigationEngine: NavigationEngine) {
         self.textView = textView
@@ -22,10 +32,24 @@ public final class JumpToDefinitionController {
         guard let document = adapter.currentDocument else {
             return
         }
-        jumpToDefinition(at: document.cursor.position)
+        navigate(at: document.cursor.position, kind: .definition)
     }
 
     public func jumpToDefinition(at position: TextPosition) {
+        navigate(at: position, kind: .definition)
+    }
+
+    /// Jump to the implementation(s) of the symbol at `position`.
+    public func jumpToImplementation(at position: TextPosition) {
+        navigate(at: position, kind: .implementation)
+    }
+
+    /// Find references to the symbol at `position`.
+    public func findReferences(at position: TextPosition) {
+        navigate(at: position, kind: .references)
+    }
+
+    public func navigate(at position: TextPosition, kind: NavigationKind) {
         guard let document = adapter.currentDocument else {
             return
         }
@@ -33,7 +57,8 @@ public final class JumpToDefinitionController {
             document: document,
             cursor: Cursor(position: position),
             selection: Selection(range: TextRange(start: position, end: position)),
-            trigger: .manual
+            trigger: .manual,
+            kind: kind
         )
         Task {
             guard let result = await navigationEngine.navigate(context: context) else {
@@ -42,22 +67,30 @@ public final class JumpToDefinitionController {
             await MainActor.run {
                 switch result {
                 case .single(let location):
-                    self.onNavigate?(location)
-                    self.focus(location: location)
+                    self.go(to: location)
+                case .multiple(let locations) where locations.count == 1:
+                    self.go(to: locations[0])
                 case .multiple(let locations):
-                    if let first = locations.first {
-                        self.onNavigate?(first)
-                        self.focus(location: first)
+                    if let onPresentChoices = self.onPresentChoices {
+                        onPresentChoices(locations)
+                    } else if let first = locations.first {
+                        self.go(to: first)
                     }
                 }
             }
         }
     }
 
-    private func focus(location: Location) {
+    private func go(to location: Location) {
+        onNavigate?(location)
         guard let textView else {
             return
         }
+        if let url = location.url, url != textView.documentURL,
+           onOpenInOtherDocument?(location) == true {
+            return
+        }
+        textView.recordNavigationCheckpoint()
         let range = TextEditApplicator.nsRange(for: location.range, in: textView)
         textView.selectedRanges = [range]
         textView.scrollRangeToVisible(range)
@@ -75,17 +108,17 @@ public final class JumpToDefinitionController {
         let point = gesture.location(in: textView)
         if let index = textView.characterIndex(at: point),
            let textLocation = textView.textLocation(at: index) {
-            jumpToDefinition(at: TextPosition(
+            navigate(at: TextPosition(
                 line: textLocation.lineNumber,
                 column: textLocation.column,
                 utf16Offset: index
-            ))
+            ), kind: .definition)
             return
         }
         guard let document = adapter.currentDocument else {
             return
         }
-        jumpToDefinition(at: document.cursor.position)
+        navigate(at: document.cursor.position, kind: .definition)
     }
 }
 
