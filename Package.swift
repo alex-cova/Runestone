@@ -80,12 +80,9 @@ let package = Package(
             path: "Example/MacExample",
             swiftSettings: swift6
         ),
-        .target(name: "TestTreeSitterLanguages", cSettings: [
-            .unsafeFlags(["-w"])
-        ]),
+        .target(name: "TestTreeSitterLanguages"),
         .target(name: "TreeSitterGraphQL", cSettings: [
-            .headerSearchPath("src"),
-            .unsafeFlags(["-w"])
+            .headerSearchPath("src")
         ]),
         .target(
             name: "RunestoneGraphQLLanguage",
@@ -109,16 +106,87 @@ let package = Package(
         .target(
             name: "TreeSitterCSS",
             cSettings: [
-                .headerSearchPath("src"),
-                .unsafeFlags(["-w"])
+                .headerSearchPath("src")
             ]
         ),
         .target(
             name: "TreeSitterTypeScript",
             cSettings: [
-                .headerSearchPath("src"),
-                .unsafeFlags(["-w"])
+                .headerSearchPath("src")
             ]
+        ),
+
+        // Per-language grammar packs migrated from Hextech's Vendor/RunestoneLanguages.
+        // Each language is a trio: a C grammar target, a `*Queries` resource target,
+        // and a `*Runestone` target that adds the `TreeSitterLanguage` factory.
+        .target(name: "TreeSitterTOML", cSettings: [.headerSearchPath("src")]),
+        .target(name: "TreeSitterTOMLQueries", resources: [.copy("highlights.scm")]),
+        .target(
+            name: "TreeSitterTOMLRunestone",
+            dependencies: ["Runestone", "TreeSitterTOML", "TreeSitterTOMLQueries"],
+            swiftSettings: swift6
+        ),
+        .target(
+            name: "TreeSitterSQL",
+            cSettings: [.headerSearchPath("src")],
+            cxxSettings: [.headerSearchPath("src")]
+        ),
+        .target(name: "TreeSitterSQLQueries", resources: [.copy("highlights.scm")]),
+        .target(
+            name: "TreeSitterSQLRunestone",
+            dependencies: ["Runestone", "TreeSitterSQL", "TreeSitterSQLQueries"],
+            swiftSettings: swift6
+        ),
+        .target(name: "TreeSitterSwift", cSettings: [.headerSearchPath("src")]),
+        .target(
+            name: "TreeSitterSwiftQueries",
+            resources: [.copy("highlights.scm"), .copy("locals.scm")]
+        ),
+        .target(
+            name: "TreeSitterSwiftRunestone",
+            dependencies: ["Runestone", "TreeSitterSwift", "TreeSitterSwiftQueries"],
+            swiftSettings: swift6
+        ),
+        .target(name: "TreeSitterJava", cSettings: [.headerSearchPath("src")]),
+        .target(
+            name: "TreeSitterJavaQueries",
+            resources: [.copy("highlights.scm"), .copy("tags.scm")]
+        ),
+        .target(
+            name: "TreeSitterJavaRunestone",
+            dependencies: ["Runestone", "TreeSitterJava", "TreeSitterJavaQueries"],
+            swiftSettings: swift6
+        ),
+        .target(name: "TreeSitterKotlin", cSettings: [.headerSearchPath("src")]),
+        .target(
+            name: "TreeSitterKotlinQueries",
+            resources: [.copy("highlights.scm"), .copy("tags.scm")]
+        ),
+        .target(
+            name: "TreeSitterKotlinRunestone",
+            dependencies: ["Runestone", "TreeSitterKotlin", "TreeSitterKotlinQueries"],
+            swiftSettings: swift6
+        ),
+        .target(name: "TreeSitterGo", cSettings: [.headerSearchPath("src")]),
+        .target(
+            name: "TreeSitterGoQueries",
+            resources: [.copy("highlights.scm"), .copy("tags.scm")]
+        ),
+        .target(
+            name: "TreeSitterGoRunestone",
+            dependencies: ["Runestone", "TreeSitterGo", "TreeSitterGoQueries"],
+            swiftSettings: swift6
+        ),
+        .target(
+            name: "TreeSitterBash",
+            cSettings: [.headerSearchPath("src")],
+            cxxSettings: [.headerSearchPath("src")]
+        ),
+        .target(name: "TreeSitterBashQueries", resources: [.copy("highlights.scm")]),
+        .target(
+            name: "TreeSitterBashRunestone",
+            dependencies: ["Runestone", "TreeSitterBash", "TreeSitterBashQueries"],
+            swiftSettings: swift6
         ),
         .target(
             name: "RunestoneLanguages",
@@ -126,7 +194,15 @@ let package = Package(
                 "Runestone",
                 "TestTreeSitterLanguages",
                 "TreeSitterCSS",
-                "TreeSitterTypeScript"
+                "TreeSitterTypeScript",
+                "RunestoneGraphQLLanguage",
+                "TreeSitterTOMLRunestone",
+                "TreeSitterSQLRunestone",
+                "TreeSitterSwiftRunestone",
+                "TreeSitterJavaRunestone",
+                "TreeSitterKotlinRunestone",
+                "TreeSitterGoRunestone",
+                "TreeSitterBashRunestone"
             ],
             resources: [
                 .copy("Queries")
