@@ -904,7 +904,11 @@ import CoreText
     public var showMinimap = false {
         didSet {
             if showMinimap != oldValue {
-                minimapView.isHidden = !showMinimap
+                if showMinimap {
+                    minimapView.isHidden = false
+                } else {
+                    minimapView.collapseOverlay()
+                }
                 setNeedsLayout()
             }
         }
@@ -1068,6 +1072,7 @@ import CoreText
         }
         minimapView.isHidden = true
         minimapView.applyTheme()
+        minimapView.collapseOverlay()
         addFixedOverlaySubview(minimapView)
         // Keep the minimap's indicator in sync with programmatic and animated scrolls, which
         // don't necessarily trigger a layout pass (see `scrollWheel`'s note).
@@ -1140,6 +1145,10 @@ import CoreText
             minimapView.frame = CGRect(x: bounds.maxX - minimapWidth, y: 0, width: minimapWidth, height: bounds.height)
             bringSubviewToFront(minimapView)
             minimapView.setNeedsDisplayForContentChange()
+        } else if minimapView.frame != .zero {
+            // Collapse the overlay so the viewport-indicator's CALayer border can't sit at the
+            // trailing edge. `isHidden` alone does not always clip a layer-backed child's border.
+            minimapView.frame = .zero
         }
         let panelHeight = findPanelController.isVisible ? findPanelController.panelHeight : 0
         findPanelController.panelView.frame = CGRect(x: 0,

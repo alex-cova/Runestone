@@ -8,7 +8,7 @@ import XCTest
 /// document instead of walking every row, and survives the degenerate document sizes.
 final class MinimapViewTests: XCTestCase {
     @MainActor
-    private func makeTextView(text: String, language: TreeSitterLanguage? = nil) -> TextView {
+    private func makeTextView(text: String, language: TreeSitterLanguage? = nil, enableMinimap: Bool = true) -> TextView {
         let window = NSWindow(
             contentRect: CGRect(x: 0, y: 0, width: 500, height: 600),
             styleMask: [.titled],
@@ -17,7 +17,7 @@ final class MinimapViewTests: XCTestCase {
         )
         let textView = TextView(frame: CGRect(x: 0, y: 0, width: 500, height: 600))
         textView.minimapWidth = 100
-        textView.showMinimap = true
+        textView.showMinimap = enableMinimap
         window.contentView = textView
         window.makeKeyAndOrderFront(nil)
         let state: TextViewState
@@ -31,28 +31,6 @@ final class MinimapViewTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(0.2))
         textView.layoutIfNeeded()
         return textView
-    }
-
-    @MainActor
-    private func distinctColors(inColumn column: Int, of view: NSView) -> Set<[Int]> {
-        guard view.bounds.width > 0, view.bounds.height > 0,
-              let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
-            return []
-        }
-        view.cacheDisplay(in: view.bounds, to: bitmap)
-        var colors: Set<[Int]> = []
-        var y = 2
-        while CGFloat(y) < view.bounds.height - 2 {
-            if let color = bitmap.colorAt(x: column, y: y)?.usingColorSpace(.deviceRGB) {
-                colors.insert([
-                    Int((color.redComponent * 255).rounded()),
-                    Int((color.greenComponent * 255).rounded()),
-                    Int((color.blueComponent * 255).rounded()),
-                ])
-            }
-            y += 3
-        }
-        return colors
     }
 
     private var markdownDocument: String {
@@ -75,13 +53,18 @@ final class MinimapViewTests: XCTestCase {
         let plain = makeTextView(text: markdownDocument)
         let highlighted = makeTextView(text: markdownDocument, language: .markdown)
 
-        let sampleColumn = 20
-        let plainColors = distinctColors(inColumn: sampleColumn, of: plain.minimapViewForTesting)
-        let highlightedColors = distinctColors(inColumn: sampleColumn, of: highlighted.minimapViewForTesting)
+        let plainMinimap = plain.minimapViewForTesting
+        let highlightedMinimap = highlighted.minimapViewForTesting
+        if let bitmap = highlightedMinimap.bitmapImageRepForCachingDisplay(in: highlightedMinimap.bounds) {
+            highlightedMinimap.cacheDisplay(in: highlightedMinimap.bounds, to: bitmap)
+        }
+        if let bitmap = plainMinimap.bitmapImageRepForCachingDisplay(in: plainMinimap.bounds) {
+            plainMinimap.cacheDisplay(in: plainMinimap.bounds, to: bitmap)
+        }
 
-        XCTAssertGreaterThanOrEqual(plainColors.count, 2, "at minimum: background + one bar color")
-        XCTAssertGreaterThan(highlightedColors.count, plainColors.count,
-                             "syntax highlighting introduces more distinct bar colors than a flat render")
+        XCTAssertEqual(plainMinimap.debugPaletteColorCount, 1, "plain text uses only the base bar color")
+        XCTAssertGreaterThan(highlightedMinimap.debugPaletteColorCount, 1,
+                             "syntax highlighting interned capture colors into the minimap palette")
     }
 
     @MainActor
@@ -101,6 +84,30 @@ final class MinimapViewTests: XCTestCase {
         XCTAssertGreaterThan(minimap.debugLastDrawnRowCount, 0)
         XCTAssertLessThan(minimap.debugLastDrawnRowCount, ceiling,
                           "expected a viewport-bounded walk, got \(minimap.debugLastDrawnRowCount)")
+    }
+
+    @MainActor
+    func testDisabledMinimapDoesNotLeaveTrailingChrome() {
+        let neverShown = makeTextView(text: "hello\nworld", enableMinimap: false)
+        assertMinimapChromeCollapsed(neverShown.minimapViewForTesting)
+
+        let toggled = makeTextView(text: "hello\nworld", enableMinimap: true)
+        let shown = toggled.minimapViewForTesting
+        XCTAssertFalse(shown.isHidden)
+        XCTAssertGreaterThan(shown.frame.width, 0)
+        XCTAssertFalse(shown.debugViewportIndicatorHidden)
+        XCTAssertGreaterThan(shown.debugViewportIndicatorFrame.height, 0)
+
+        toggled.showMinimap = false
+        toggled.layoutIfNeeded()
+        assertMinimapChromeCollapsed(shown)
+    }
+
+    private func assertMinimapChromeCollapsed(_ minimap: MinimapView, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(minimap.isHidden, "minimap should be hidden when disabled", file: file, line: line)
+        XCTAssertEqual(minimap.frame, .zero, "disabled minimap must not keep a trailing-edge frame", file: file, line: line)
+        XCTAssertTrue(minimap.debugViewportIndicatorHidden, "viewport indicator chrome should be hidden", file: file, line: line)
+        XCTAssertEqual(minimap.debugViewportIndicatorFrame, .zero, "viewport indicator must not keep a painted frame", file: file, line: line)
     }
 
     @MainActor

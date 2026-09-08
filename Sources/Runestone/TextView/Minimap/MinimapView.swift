@@ -65,10 +65,13 @@ final class MinimapView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         wantsLayer = true
+        layer?.masksToBounds = true
         layerContentsRedrawPolicy = .onSetNeedsDisplay
         viewportIndicatorView.wantsLayer = true
         viewportIndicatorView.layer?.cornerRadius = 3
         viewportIndicatorView.layer?.borderWidth = 1
+        viewportIndicatorView.isHidden = true
+        hairlineView.isHidden = true
         addSubview(hairlineView)
         addSubview(viewportIndicatorView)
     }
@@ -79,6 +82,11 @@ final class MinimapView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        guard !isHidden, bounds.width > 0, bounds.height > 0 else {
+            hideChrome()
+            return
+        }
+        hairlineView.isHidden = false
         hairlineView.frame = CGRect(x: 0, y: 0, width: 1, height: bounds.height)
         layoutViewportIndicator()
     }
@@ -328,6 +336,12 @@ final class MinimapView: UIView {
     /// Number of source-line rows the last `draw(_:)` touched. Test hook for the folding
     /// regression — a collapsed fold must not inflate this.
     private(set) var debugLastDrawnRowCount = 0
+    /// Distinct fill colors interned while building rows. Index 0 is the theme base color;
+    /// syntax captures append more. Test hook so we don't have to pixel-sample appearance-adaptive
+    /// `NSColor`s through a bitmap (those round to the same 8-bit RGB in some environments).
+    var debugPaletteColorCount: Int { palette.colors.count }
+    var debugViewportIndicatorHidden: Bool { viewportIndicatorView.isHidden }
+    var debugViewportIndicatorFrame: CGRect { viewportIndicatorView.frame }
     #endif
 
     // MARK: - Invalidation
@@ -409,9 +423,29 @@ final class MinimapView: UIView {
 
     // MARK: - Viewport indicator
 
+    private func hideChrome() {
+        hairlineView.isHidden = true
+        hairlineView.frame = .zero
+        viewportIndicatorView.isHidden = true
+        viewportIndicatorView.frame = .zero
+    }
+
+    /// Collapses the overlay immediately so layer-backed chrome cannot linger at the last
+    /// trailing-edge frame after the minimap is turned off.
+    func collapseOverlay() {
+        isHidden = true
+        frame = .zero
+        hideChrome()
+    }
+
     private func layoutViewportIndicator() {
-        guard let geometry = currentGeometry else {
+        guard !isHidden, bounds.width > 0, let geometry = currentGeometry else {
             viewportIndicatorView.isHidden = true
+            viewportIndicatorView.frame = .zero
+            if isHidden || bounds.width <= 0 || bounds.height <= 0 {
+                hairlineView.isHidden = true
+                hairlineView.frame = .zero
+            }
             return
         }
         viewportIndicatorView.isHidden = false
