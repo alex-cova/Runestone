@@ -76,8 +76,12 @@ Based on [simonbs/Runestone](https://github.com/simonbs/Runestone) (originally f
 * `EditorIntelligenceController`: Unified controller coordinating all intelligence services and UI with `TextView`.
 
 ### 📦 Language Packs
+* **`RunestoneLanguages`**: Ready-to-use `TreeSitterLanguage` factories for CSS, HTML, JavaScript, JSON, Python, TypeScript, YAML, plus TOML, SQL, Swift, Java, Kotlin, Go, and Bash. Re-exports GraphQL from `RunestoneGraphQLLanguage`.
 * **`RunestoneGraphQLLanguage`**: Ready-to-use Tree-sitter GraphQL grammar, highlight queries, and indentation scopes.
-* **`TestTreeSitterLanguages`**: Bundled Tree-sitter grammars for HTML, JavaScript, JSON, Python, and YAML.
+* **`RunestoneMarkdownLanguage`**: Ready-to-use Tree-sitter Markdown grammar, highlight queries, and indentation scopes.
+* **`TestTreeSitterLanguages`**: Bundled C grammars for HTML, JavaScript, JSON, Python, and YAML backing `RunestoneLanguages`.
+
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for grammar attributions.
 
 ---
 
@@ -116,7 +120,9 @@ Runestone/
 │   │   └── Workspace/              # Multi-document workspace & cross-file search
 │   │
 │   ├── EditorIntelligenceLSP/      # Concrete LSP client backed by ChimeHQ LanguageClient
-│   ├── RunestoneGraphQLLanguage/   # Example Tree-sitter language package (GraphQL)
+│   ├── RunestoneLanguages/         # TreeSitterLanguage factories for the full language set
+│   ├── RunestoneGraphQLLanguage/   # Tree-sitter GraphQL grammar + queries
+│   ├── TreeSitter{TOML,SQL,Swift,Java,Kotlin,Go,Bash}{,Queries,Runestone}/  # migrated grammar trios
 │   ├── SmokeTest/                  # Minimal runtime executable target
 │   └── TestTreeSitterLanguages/    # Bundled C grammars (HTML, JS, JSON, Python, YAML)
 │
