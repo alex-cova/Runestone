@@ -82,7 +82,7 @@ public final class TextViewState: @unchecked Sendable {
         parsePolicy: SyntaxParsePolicy = .eager
     ) {
         self.init(
-            stringView: StringView(string: NSMutableString(string: text)),
+            stringView: StringView(string: text),
             theme: theme,
             language: language,
             languageProvider: languageProvider,
@@ -100,7 +100,7 @@ public final class TextViewState: @unchecked Sendable {
     ///   - theme: The theme to use when syntax highlighting the text.
     public convenience init(text: String, theme: Theme = DefaultTheme()) {
         self.init(
-            stringView: StringView(string: NSMutableString(string: text)),
+            stringView: StringView(string: text),
             theme: theme,
             language: nil,
             languageProvider: nil,

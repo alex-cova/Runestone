@@ -4,10 +4,12 @@ import TreeSitter
 final class TreeSitterQueryCursor {
     /// Caps the number of in-progress matches the cursor tracks at once. Without a cap, a
     /// pathological query/document combination (e.g. deeply nested or highly repetitive syntax)
-    /// can make a single query take an unbounded amount of time. 256 is generous for the
-    /// highlight/injection queries this cursor is used for and matches what other tree-sitter
-    /// based editors (e.g. Helix) use.
-    static let defaultMatchLimit: UInt32 = 256
+    /// can make a single query take an unbounded amount of time. The limit is
+    /// ``TreeSitterPerformanceConstants/matchLimit`` (256 by default) and matches what other
+    /// tree-sitter based editors (e.g. Helix) use.
+    static var defaultMatchLimit: UInt32 {
+        UInt32(TreeSitterPerformanceConstants.matchLimit)
+    }
 
     private let pointer: OpaquePointer
     private let query: TreeSitterQuery
@@ -18,7 +20,7 @@ final class TreeSitterQueryCursor {
         self.pointer = ts_query_cursor_new()
         self.query = query
         self.node = node
-        ts_query_cursor_set_match_limit(pointer, Self.defaultMatchLimit)
+        ts_query_cursor_set_match_limit(pointer, UInt32(TreeSitterPerformanceConstants.matchLimit))
     }
 
     deinit {
@@ -44,19 +46,30 @@ final class TreeSitterQueryCursor {
         }
         var match = TSQueryMatch(id: 0, pattern_index: 0, capture_count: 0, captures: nil)
         var result: [TreeSitterCapture] = []
+        result.reserveCapacity(32)
         while ts_query_cursor_next_match(pointer, &match) {
             let captureCount = Int(match.capture_count)
             let captureBuffer = UnsafeBufferPointer<TSQueryCapture>(start: match.captures, count: captureCount)
+            let mappedPredicates = query.mappedPredicates(forPatternIndex: UInt32(match.pattern_index))
             let captures: [TreeSitterCapture] = captureBuffer.compactMap { capture in
-                let node = TreeSitterNode(node: capture.node)
+                let node = TreeSitterNode(node: capture.node, tree: self.node.tree)
                 let captureName = query.captureName(forId: capture.index)
-                let predicates = query.predicates(forPatternIndex: UInt32(match.pattern_index))
-                return TreeSitterCapture(node: node, index: capture.index, name: captureName, predicates: predicates)
+                return TreeSitterCapture(
+                    node: node,
+                    index: capture.index,
+                    name: captureName,
+                    mappedPredicates: mappedPredicates,
+                    nameComponentCount: query.nameComponentCount(forId: capture.index)
+                )
             }
-            let match = TreeSitterQueryMatch(captures: captures)
-            let evaluator = TreeSitterTextPredicatesEvaluator(match: match, stringView: stringView)
-            result += captures.filter { capture in
-                capture.byteRange.length > 0 && evaluator.evaluatePredicates(in: capture)
+            if mappedPredicates.textPredicates.isEmpty {
+                result += captures.filter { $0.byteRange.length > 0 }
+            } else {
+                let queryMatch = TreeSitterQueryMatch(captures: captures)
+                let evaluator = TreeSitterTextPredicatesEvaluator(match: queryMatch, stringView: stringView)
+                result += captures.filter { capture in
+                    capture.byteRange.length > 0 && evaluator.evaluatePredicates(in: capture)
+                }
             }
         }
         return result

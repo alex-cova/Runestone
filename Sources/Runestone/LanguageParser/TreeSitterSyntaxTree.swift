@@ -8,22 +8,61 @@ struct TreeSitterSyntaxTree: EditorIntelligence.SyntaxTree {
     let words: [String]
     let imports: [String]
 
-    init(tree: TreeSitterTree?, documentID: EditorIntelligence.DocumentID, text: String) {
-        self.symbols = Self.extractSymbols(tree: tree, documentID: documentID, text: text)
+    init(
+        tree: TreeSitterTree?,
+        documentID: EditorIntelligence.DocumentID,
+        text: String,
+        languageConfiguration: LanguageConfiguration? = nil
+    ) {
+        self.symbols = Self.extractSymbols(
+            tree: tree,
+            documentID: documentID,
+            text: text,
+            languageConfiguration: languageConfiguration
+        )
         self.words = Self.extractWords(from: text)
         self.imports = Self.extractImports(tree: tree, text: text)
     }
 
     // MARK: - Symbol extraction
 
-    private static func extractSymbols(tree: TreeSitterTree?, documentID: EditorIntelligence.DocumentID, text: String) -> [EditorIntelligence.Symbol] {
+    private static func extractSymbols(
+        tree: TreeSitterTree?,
+        documentID: EditorIntelligence.DocumentID,
+        text: String,
+        languageConfiguration: LanguageConfiguration?
+    ) -> [EditorIntelligence.Symbol] {
         guard let root = tree?.rootNode else { return [] }
         var symbols: [EditorIntelligence.Symbol] = []
-        walk(node: root, into: &symbols, documentID: documentID, text: text)
+        // Bare identifier / reference symbols (go-to-definition, find-references, completion) and,
+        // when no language configuration is available, the legacy hardcoded declaration cases.
+        walk(
+            node: root,
+            into: &symbols,
+            documentID: documentID,
+            text: text,
+            emitLegacyDeclarations: languageConfiguration == nil
+        )
+        // Rich declaration symbols carrying a `containerRange` (breadcrumbs, outline).
+        if let languageConfiguration {
+            appendDeclarationSymbols(
+                root: root,
+                configuration: languageConfiguration,
+                documentID: documentID,
+                text: text,
+                into: &symbols
+            )
+        }
         return symbols
     }
 
-    private static func walk(node: TreeSitterNode, into symbols: inout [EditorIntelligence.Symbol], documentID: EditorIntelligence.DocumentID, text: String) {
+    private static func walk(
+        node: TreeSitterNode,
+        into symbols: inout [EditorIntelligence.Symbol],
+        documentID: EditorIntelligence.DocumentID,
+        text: String,
+        emitLegacyDeclarations: Bool
+    ) {
         if let type = node.type {
             switch type {
             case "identifier":
@@ -39,13 +78,13 @@ struct TreeSitterSyntaxTree: EditorIntelligence.SyntaxTree {
                 let range = makeRange(node)
                 symbols.append(EditorIntelligence.Symbol(name: name, kind: .type, documentID: documentID, range: range))
             case "function_declaration", "method_definition":
-                if let nameNode = findChildIdentifier(in: node) {
+                if emitLegacyDeclarations, let nameNode = findChildIdentifier(in: node) {
                     let name = textForNode(nameNode, in: text)
                     let range = makeRange(nameNode)
                     symbols.append(EditorIntelligence.Symbol(name: name, kind: .function, documentID: documentID, range: range))
                 }
             case "class_declaration":
-                if let nameNode = findChildIdentifier(in: node) {
+                if emitLegacyDeclarations, let nameNode = findChildIdentifier(in: node) {
                     let name = textForNode(nameNode, in: text)
                     let range = makeRange(nameNode)
                     symbols.append(EditorIntelligence.Symbol(name: name, kind: .type, documentID: documentID, range: range))
@@ -56,8 +95,51 @@ struct TreeSitterSyntaxTree: EditorIntelligence.SyntaxTree {
         }
         for index in 0 ..< node.childCount {
             if let child = node.child(at: index) {
-                walk(node: child, into: &symbols, documentID: documentID, text: text)
+                walk(
+                    node: child,
+                    into: &symbols,
+                    documentID: documentID,
+                    text: text,
+                    emitLegacyDeclarations: emitLegacyDeclarations
+                )
             }
+        }
+    }
+
+    private static func appendDeclarationSymbols(
+        root: TreeSitterNode,
+        configuration: LanguageConfiguration,
+        documentID: EditorIntelligence.DocumentID,
+        text: String,
+        into symbols: inout [EditorIntelligence.Symbol]
+    ) {
+        let declarations = DeclarationScanner.scan(
+            root: root,
+            configuration: configuration,
+            text: text as NSString
+        )
+        for declaration in declarations {
+            let containerRange = makeRange(declaration.container)
+            let nameRange = declaration.name.isEmpty ? containerRange : makeRange(declaration.name_span)
+            let displayName = declaration.name.isEmpty ? "\(declaration.kind)" : declaration.name
+            symbols.append(EditorIntelligence.Symbol(
+                name: displayName,
+                kind: symbolKind(for: declaration.kind),
+                documentID: documentID,
+                range: nameRange,
+                containerRange: containerRange
+            ))
+        }
+    }
+
+    private static func symbolKind(for kind: DeclarationKind) -> EditorIntelligence.SymbolKind {
+        switch kind {
+        case .type, .namespace:
+            return .type
+        case .function:
+            return .function
+        case .property:
+            return .property
         }
     }
 
@@ -87,6 +169,20 @@ struct TreeSitterSyntaxTree: EditorIntelligence.SyntaxTree {
             line: Int(node.endPoint.row),
             column: Int(node.endPoint.column) / 2,
             utf16Offset: node.endByte.utf16Length
+        )
+        return EditorIntelligence.TextRange(start: start, end: end)
+    }
+
+    private static func makeRange(_ span: DeclarationSpan) -> EditorIntelligence.TextRange {
+        let start = EditorIntelligence.TextPosition(
+            line: span.startRow,
+            column: span.startColumn,
+            utf16Offset: span.startUTF16
+        )
+        let end = EditorIntelligence.TextPosition(
+            line: span.endRow,
+            column: span.endColumn,
+            utf16Offset: span.endUTF16
         )
         return EditorIntelligence.TextRange(start: start, end: end)
     }

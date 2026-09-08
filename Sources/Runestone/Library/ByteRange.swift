@@ -33,6 +33,18 @@ struct ByteRange: Hashable {
         let r2 = otherRange.location ... otherRange.location + otherRange.length
         return r1.overlaps(r2)
     }
+
+    func contains(_ otherRange: Self) -> Bool {
+        otherRange.lowerBound >= lowerBound && otherRange.upperBound <= upperBound
+    }
+
+    func padded(by pad: ByteCount, within limits: ByteRange) -> ByteRange {
+        let startValue = max(limits.lowerBound.value, location.value - pad.value)
+        let endValue = min(limits.upperBound.value, upperBound.value + pad.value)
+        let start = ByteCount(max(0, startValue))
+        let end = ByteCount(max(start.value, endValue))
+        return ByteRange(from: start, to: end)
+    }
 }
 
 extension ByteRange: CustomStringConvertible {

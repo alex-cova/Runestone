@@ -3,7 +3,9 @@ import Foundation
 @testable import Runestone
 import XCTest
 
-final class TextInputStringTokenizerTests: XCTestCase {}
+final class TextInputStringTokenizerTests: XCTestCase {
+    fileprivate var storedConstrainingWidth: CGFloat = 365
+}
 
 // MARK: - Movement in Lines
 extension TextInputStringTokenizerTests {
@@ -251,6 +253,81 @@ extension TextInputStringTokenizerTests {
     }
 }
 
+// MARK: - Movement in Words and Mega-lines
+extension TextInputStringTokenizerTests {
+    func testMovingForwardToWordBoundarySkipsTheCurrentWord() {
+        let tokenizer = makeTokenizer(text: "hello   world")
+        let fromPosition = IndexedPosition(index: 0)
+        let textDirection = UITextDirection(storageDirection: .forward)
+        let position = tokenizer.position(from: fromPosition, toBoundary: .word, inDirection: textDirection)
+        let indexedPosition = position as! IndexedPosition
+        XCTAssertEqual(indexedPosition.index, 5)
+    }
+
+    func testMovingForwardFromWhitespaceLandsOnTheNextWord() {
+        let tokenizer = makeTokenizer(text: "hello   world")
+        let fromPosition = IndexedPosition(index: 5)
+        let textDirection = UITextDirection(storageDirection: .forward)
+        let position = tokenizer.position(from: fromPosition, toBoundary: .word, inDirection: textDirection)
+        let indexedPosition = position as! IndexedPosition
+        XCTAssertEqual(indexedPosition.index, 8)
+    }
+
+    func testMovingBackwardToWordBoundaryLandsOnTheWordStart() {
+        let tokenizer = makeTokenizer(text: "hello   world")
+        let fromPosition = IndexedPosition(index: 13)
+        let textDirection = UITextDirection(storageDirection: .backward)
+        let position = tokenizer.position(from: fromPosition, toBoundary: .word, inDirection: textDirection)
+        let indexedPosition = position as! IndexedPosition
+        XCTAssertEqual(indexedPosition.index, 8)
+    }
+
+    func testMegaLineParagraphMovementDoesNotWalkEveryCharacter() {
+        let prefix = String(repeating: "a", count: 50_000)
+        let text = prefix + "\ntail"
+        let tokenizer = makeTokenizer(text: text, constrainingWidth: 10_000_000)
+        let forward = tokenizer.position(
+            from: IndexedPosition(index: 0),
+            toBoundary: .paragraph,
+            inDirection: UITextDirection(storageDirection: .forward)
+        ) as! IndexedPosition
+        XCTAssertEqual(forward.index, 50_000)
+
+        let backFromMiddle = tokenizer.position(
+            from: IndexedPosition(index: 12_345),
+            toBoundary: .paragraph,
+            inDirection: UITextDirection(storageDirection: .backward)
+        ) as! IndexedPosition
+        XCTAssertEqual(backFromMiddle.index, 0)
+
+        let backFromSecond = tokenizer.position(
+            from: IndexedPosition(index: 50_001),
+            toBoundary: .paragraph,
+            inDirection: UITextDirection(storageDirection: .backward)
+        ) as! IndexedPosition
+        XCTAssertEqual(backFromSecond.index, 50_001)
+    }
+
+    func testMegaLineWordMovementJumpsTheAlphanumericRun() {
+        let word = String(repeating: "w", count: 40_000)
+        let text = word + "   next"
+        let tokenizer = makeTokenizer(text: text, constrainingWidth: 10_000_000)
+        let forward = tokenizer.position(
+            from: IndexedPosition(index: 0),
+            toBoundary: .word,
+            inDirection: UITextDirection(storageDirection: .forward)
+        ) as! IndexedPosition
+        XCTAssertEqual(forward.index, 40_000)
+
+        let backward = tokenizer.position(
+            from: IndexedPosition(index: 40_004),
+            toBoundary: .word,
+            inDirection: UITextDirection(storageDirection: .backward)
+        ) as! IndexedPosition
+        XCTAssertEqual(backward.index, 40_003)
+    }
+}
+
 private extension TextInputStringTokenizerTests {
     private var sampleText: String {
         // swiftlint:disable line_length
@@ -264,8 +341,12 @@ Donec laoreet, massa sed commodo tincidunt, dui neque ullamcorper sapien, laoree
     }
 
     private func makeTokenizer() -> UITextInputTokenizer {
+        makeTokenizer(text: sampleText)
+    }
+
+    private func makeTokenizer(text: String, constrainingWidth: CGFloat = 365) -> UITextInputTokenizer {
         let textInput = MockTextInput()
-        let stringView = StringView(string: sampleText)
+        let stringView = StringView(string: text)
         let lineManager = LineManager(stringView: stringView)
         lineManager.rebuild()
         let invisibleCharacterConfiguration = InvisibleCharacterConfiguration()
@@ -275,6 +356,7 @@ Donec laoreet, massa sed commodo tincidunt, dui neque ullamcorper sapien, laoree
                                                           invisibleCharacterConfiguration: invisibleCharacterConfiguration)
         let lineControllerStorage = LineControllerStorage(stringView: stringView, lineControllerFactory: lineControllerFactory)
         lineControllerStorage.delegate = self
+        storedConstrainingWidth = constrainingWidth
         for row in 0 ..< lineManager.lineCount {
             let line = lineManager.line(atRow: row)
             let lineController = lineControllerStorage.getOrCreateLineController(for: line)
@@ -290,7 +372,7 @@ Donec laoreet, massa sed commodo tincidunt, dui neque ullamcorper sapien, laoree
 extension TextInputStringTokenizerTests: LineControllerStorageDelegate {
     func lineControllerStorage(_ storage: LineControllerStorage, didCreate lineController: LineController) {
         lineController.delegate = self
-        lineController.constrainingWidth = 365
+        lineController.constrainingWidth = storedConstrainingWidth
         lineController.kern = 0.3
     }
 }

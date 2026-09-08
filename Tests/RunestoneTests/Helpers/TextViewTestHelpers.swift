@@ -73,6 +73,7 @@ enum TestKeyCode {
     static let letterT: UInt16 = 0x11
     static let letterE: UInt16 = 0x0E
     static let letterO: UInt16 = 0x1F
+    static let tab: UInt16 = 0x30
     static let digit8: UInt16 = 0x1C
     static let leftBracket: UInt16 = 0x21
     static let rightBracket: UInt16 = 0x1E

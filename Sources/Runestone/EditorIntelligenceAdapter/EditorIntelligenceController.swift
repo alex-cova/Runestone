@@ -54,7 +54,8 @@ public final class EditorIntelligenceController {
     private var hoverTask: Task<Void, Never>?
     private var completionTask: Task<Void, Never>?
     private var signatureHelpTask: Task<Void, Never>?
-    private var accessoryTask: Task<Void, Never>?
+    private var outlineTask: Task<Void, Never>?
+    private var breadcrumbTask: Task<Void, Never>?
 
     private let formattingProvider: LSPFormattingProvider?
     private let signatureHelpProvider: LSPSignatureHelpProvider?
@@ -218,7 +219,8 @@ public final class EditorIntelligenceController {
         hoverTask?.cancel()
         completionTask?.cancel()
         signatureHelpTask?.cancel()
-        accessoryTask?.cancel()
+        outlineTask?.cancel()
+        breadcrumbTask?.cancel()
     }
 
     // MARK: - Public API
@@ -355,8 +357,8 @@ public final class EditorIntelligenceController {
         guard let document = adapter.currentDocument, let symbolIndex else {
             return
         }
-        accessoryTask?.cancel()
-        accessoryTask = Task { [weak self] in
+        outlineTask?.cancel()
+        outlineTask = Task { [weak self] in
             guard let self else { return }
             let symbols = await symbolIndex.symbols(in: document.id)
             let items = OutlineBuilder.build(from: symbols)
@@ -372,21 +374,18 @@ public final class EditorIntelligenceController {
         guard let document = adapter.currentDocument, let symbolIndex else {
             return
         }
-        accessoryTask?.cancel()
-        accessoryTask = Task { [weak self] in
+        guard textView?.languageConfiguration.showsBreadcrumbs ?? true else {
+            breadcrumbBarView.update(model: BreadcrumbBarModel(segments: []))
+            return
+        }
+        breadcrumbTask?.cancel()
+        breadcrumbTask = Task { [weak self] in
             guard let self else { return }
             let symbols = await symbolIndex.symbols(in: document.id)
             let cursorOffset = document.cursor.position.utf16Offset
-            let enclosing = symbols
-                .filter { symbol in
-                    let start = min(symbol.range.start.utf16Offset, symbol.range.end.utf16Offset)
-                    let end = max(symbol.range.start.utf16Offset, symbol.range.end.utf16Offset)
-                    return start <= cursorOffset && cursorOffset <= end
-                }
-                .sorted { $0.range.start.utf16Offset < $1.range.start.utf16Offset }
-            let segments = enclosing.map {
-                BreadcrumbSegment(title: $0.name, range: $0.range)
-            }
+            // Share BreadcrumbProvider's logic rather than re-deriving it here.
+            let locations = BreadcrumbProvider.breadcrumbLocations(from: symbols, cursorOffset: cursorOffset)
+            let segments = locations.map { BreadcrumbSegment(title: $0.displayName, range: $0.range) }
             await MainActor.run {
                 self.breadcrumbBarView.update(model: BreadcrumbBarModel(segments: segments))
             }
@@ -425,7 +424,12 @@ public final class EditorIntelligenceController {
             breadcrumbBarView.heightAnchor.constraint(equalToConstant: 24)
         ])
         if textView.superview === container {
-            textView.frame.origin.y = 24
+            if !textView.translatesAutoresizingMaskIntoConstraints {
+                // Autolayout host: pin the text view below the bar instead of nudging its frame.
+                textView.topAnchor.constraint(equalTo: breadcrumbBarView.bottomAnchor).isActive = true
+            } else {
+                textView.frame.origin.y = 24
+            }
         }
     }
 
@@ -577,7 +581,6 @@ public final class EditorIntelligenceController {
             location: replacementRange.start.utf16Offset,
             length: replacementRange.end.utf16Offset - replacementRange.start.utf16Offset
         )
-        let insertedText: String
         if item.kind == .snippet {
             let parser = SnippetParser()
             let nodes = parser.parse(item.insertText)
@@ -585,22 +588,30 @@ public final class EditorIntelligenceController {
                 nodes: nodes,
                 context: SnippetExpansionContext(selectedText: textView.text(in: nsRange) ?? "")
             )
-            // Multi-site tab stops aren't supported -- there's no tab-stop session in the editor
-            // at all yet, single- or multi-caret -- so a snippet's placeholders always collapse
-            // to their default text; `expansion.placeholders`/`finalCursorOffset` go unused here
-            // exactly as they already do on the single-caret path below.
-            insertedText = expander.expand().text
-        } else {
-            insertedText = item.insertText
+            let expansion = expander.expand()
+            if textView.isMultiCursorActive {
+                // Multi-caret completion still collapses placeholders: there is no per-caret
+                // tab-stop session, so every site gets the default snippet text.
+                let primaryCaretLocation = textView.selectedRange.location
+                let relativeStartOffset = nsRange.location - primaryCaretLocation
+                textView.replaceAtAllSelections(
+                    relativeStartOffset: relativeStartOffset,
+                    length: nsRange.length,
+                    with: expansion.text
+                )
+            } else {
+                textView.insertSnippet(expansion, replacing: nsRange)
+            }
+            return
         }
         if textView.isMultiCursorActive {
             // Apply the same relative edit -- "replace these N characters around the primary
             // caret" -- at every caret, not just the primary one.
             let primaryCaretLocation = textView.selectedRange.location
             let relativeStartOffset = nsRange.location - primaryCaretLocation
-            textView.replaceAtAllSelections(relativeStartOffset: relativeStartOffset, length: nsRange.length, with: insertedText)
+            textView.replaceAtAllSelections(relativeStartOffset: relativeStartOffset, length: nsRange.length, with: item.insertText)
         } else {
-            textView.replace(nsRange, withText: insertedText)
+            textView.replace(nsRange, withText: item.insertText)
         }
     }
 

@@ -91,4 +91,17 @@ final class RunestoneEditorAdapterTests: XCTestCase {
         let cursorWord = adapter.currentDocument?.word(atUTF16Offset: 5, window: 32)
         XCTAssertEqual(cursorWord, "backed")
     }
+
+    func testUntitledPieceTreeDoesNotMaterializeSnapshotText() async throws {
+        let body = String(repeating: "untitled ", count: StringView.pieceTreeUntitledThreshold / 9 + 1)
+        let textView = TextView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        textView.text = body
+        XCTAssertFalse(textView.isFileBacked)
+        XCTAssertNotNil(textView.pieceTreeContentSnapshot())
+        let adapter = RunestoneEditorAdapter(textView: textView, context: EditorContext())
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertTrue(adapter.currentDocument?.contentSnapshot.isElided ?? false)
+        XCTAssertNil(adapter.currentDocument?.contentSnapshot.text)
+        XCTAssertEqual(adapter.currentDocument?.substring(utf16Offset: 0, length: 8), "untitled")
+    }
 }

@@ -42,6 +42,15 @@ public protocol Theme: AnyObject {
     /// colors — selection is drawn via Core Graphics and dynamic colors can resolve
     /// against the wrong appearance.
     var selectionColor: UIColor { get }
+    /// Color of the hairline drawn above a method/function declaration when
+    /// ``TextView/showMethodSeparators`` is on. Defaults to ``gutterHairlineColor``.
+    var methodSeparatorColor: UIColor { get }
+    /// Thickness, in points, of the method separator hairline. Defaults to one hairline.
+    var methodSeparatorWidth: CGFloat { get }
+    /// Background color used to highlight other occurrences of the selection when
+    /// ``TextView/highlightsOccurrencesOfSelection`` is on. Defaults to a translucent
+    /// ``selectionColor``.
+    var occurrenceHighlightColor: UIColor { get }
     /// Color of text matching the capture sequence.
     ///
     /// See <doc:CreatingATheme> for more information on higlight names.
@@ -86,6 +95,18 @@ public extension Theme {
     /// Opaque `#3b82f6` — visible on both light and dark editor backgrounds.
     var selectionColor: UIColor {
         UIColor(srgbRed: 59 / 255, green: 130 / 255, blue: 246 / 255, alpha: 1)
+    }
+
+    var methodSeparatorColor: UIColor {
+        gutterHairlineColor
+    }
+
+    var methodSeparatorWidth: CGFloat {
+        hairlineLength
+    }
+
+    var occurrenceHighlightColor: UIColor {
+        selectionColor.withAlphaComponent(0.28)
     }
 
     func font(for highlightName: String) -> UIFont? {

@@ -7,6 +7,7 @@ import EditorIntelligence
 public actor LanguageServerClient: LSPClient {
     private let server: InitializingServer
     private let documentURI: @Sendable (Document) -> String
+    private var uris: [DocumentID: String] = [:]
 
     public init(server: InitializingServer, documentURI: @escaping @Sendable (Document) -> String) {
         self.server = server
@@ -194,6 +195,67 @@ public actor LanguageServerClient: LSPClient {
             }
             return EditorIntelligence.LSPSemanticTokensDelta(resultId: delta.resultId, data: [], edits: edits)
         }
+    }
+
+    // MARK: - Document sync
+
+    /// Handlers that send `textDocument/didOpen` / `didChange` / `didClose` for this client.
+    public func syncHandlers() -> LSPDocumentSyncHandlers {
+        LSPDocumentSyncHandlers(
+            onIncrementalChanges: { changes in
+                await self.notifyIncrementalChanges(changes)
+            },
+            onOpen: { document, languageID, version in
+                await self.notifyOpened(document, languageID: languageID, version: version)
+            },
+            onFullChange: { document, version in
+                await self.notifyFullChange(document, version: version)
+            },
+            onClose: { documentID in
+                await self.notifyClosed(documentID: documentID)
+            }
+        )
+    }
+
+    public func notifyOpened(_ document: Document, languageID: String, version: Int) async {
+        let uri = documentURI(document)
+        uris[document.id] = uri
+        let snapshot = document.contentSnapshot
+        let text = snapshot.substring(utf16Offset: 0, length: snapshot.utf16Length)
+        let params = LSPDocumentSyncMapper.openParams(
+            uri: uri,
+            languageID: languageID,
+            version: version,
+            text: text
+        )
+        try? await server.textDocumentDidOpen(params)
+    }
+
+    public func notifyIncrementalChanges(_ changes: [LSPDocumentSyncService.DocumentChange]) async {
+        let grouped = Dictionary(grouping: changes, by: \.documentID)
+        for (documentID, batch) in grouped {
+            guard let uri = uris[documentID] else {
+                continue
+            }
+            let params = LSPDocumentSyncMapper.incrementalParams(uri: uri, changes: batch)
+            try? await server.textDocumentDidChange(params)
+        }
+    }
+
+    public func notifyFullChange(_ document: Document, version: Int) async {
+        let uri = uris[document.id] ?? documentURI(document)
+        uris[document.id] = uri
+        let snapshot = document.contentSnapshot
+        let text = snapshot.substring(utf16Offset: 0, length: snapshot.utf16Length)
+        let params = LSPDocumentSyncMapper.fullChangeParams(uri: uri, version: version, text: text)
+        try? await server.textDocumentDidChange(params)
+    }
+
+    public func notifyClosed(documentID: DocumentID) async {
+        guard let uri = uris.removeValue(forKey: documentID) else {
+            return
+        }
+        try? await server.textDocumentDidClose(LSPDocumentSyncMapper.closeParams(uri: uri))
     }
 
     private func textDocument(for document: Document) -> TextDocumentIdentifier {

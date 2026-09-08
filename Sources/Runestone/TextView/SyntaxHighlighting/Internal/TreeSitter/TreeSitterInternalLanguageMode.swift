@@ -16,8 +16,11 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
     private let lineManager: LineManager
     private let rootLanguageLayer: TreeSitterLanguageLayer
     private let operationQueue = OperationQueue()
+    private let highlightQueue = OperationQueue()
     private let parseLock = NSLock()
     private var hasCompletedInitialParse = false
+    /// Highlight captures for a byte window, reused by adjacent lines until the tree changes.
+    private var captureWindow: CaptureWindow?
     /// True while a background parse is running *outside* `parseLock`. Edits bump `parseEpoch`
     /// instead of waiting for that work to finish.
     private var parseInFlight = false
@@ -32,6 +35,9 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
         operationQueue.name = "TreeSitterLanguageMode"
         operationQueue.qualityOfService = .default
         operationQueue.maxConcurrentOperationCount = 1
+        highlightQueue.name = "TreeSitterSyntaxHighlight"
+        highlightQueue.qualityOfService = .userInitiated
+        highlightQueue.maxConcurrentOperationCount = 4
         parser = TreeSitterParser(encoding: .treeSitterUTF16)
         rootLanguageLayer = TreeSitterLanguageLayer(
             language: language,
@@ -48,6 +54,7 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
 
     deinit {
         operationQueue.cancelAllOperations()
+        highlightQueue.cancelAllOperations()
     }
 
     func cancelParse() {
@@ -60,6 +67,7 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
             parseEpoch += 1
             hasCompletedInitialParse = false
             parsedUTF16Range = nil
+            captureWindow = nil
             if !parseInFlight {
                 rootLanguageLayer.invalidateTree()
             }
@@ -72,9 +80,11 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
 
     func parseFromBuffer() {
         parseLock.withLock {
+            captureWindow = nil
             rootLanguageLayer.parseUsingReader()
-            hasCompletedInitialParse = true
-            parsedUTF16Range = NSRange(location: 0, length: stringView.length)
+            let ready = rootLanguageLayer.tree != nil && !parser.lastParseAborted
+            hasCompletedInitialParse = ready
+            parsedUTF16Range = ready ? NSRange(location: 0, length: stringView.length) : nil
         }
     }
 
@@ -129,6 +139,7 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
     private func parse(_ text: NSString, isCancelled: (() -> Bool)?) {
         guard isCancelled != nil else {
             parseLock.withLock {
+                captureWindow = nil
                 rootLanguageLayer.parse(text)
                 hasCompletedInitialParse = true
                 parsedUTF16Range = NSRange(location: 0, length: text.length)
@@ -169,14 +180,16 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
         parseLock.lock()
         parseInFlight = false
         parser.shouldCancel = nil
-        if isCancelled?() == true || epoch != parseEpoch {
+        if isCancelled?() == true || epoch != parseEpoch || parser.lastParseAborted {
             parser.reset()
             rootLanguageLayer.invalidateTree()
             hasCompletedInitialParse = false
             parsedUTF16Range = nil
+            captureWindow = nil
         } else {
-            hasCompletedInitialParse = true
+            hasCompletedInitialParse = rootLanguageLayer.tree != nil
             parsedUTF16Range = publish()
+            captureWindow = nil
         }
         parseLock.unlock()
     }
@@ -192,16 +205,15 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
             startPoint: TreeSitterTextPoint(change.startLinePosition),
             oldEndPoint: TreeSitterTextPoint(change.oldEndLinePosition),
             newEndPoint: TreeSitterTextPoint(change.newEndLinePosition))
-        // `captures(in:)` runs on a background operation queue (see TreeSitterSyntaxHighlighter)
-        // concurrently with edits arriving here on the main thread. Both read and mutate the same
-        // TreeSitterLanguageLayer tree, so they must be mutually exclusive — otherwise this is a
-        // data race on the `tree` property itself, not just a logically-stale read.
+        // Highlight queries copy the tree under this lock and run off it, so a keystroke is not
+        // blocked by an in-flight capture. Tree mutation still takes the lock.
         return parseLock.withLock {
             if parseInFlight || rootLanguageLayer.tree == nil {
                 // Do not wait for the in-flight parse: bump the epoch so its result is discarded
                 // and let the caller reschedule against the edited buffer.
                 parseEpoch += 1
                 hasCompletedInitialParse = false
+                captureWindow = nil
                 if rootLanguageLayer.tree == nil {
                     parsedUTF16Range = nil
                 }
@@ -219,21 +231,62 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
                 parsedUTF16Range = range
                 rootLanguageLayer.setRootIncludedUTF16Range(range, stringLength: stringLength)
             }
-            return rootLanguageLayer.apply(edit)
+            captureWindow = nil
+            let editUTF16Length = max(change.byteRange.length.utf16Length, change.bytesAdded.utf16Length)
+            if editUTF16Length > TreeSitterPerformanceConstants.maxSyncEditLength {
+                parseEpoch += 1
+                hasCompletedInitialParse = false
+                rootLanguageLayer.applyEditWithoutParsing(edit)
+                return LineChangeSet()
+            }
+            let changeSet = rootLanguageLayer.apply(edit)
+            if parser.lastParseAborted {
+                parseEpoch += 1
+                hasCompletedInitialParse = false
+            }
+            return changeSet
         }
     }
 
     func captures(in range: ByteRange) -> [TreeSitterCapture] {
-        parseLock.withLock {
-            if parseInFlight {
-                return []
-            }
-            return rootLanguageLayer.captures(in: range)
+        parseLock.lock()
+        if parseInFlight || !hasCompletedInitialParse {
+            parseLock.unlock()
+            return []
         }
+        if let window = captureWindow, window.range.contains(range) {
+            let cached = window.captures.filter { $0.byteRange.overlaps(range) }
+            parseLock.unlock()
+            return cached
+        }
+        // Expanding to a 32k window on the main thread makes every keystroke
+        // (`redisplayLines` highlights synchronously) pay for a viewport-sized query.
+        // Off the main thread (async line highlighting) we fill the window so the
+        // rest of the viewport is a cache hit.
+        let queryRange = Thread.isMainThread ? range : expandedCaptureRange(covering: range)
+        let snapshot = rootLanguageLayer.snapshotForQuery()
+        let epoch = parseEpoch
+        parseLock.unlock()
+
+        guard let snapshot else {
+            return []
+        }
+        let captures = RunestoneSignposts.interval("TreeSitterInternalLanguageMode.captures") {
+            snapshot.captures(in: queryRange, stringView: stringView)
+        }
+        parseLock.lock()
+        if epoch == parseEpoch {
+            captureWindow = CaptureWindow(range: queryRange, captures: captures)
+        }
+        parseLock.unlock()
+        if queryRange == range {
+            return captures
+        }
+        return captures.filter { $0.byteRange.overlaps(range) }
     }
 
     func createLineSyntaxHighlighter() -> LineSyntaxHighlighter {
-        TreeSitterSyntaxHighlighter(stringView: stringView, languageMode: self, operationQueue: operationQueue)
+        TreeSitterSyntaxHighlighter(stringView: stringView, languageMode: self, operationQueue: highlightQueue)
     }
 
     func currentIndentLevel(of line: DocumentLineNode, using indentStrategy: IndentStrategy) -> Int {
@@ -313,6 +366,29 @@ final class TreeSitterInternalLanguageMode: InternalLanguageMode, @unchecked Sen
         }
         return rootLanguageLayer.layerAndNode(at: linePosition)?.node
     }
+
+    private func expandedCaptureRange(covering range: ByteRange) -> ByteRange {
+        let documentRange = ByteRange(from: 0, to: stringView.byteCount)
+        guard documentRange.length > 0 else {
+            return range
+        }
+        let window = ByteCount(utf16Length: TreeSitterPerformanceConstants.highlightQueryWindowUTF16Length)
+        if documentRange.length <= window {
+            return documentRange
+        }
+        if range.length >= window {
+            let end = min(documentRange.upperBound, range.upperBound)
+            let start = min(range.location, end)
+            return ByteRange(from: max(documentRange.lowerBound, start), to: end)
+        }
+        let pad = ByteCount(max(0, window.value - range.length.value) / 2)
+        return range.padded(by: pad, within: documentRange)
+    }
+}
+
+private struct CaptureWindow {
+    let range: ByteRange
+    let captures: [TreeSitterCapture]
 }
 
 extension TreeSitterInternalLanguageMode: TreeSitterParserDelegate {

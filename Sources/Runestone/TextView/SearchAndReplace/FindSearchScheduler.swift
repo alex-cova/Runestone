@@ -8,6 +8,9 @@ import Foundation
 /// the session's `SearchSnapshot` before being applied — so a slow search for a query the user has
 /// since changed (or a document the user has since navigated away from) never clobbers a newer
 /// result.
+///
+/// Long scans also stream incomplete ``FindSearchOutcome`` snapshots via `onProgress` so the find
+/// panel can fill in as matches arrive rather than keeping stale counts until the scan finishes.
 @MainActor
 public final class FindSearchScheduler {
     /// 200ms — matches the debounce interval most find-bar implementations settle on.
@@ -15,12 +18,14 @@ public final class FindSearchScheduler {
 
     private var debounceTask: Task<Void, Never>?
     private var searchTask: Task<Void, Never>?
+    private var searchGeneration: UInt64 = 0
 
     public init() {}
 
     public func cancel() {
         debounceTask?.cancel()
         searchTask?.cancel()
+        searchGeneration &+= 1
     }
 
     /// Schedules a search for `session`'s current query/options against `text`.
@@ -81,6 +86,8 @@ public final class FindSearchScheduler {
         apply: @escaping @MainActor () -> Void
     ) {
         searchTask?.cancel()
+        searchGeneration &+= 1
+        let generation = searchGeneration
         let snapshot = FindSession.SearchSnapshot(
             query: session.query,
             matchCase: session.matchCase,
@@ -89,6 +96,7 @@ public final class FindSearchScheduler {
         )
         let searchSource = source
         let anchor = anchorLocation
+        let gate = SearchApplyGate()
 
         if snapshot.query.isEmpty {
             guard isCurrent() else { return }
@@ -104,15 +112,49 @@ public final class FindSearchScheduler {
                 wholeWord: snapshot.wholeWord,
                 useRegex: snapshot.useRegex
             )
+            let applyPartial: @Sendable (FindSearchOutcome) -> Void = { [weak self] partial in
+                Task { @MainActor in
+                    guard let self, generation == self.searchGeneration, gate.shouldApply else { return }
+                    guard isCurrent(), session.matchesSnapshot(snapshot) else { return }
+                    session.applySearchOutcome(partial)
+                    apply()
+                }
+            }
             let outcome = await Task.detached(priority: .userInitiated) {
-                FindSearchEngine.search(options: options, in: searchSource, anchorLocation: anchor)
+                FindSearchEngine.search(
+                    options: options,
+                    in: searchSource,
+                    anchorLocation: anchor,
+                    onProgress: applyPartial
+                )
             }.value
 
+            gate.finish()
+            guard generation == self.searchGeneration else { return }
             guard !Task.isCancelled else { return }
             guard isCurrent(), session.matchesSnapshot(snapshot) else { return }
 
             session.applySearchOutcome(outcome)
             apply()
         }
+    }
+}
+
+/// Serializes incomplete progress updates against the final outcome so a late `Task { @MainActor }`
+/// progress hop cannot clobber the completed snapshot.
+private final class SearchApplyGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var finished = false
+
+    var shouldApply: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !finished
+    }
+
+    func finish() {
+        lock.lock()
+        finished = true
+        lock.unlock()
     }
 }

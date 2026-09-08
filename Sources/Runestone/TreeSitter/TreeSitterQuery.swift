@@ -14,6 +14,11 @@ final class TreeSitterQuery {
     let pointer: OpaquePointer
 
     private let language: TreeSitterLanguagePointer
+    private let cacheLock = NSLock()
+    private var cachedCaptureNames: [UInt32: String] = [:]
+    private var cachedNameComponentCounts: [UInt32: Int] = [:]
+    private var cachedPredicates: [UInt32: [TreeSitterPredicate]] = [:]
+    private var cachedMappedPredicates: [UInt32: TreeSitterPredicateMapper.MapResult] = [:]
     private var patternCount: UInt32 {
         ts_query_pattern_count(pointer)
     }
@@ -22,7 +27,7 @@ final class TreeSitterQuery {
         let errorOffset = UnsafeMutablePointer<UInt32>.allocate(capacity: 1)
         let errorType = UnsafeMutablePointer<TSQueryError>.allocate(capacity: 1)
         let pointer = source.withCString { cstr in
-            ts_query_new(language, cstr, UInt32(source.count), errorOffset, errorType)
+            ts_query_new(language, cstr, UInt32(source.utf8.count), errorOffset, errorType)
         }
         defer {
             errorOffset.deallocate()
@@ -54,13 +59,68 @@ final class TreeSitterQuery {
     }
 
     func captureName(forId id: UInt32) -> String {
+        cacheLock.lock()
+        if let cached = cachedCaptureNames[id] {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
         let lengthPointer = UnsafeMutablePointer<UInt32>.allocate(capacity: 1)
         let cString = ts_query_capture_name_for_id(pointer, id, lengthPointer)
         lengthPointer.deallocate()
-        return String(cString: cString!)
+        let name = String(cString: cString!)
+        cacheLock.lock()
+        cachedCaptureNames[id] = name
+        cachedNameComponentCounts[id] = name.split(separator: ".").count
+        cacheLock.unlock()
+        return name
+    }
+
+    func nameComponentCount(forId id: UInt32) -> Int {
+        cacheLock.lock()
+        if let cached = cachedNameComponentCounts[id] {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+        _ = captureName(forId: id)
+        cacheLock.lock()
+        let count = cachedNameComponentCounts[id] ?? 1
+        cacheLock.unlock()
+        return count
     }
 
     func predicates(forPatternIndex index: UInt32) -> [TreeSitterPredicate] {
+        cacheLock.lock()
+        if let cached = cachedPredicates[index] {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+        let predicates = loadPredicates(forPatternIndex: index)
+        cacheLock.lock()
+        cachedPredicates[index] = predicates
+        cacheLock.unlock()
+        return predicates
+    }
+
+    func mappedPredicates(forPatternIndex index: UInt32) -> TreeSitterPredicateMapper.MapResult {
+        cacheLock.lock()
+        if let cached = cachedMappedPredicates[index] {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+        let mapped = TreeSitterPredicateMapper.map(predicates(forPatternIndex: index))
+        cacheLock.lock()
+        cachedMappedPredicates[index] = mapped
+        cacheLock.unlock()
+        return mapped
+    }
+}
+
+private extension TreeSitterQuery {
+    private func loadPredicates(forPatternIndex index: UInt32) -> [TreeSitterPredicate] {
         let lengthPointer = UnsafeMutablePointer<UInt32>.allocate(capacity: 1)
         defer {
             lengthPointer.deallocate()
@@ -90,9 +150,7 @@ final class TreeSitterQuery {
         }
         return predicates
     }
-}
 
-private extension TreeSitterQuery {
     private func stringValue(forId id: uint) -> String {
         let lengthPointer = UnsafeMutablePointer<UInt32>.allocate(capacity: 1)
         defer {

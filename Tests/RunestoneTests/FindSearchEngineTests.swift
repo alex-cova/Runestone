@@ -67,6 +67,46 @@ final class FindSearchEngineTests: XCTestCase {
         XCTAssertEqual(outcome, .empty)
     }
 
+    func testSearchProgressReportsIncompleteOutcomesThenACompleteResult() {
+        let text = String(repeating: "needle ", count: 200)
+        let options = FindSearchOptions(query: "needle")
+        let partials = ProgressBox()
+        let outcome = FindSearchEngine.search(options: options, in: text, anchorLocation: 0) { partial in
+            partials.values.append(partial)
+        }
+        XCTAssertFalse(partials.values.isEmpty, "first match should emit a progress snapshot")
+        XCTAssertTrue(partials.values.allSatisfy { !$0.isComplete })
+        XCTAssertTrue(partials.values.allSatisfy { $0.matchCount > 0 })
+        XCTAssertTrue(outcome.isComplete)
+        XCTAssertEqual(outcome.matchCount, 200)
+        XCTAssertGreaterThanOrEqual(outcome.matchCount, partials.values.last?.matchCount ?? 0)
+    }
+
+    func testRegexSearchProgressReportsIncompleteOutcomes() {
+        let text = String(repeating: "needle ", count: 80)
+        let options = FindSearchOptions(query: "nee.le", useRegex: true)
+        let partials = ProgressBox()
+        let outcome = FindSearchEngine.search(options: options, in: text, anchorLocation: 0) { partial in
+            partials.values.append(partial)
+        }
+        XCTAssertFalse(partials.values.isEmpty)
+        XCTAssertTrue(partials.values.allSatisfy { !$0.isComplete })
+        XCTAssertTrue(outcome.isComplete)
+        XCTAssertEqual(outcome.matchCount, 80)
+    }
+
+    func testCancelledSearchStillReturnsEmptyEvenWithProgressCallback() async {
+        let text = String(repeating: "needle ", count: 100_000)
+        let options = FindSearchOptions(query: "needle")
+        let task = Task {
+            FindSearchEngine.search(options: options, in: text, anchorLocation: 0, onProgress: { _ in })
+        }
+        task.cancel()
+        let outcome = await task.value
+        XCTAssertEqual(outcome, .empty)
+        XCTAssertTrue(outcome.isComplete)
+    }
+
     func testNoMatchesReturnsEmptyOutcome() {
         let outcome = FindSearchEngine.search(options: FindSearchOptions(query: "zzz"), in: "abc", anchorLocation: 0)
         XCTAssertEqual(outcome, .empty)
@@ -327,4 +367,8 @@ private final class RecordingFindTextSource: FindTextSource, @unchecked Sendable
         }
         return ns.substring(with: NSRange(location: location, length: take))
     }
+}
+
+private final class ProgressBox: @unchecked Sendable {
+    var values: [FindSearchOutcome] = []
 }

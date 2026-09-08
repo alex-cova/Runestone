@@ -200,7 +200,12 @@ private extension LineController {
     }
 
     private func prepareString(syntaxHighlightAsynchronously: Bool) {
-        syntaxHighlighter?.cancel()
+        // Cancel only when the line's string or default attributes are about to be rebuilt.
+        // Cancelling on every layout pass restarts in-flight work and starves highlighting
+        // while the viewport is laid out at display refresh.
+        if isStringInvalid || isDefaultAttributesInvalid {
+            syntaxHighlighter?.cancel()
+        }
         clearLineFragmentControllersIfNecessary()
         updateStringIfNecessary()
         updateDefaultAttributesIfNecessary()
@@ -285,7 +290,11 @@ private extension LineController {
             isSyntaxHighlightingInvalid = false
             return
         }
-        if async {
+        let forceAsync = input.byteRange.length.utf16Length > TreeSitterPerformanceConstants.maxSyncQueryLength
+        if async || forceAsync {
+            if syntaxHighlighter.isHighlighting {
+                return
+            }
             syntaxHighlighter.syntaxHighlight(input) { [weak self] result in
                 Task { @MainActor in
                     if case .success = result, let self = self {

@@ -18,6 +18,22 @@ final class FindSessionTests: XCTestCase {
 
         searched(session, query: "a", in: "a b a")
         XCTAssertEqual(session.matchCountLabel, "1 of 2")
+        XCTAssertTrue(session.isComplete)
+    }
+
+    func testMatchCountLabelShowsPlusWhileScanIsIncomplete() {
+        let session = FindSession()
+        session.query = "a"
+        session.applySearchOutcome(FindSearchOutcome(
+            matchCount: 47,
+            currentIndex: 0,
+            currentRange: NSRange(location: 0, length: 1),
+            highlightRanges: [NSRange(location: 0, length: 1)],
+            errorMessage: nil,
+            isComplete: false
+        ))
+        XCTAssertEqual(session.matchCountLabel, "1 of 47+")
+        XCTAssertFalse(session.isComplete)
     }
 
     func testMatchCountLabelSurfacesTheErrorMessage() {

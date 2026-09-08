@@ -4,7 +4,7 @@ import TreeSitter
 final class TreeSitterTree {
     let pointer: OpaquePointer
     var rootNode: TreeSitterNode {
-        TreeSitterNode(node: ts_tree_root_node(pointer))
+        TreeSitterNode(node: ts_tree_root_node(pointer), tree: self)
     }
 
     init(_ tree: OpaquePointer) {
@@ -13,6 +13,11 @@ final class TreeSitterTree {
 
     deinit {
         ts_tree_delete(pointer)
+    }
+
+    /// Shallow copy-on-write snapshot. Cheap, and the copy can be queried while the live tree is edited.
+    func copy() -> TreeSitterTree {
+        TreeSitterTree(ts_tree_copy(pointer))
     }
 
     func apply(_ inputEdit: TreeSitterInputEdit) {

@@ -274,6 +274,10 @@ final class PieceTree {
         original?.lastPrefetchByteCount ?? 0
     }
 
+    var isFileMapped: Bool {
+        original != nil
+    }
+
     init() {
         original = nil
         originalCheckpoints = []
@@ -287,6 +291,14 @@ final class PieceTree {
         )
         tree = PieceNodeTree(minimumValue: 0, rootValue: 0, rootData: PieceNodeData(empty))
         tree.childrenUpdater = PieceChildrenUpdater()
+    }
+
+    /// In-memory document: all text lives in the add buffer (no file mapping).
+    convenience init(string: String) {
+        self.init()
+        if !string.isEmpty {
+            replaceText(in: NSRange(location: 0, length: 0), with: string)
+        }
     }
 
     /// One original piece covering `mapping` after an optional UTF-8 BOM.
@@ -420,6 +432,73 @@ final class PieceTree {
             return NSRange(location: utf16Length - 1, length: 1)
         }
         return nil
+    }
+
+    func paragraphStart(before location: Int) -> Int {
+        if location <= 0 {
+            return 0
+        }
+        if let unit = unichar(at: location - 1), Self.isNewlineUTF16(unit) {
+            return location
+        }
+        let searchLength = location - 1
+        guard searchLength > 0 else {
+            return 0
+        }
+        let found = rangeOfCharacter(
+            from: .newlines,
+            options: .backwards,
+            range: NSRange(location: 0, length: searchLength)
+        )
+        if found.location == NSNotFound {
+            return 0
+        }
+        return found.location + found.length
+    }
+
+    func rangeOfCharacter(from set: CharacterSet, options: NSString.CompareOptions, range: NSRange) -> NSRange {
+        let location = max(0, range.location)
+        let end = min(utf16Length, max(location, NSMaxRange(range)))
+        guard location < end else {
+            return NSRange(location: NSNotFound, length: 0)
+        }
+        let backwards = options.contains(.backwards)
+        let window = 4_096
+        if backwards {
+            var cursor = end
+            while cursor > location {
+                let sliceStart = max(location, cursor - window)
+                let sliceLength = cursor - sliceStart
+                guard let text = substring(in: NSRange(location: sliceStart, length: sliceLength)) else {
+                    break
+                }
+                let ns = text as NSString
+                let found = ns.rangeOfCharacter(from: set, options: options, range: NSRange(location: 0, length: ns.length))
+                if found.location != NSNotFound {
+                    return NSRange(location: sliceStart + found.location, length: found.length)
+                }
+                cursor = sliceStart
+            }
+            return NSRange(location: NSNotFound, length: 0)
+        }
+        var cursor = location
+        while cursor < end {
+            let take = min(window, end - cursor)
+            guard let text = substring(in: NSRange(location: cursor, length: take)) else {
+                break
+            }
+            let ns = text as NSString
+            let found = ns.rangeOfCharacter(from: set, options: options, range: NSRange(location: 0, length: ns.length))
+            if found.location != NSNotFound {
+                return NSRange(location: cursor + found.location, length: found.length)
+            }
+            cursor += take
+        }
+        return NSRange(location: NSNotFound, length: 0)
+    }
+
+    private static func isNewlineUTF16(_ unit: unichar) -> Bool {
+        unit == 0x000A || unit == 0x000D || unit == 0x0085 || unit == 0x2028 || unit == 0x2029
     }
 
     func rangeOfComposedCharacterSequence(at location: Int) -> NSRange {
@@ -562,12 +641,39 @@ final class PieceTree {
 
     private func insert(_ string: String, atUTF16 location: Int) {
         let utf8 = Array(string.utf8)
+        guard !utf8.isEmpty else {
+            return
+        }
+        if utf8.count > UTF8DocumentScanner.checkpointStride {
+            var offset = 0
+            var at = location
+            while offset < utf8.count {
+                var end = min(offset + UTF8DocumentScanner.checkpointStride, utf8.count)
+                while end < utf8.count, utf8[end] & 0xC0 == 0x80 {
+                    end += 1
+                }
+                if end < utf8.count, end > offset, utf8[end - 1] == 0x0D, utf8[end] == 0x0A {
+                    end += 1
+                }
+                let chunk = String(decoding: utf8[offset..<end], as: UTF8.self)
+                insertSmall(chunk, atUTF16: at)
+                at += (chunk as NSString).length
+                offset = end
+            }
+            return
+        }
+        insertSmall(string, atUTF16: location)
+    }
+
+    private func insertSmall(_ string: String, atUTF16 location: Int) {
+        let utf8 = Array(string.utf8)
         let utf16 = (string as NSString).length
         guard !utf8.isEmpty else {
             return
         }
         let lineFeeds = utf8.withUnsafeBytes { UTF8DocumentScanner.lineFeedCount(in: $0) }
-        if let extendNode = extendableAddNode(endingAtUTF16: location) {
+        if let extendNode = extendableAddNode(endingAtUTF16: location),
+           extendNode.data.piece.utf8Length + utf8.count <= UTF8DocumentScanner.checkpointStride {
             addBuffer.append(contentsOf: utf8)
             extendNode.data.piece.utf8Length += utf8.count
             extendNode.data.piece.utf16Length += utf16

@@ -24,7 +24,13 @@ protocol LineSyntaxHighlighter: AnyObject {
     typealias AsyncCallback = @Sendable (Result<Void, Error>) -> Void
     var theme: Theme { get set }
     var canHighlight: Bool { get }
+    /// True while an async highlight submitted by ``syntaxHighlight(_:completion:)`` is still running.
+    var isHighlighting: Bool { get }
     func syntaxHighlight(_ input: LineSyntaxHighlighterInput)
     func syntaxHighlight(_ input: LineSyntaxHighlighterInput, completion: @escaping AsyncCallback)
     func cancel()
+}
+
+extension LineSyntaxHighlighter {
+    var isHighlighting: Bool { false }
 }

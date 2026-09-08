@@ -42,6 +42,8 @@ final class FoldingController {
             }
             if isEnabled {
                 needsRecompute = true
+                pendingFullRecompute = true
+                pendingDirtyRows = nil
             } else {
                 expandAll()
                 folds = []
@@ -57,6 +59,10 @@ final class FoldingController {
     private var collapsedFoldByHiddenLineID: [DocumentLineNodeID: FoldRange] = [:]
     private var collapsedFoldByHeaderLineID: [DocumentLineNodeID: FoldRange] = [:]
     private var needsRecompute = false
+    private var pendingFullRecompute = false
+    private var pendingDirtyRows: ClosedRange<Int>?
+    /// Lines visited by the most recent recompute. Tests use this to lock incremental scanning.
+    private(set) var lastScannedLineCount = 0
 
     init(lineManager: LineManager,
          stringView: StringView,
@@ -73,6 +79,51 @@ final class FoldingController {
             return
         }
         needsRecompute = true
+        pendingFullRecompute = true
+        pendingDirtyRows = nil
+    }
+
+    /// Marks a slice of the document dirty. Successive calls union the ranges until the next
+    /// ``recomputeIfNeeded()``. A full ``setNeedsRecompute()`` still wins.
+    func setNeedsRecompute(rows: ClosedRange<Int>) {
+        guard isEnabled else {
+            return
+        }
+        needsRecompute = true
+        if pendingFullRecompute {
+            return
+        }
+        if let existing = pendingDirtyRows {
+            pendingDirtyRows = min(existing.lowerBound, rows.lowerBound) ... max(existing.upperBound, rows.upperBound)
+        } else {
+            pendingDirtyRows = rows
+        }
+    }
+
+    /// Shifts stored fold row ranges after a line insertion (`delta > 0`) or deletion (`delta < 0`).
+    func applyLineDelta(at row: Int, delta: Int) {
+        guard isEnabled, delta != 0 else {
+            return
+        }
+        var shifted: [FoldRange] = []
+        shifted.reserveCapacity(folds.count)
+        for fold in folds {
+            var lower = fold.lineRange.lowerBound
+            var upper = fold.lineRange.upperBound
+            if lower >= row {
+                lower += delta
+            }
+            if upper >= row {
+                upper += delta
+            }
+            guard lower >= 0, upper > lower else {
+                continue
+            }
+            var updated = fold
+            updated.lineRange = lower ... upper
+            shifted.append(updated)
+        }
+        folds = shifted
     }
 
     func recomputeIfNeeded() {
@@ -296,44 +347,95 @@ private extension FoldingController {
         }
     }
 
-    // swiftlint:disable:next function_body_length
     private func recompute() {
         RunestoneSignposts.interval("FoldingController.recompute") {
+            let lineCount = lineManager.lineCount
+            if pendingFullRecompute || pendingDirtyRows == nil || lineCount == 0 {
+                pendingFullRecompute = false
+                pendingDirtyRows = nil
+                recomputeFull()
+                return
+            }
+            let dirty = pendingDirtyRows!
+            pendingDirtyRows = nil
+            recomputeIncremental(rows: dirty)
+        }
+    }
+
+    private func recomputeFull() {
         let lineCount = lineManager.lineCount
-        var newFolds: [FoldRange] = []
-        var openFolds: [Int: Int] = [:] // depth -> starting row
-        var currentDepth = 0
-        var nextID = 0
+        lastScannedLineCount = lineCount
+        var scanner = FoldScanner(nextID: 0)
         var row = 0
         while row < lineCount {
-            let events = foldProvider.foldEvents(atLine: row, previousDepth: currentDepth, in: lineManager, stringView: stringView)
-            for event in events {
-                switch event {
-                case .startFold(let depth):
-                    openFolds[depth] = row
-                case .endFold(let depth):
-                    for (openDepth, startRow) in openFolds where openDepth > depth {
-                        openFolds.removeValue(forKey: openDepth)
-                        if row - 1 > startRow {
-                            newFolds.append(FoldRange(id: nextID, depth: openDepth, lineRange: startRow ... (row - 1), isCollapsed: false))
-                            nextID += 1
-                        }
-                    }
-                }
-                currentDepth = event.depth
-            }
+            let events = foldProvider.foldEvents(atLine: row, previousDepth: scanner.currentDepth, in: lineManager, stringView: stringView)
+            scanner.apply(events: events, row: row)
             row += 1
         }
-        for (depth, startRow) in openFolds {
-            let endRow = lineCount - 1
-            if endRow > startRow {
-                newFolds.append(FoldRange(id: nextID, depth: depth, lineRange: startRow ... endRow, isCollapsed: false))
-                nextID += 1
+        scanner.closeRemaining(endRow: lineCount - 1)
+        applyRecomputedFolds(scanner.folds)
+    }
+
+    private func recomputeIncremental(rows: ClosedRange<Int>) {
+        let lineCount = lineManager.lineCount
+        guard lineCount > 0 else {
+            lastScannedLineCount = 0
+            applyRecomputedFolds([])
+            return
+        }
+        var start = max(0, rows.lowerBound)
+        var end = min(lineCount - 1, max(start, rows.upperBound))
+        if end - start + 1 >= min(lineCount / 2, 8_192) && end - start + 1 >= 512 {
+            pendingFullRecompute = false
+            recomputeFull()
+            return
+        }
+        var openFolds: [Int: Int] = [:]
+        for fold in folds where fold.lineRange.lowerBound < start && fold.lineRange.upperBound >= start {
+            openFolds[fold.depth] = fold.lineRange.lowerBound
+        }
+        var scanner = FoldScanner(openFolds: openFolds, currentDepth: openFolds.keys.max() ?? 0, nextID: (folds.map(\.id).max() ?? -1) + 1)
+        let startDepth = scanner.currentDepth
+        var row = start
+        while row < lineCount {
+            let events = foldProvider.foldEvents(atLine: row, previousDepth: scanner.currentDepth, in: lineManager, stringView: stringView)
+            scanner.apply(events: events, row: row)
+            row += 1
+            let onlyPreWindowOpen = scanner.openFolds.values.allSatisfy { $0 < start }
+            if row > end && scanner.currentDepth <= startDepth && onlyPreWindowOpen {
+                break
             }
         }
-        newFolds.sort { $0.lineRange.lowerBound < $1.lineRange.lowerBound }
-        applyRecomputedFolds(newFolds)
+        let lastRow = row - 1
+        lastScannedLineCount = max(0, lastRow - start + 1)
+        if lastRow == lineCount - 1 {
+            scanner.closeRemaining(endRow: lastRow)
         }
+        spliceFolds(discovered: scanner.folds, scanned: start ... max(start, lastRow))
+    }
+
+    /// Replaces folds that overlap `scanned` with `discovered`, keeping folds entirely outside
+    /// the scan window (including pre-window folds that stayed open through it).
+    private func spliceFolds(discovered: [FoldRange], scanned: ClosedRange<Int>) {
+        var kept: [FoldRange] = []
+        kept.reserveCapacity(folds.count)
+        let discoveredStarts = Set(discovered.map(\.lineRange.lowerBound))
+        for fold in folds {
+            if fold.lineRange.upperBound < scanned.lowerBound {
+                kept.append(fold)
+                continue
+            }
+            if fold.lineRange.lowerBound > scanned.upperBound {
+                kept.append(fold)
+                continue
+            }
+            if fold.lineRange.lowerBound < scanned.lowerBound && !discoveredStarts.contains(fold.lineRange.lowerBound) {
+                kept.append(fold)
+            }
+        }
+        var merged = kept + discovered
+        merged.sort { $0.lineRange.lowerBound < $1.lineRange.lowerBound }
+        applyRecomputedFolds(merged, restoreRows: scanned)
     }
 
     /// Reconciles freshly-recomputed (always-uncollapsed) folds against the previous collapse
@@ -342,7 +444,7 @@ private extension FoldingController {
     /// unrelated lines, so a fold whose exact line range is unaffected by the edit keeps its
     /// collapsed state. A fold whose range shifted because of the edit is treated as new (and
     /// starts expanded) — a known, minor rough edge rather than a correctness issue.
-    private func applyRecomputedFolds(_ newFolds: [FoldRange]) {
+    private func applyRecomputedFolds(_ newFolds: [FoldRange], restoreRows: ClosedRange<Int>? = nil) {
         let previouslyHiddenLineIDs = hiddenLineIDs
         hiddenLineIDs = []
         collapsedFoldByHiddenLineID = [:]
@@ -372,23 +474,77 @@ private extension FoldingController {
             resultFolds.append(updatedFold)
         }
         // Any previously-hidden line that isn't covered by a still-collapsed fold needs to be
-        // restored to a real height. We only have IDs for these (not live nodes, since holding
-        // node references across a recompute would be the exact staleness hazard this class
-        // avoids), so walk the document once — the same O(n) cost class as computing the folds
-        // themselves, which this recompute already pays.
+        // restored to a real height. Incremental recomputes only walk the scanned rows; a full
+        // recompute still walks the document when collapse state actually changed.
         let stillHiddenLineIDs = hiddenLineIDs
         if previouslyHiddenLineIDs.contains(where: { !stillHiddenLineIDs.contains($0) }) {
-            let iterator = lineManager.createLineIterator()
-            while let line = iterator.next() {
-                if previouslyHiddenLineIDs.contains(line.id) && !stillHiddenLineIDs.contains(line.id) {
+            restoreHeights(of: previouslyHiddenLineIDs.subtracting(stillHiddenLineIDs), in: restoreRows)
+        }
+        folds = resultFolds
+        contentSizeService.invalidateContentSize()
+        didChangeFolds.send()
+    }
+
+    private func restoreHeights(of lineIDs: Set<DocumentLineNodeID>, in rows: ClosedRange<Int>?) {
+        if let rows {
+            for row in rows where row < lineManager.lineCount {
+                let line = lineManager.line(atRow: row)
+                if lineIDs.contains(line.id) {
                     let lineController = lineControllerStorage.getOrCreateLineController(for: line)
                     lineController.invalidateEverything()
                     lineManager.setHeight(of: line, to: lineController.lineHeight)
                 }
             }
+            return
         }
-        folds = resultFolds
-        contentSizeService.invalidateContentSize()
-        didChangeFolds.send()
+        let iterator = lineManager.createLineIterator()
+        while let line = iterator.next() {
+            if lineIDs.contains(line.id) {
+                let lineController = lineControllerStorage.getOrCreateLineController(for: line)
+                lineController.invalidateEverything()
+                lineManager.setHeight(of: line, to: lineController.lineHeight)
+            }
+        }
+    }
+}
+
+private struct FoldScanner {
+    var openFolds: [Int: Int]
+    var currentDepth: Int
+    var nextID: Int
+    var folds: [FoldRange] = []
+
+    init(openFolds: [Int: Int] = [:], currentDepth: Int = 0, nextID: Int = 0) {
+        self.openFolds = openFolds
+        self.currentDepth = currentDepth
+        self.nextID = nextID
+    }
+
+    mutating func apply(events: [LineFoldEvent], row: Int) {
+        for event in events {
+            switch event {
+            case .startFold(let depth):
+                openFolds[depth] = row
+            case .endFold(let depth):
+                for (openDepth, startRow) in openFolds where openDepth > depth {
+                    openFolds.removeValue(forKey: openDepth)
+                    if row - 1 > startRow {
+                        folds.append(FoldRange(id: nextID, depth: openDepth, lineRange: startRow ... (row - 1), isCollapsed: false))
+                        nextID += 1
+                    }
+                }
+            }
+            currentDepth = event.depth
+        }
+    }
+
+    mutating func closeRemaining(endRow: Int) {
+        for (depth, startRow) in openFolds {
+            if endRow > startRow {
+                folds.append(FoldRange(id: nextID, depth: depth, lineRange: startRow ... endRow, isCollapsed: false))
+                nextID += 1
+            }
+        }
+        openFolds.removeAll()
     }
 }

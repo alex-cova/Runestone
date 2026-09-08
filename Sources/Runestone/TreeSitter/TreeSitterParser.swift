@@ -12,6 +12,8 @@ final class TreeSitterParser {
     /// Returning `true` from the callback aborts `ts_parser_parse`; callers must then ``reset()``
     /// so the next parse does not resume the cancelled one.
     var shouldCancel: (() -> Bool)?
+    /// True when the most recent ``parse`` returned `nil` because the progress callback aborted.
+    private(set) var lastParseAborted = false
     var language: TreeSitterLanguagePointer? {
         didSet {
             ts_parser_set_language(pointer, language)
@@ -39,30 +41,25 @@ final class TreeSitterParser {
     func parse(_ string: NSString, oldTree: TreeSitterTree? = nil) -> TreeSitterTree? {
         RunestoneSignposts.interval("TreeSitterParser.parse") {
             guard string.length > 0 else {
+                lastParseAborted = false
                 return nil
             }
             guard let stringEncoding = encoding.stringEncoding else {
+                lastParseAborted = false
                 return nil
             }
             var usedLength = 0
             let buffer = string.getAllBytes(withEncoding: stringEncoding, usedLength: &usedLength)
             defer { buffer?.deallocate() }
-            let newTreePointer: OpaquePointer?
-            if shouldCancel != nil, let buffer {
-                newTreePointer = parseWithCancellation(
-                    buffer: buffer,
-                    length: UInt32(usedLength),
-                    oldTree: oldTree
-                )
-            } else {
-                newTreePointer = ts_parser_parse_string_encoding(
-                    pointer,
-                    oldTree?.pointer,
-                    buffer,
-                    UInt32(usedLength),
-                    encoding
-                )
+            guard let buffer else {
+                lastParseAborted = false
+                return nil
             }
+            let newTreePointer = parseWithCancellation(
+                buffer: buffer,
+                length: UInt32(usedLength),
+                oldTree: oldTree
+            )
             if let newTreePointer = newTreePointer {
                 return TreeSitterTree(newTreePointer)
             } else {
@@ -80,12 +77,7 @@ final class TreeSitterParser {
                     return nil
                 }
             }
-            let newTreePointer: OpaquePointer?
-            if shouldCancel != nil {
-                newTreePointer = parseWithCancellation(input: input.makeTSInput(), oldTree: oldTree)
-            } else {
-                newTreePointer = ts_parser_parse(pointer, oldTree?.pointer, input.makeTSInput())
-            }
+            let newTreePointer = parseWithCancellation(input: input.makeTSInput(), oldTree: oldTree)
             input.deallocate()
             if let newTreePointer = newTreePointer {
                 return TreeSitterTree(newTreePointer)
@@ -111,12 +103,18 @@ final class TreeSitterParser {
     }
 
     private func parseWithCancellation(input: TSInput, oldTree: TreeSitterTree?) -> OpaquePointer? {
-        let box = ParseCancelBox(shouldCancel: shouldCancel ?? { false })
+        lastParseAborted = false
+        let box = ParseCancelBox(
+            shouldCancel: shouldCancel ?? { false },
+            enforceMainThreadTimeout: Thread.isMainThread
+        )
         var options = TSParseOptions()
         options.payload = Unmanaged.passUnretained(box).toOpaque()
         options.progress_callback = parseProgressCallback
         let tree = ts_parser_parse_with_options(pointer, oldTree?.pointer, input, options)
+        box.finish()
         if tree == nil {
+            lastParseAborted = box.didAbort
             ts_parser_reset(pointer)
         }
         return tree
@@ -138,8 +136,53 @@ final class TreeSitterParser {
 /// Holds the cancel predicate for the duration of a `ts_parser_parse_with_options` call.
 private final class ParseCancelBox {
     let shouldCancel: () -> Bool
-    init(shouldCancel: @escaping () -> Bool) {
+    let enforceMainThreadTimeout: Bool
+    let start: CFAbsoluteTime
+    var didPostLongParse = false
+    var didAbort = false
+
+    init(shouldCancel: @escaping () -> Bool, enforceMainThreadTimeout: Bool) {
         self.shouldCancel = shouldCancel
+        self.enforceMainThreadTimeout = enforceMainThreadTimeout
+        self.start = CFAbsoluteTimeGetCurrent()
+    }
+
+    func check() -> Bool {
+        let elapsed = CFAbsoluteTimeGetCurrent() - start
+        if !didPostLongParse, elapsed >= TreeSitterPerformanceConstants.longParseTimeout {
+            didPostLongParse = true
+            NotificationCenter.default.post(
+                name: TreeSitterPerformanceConstants.longParseNotification,
+                object: nil
+            )
+        }
+        if enforceMainThreadTimeout, elapsed >= TreeSitterPerformanceConstants.parserTimeout {
+            didAbort = true
+            return true
+        }
+        if shouldCancel() {
+            didAbort = true
+            return true
+        }
+        return false
+    }
+
+    func finish() {
+        if didPostLongParse {
+            NotificationCenter.default.post(
+                name: TreeSitterPerformanceConstants.longParseFinishedNotification,
+                object: nil
+            )
+        } else if CFAbsoluteTimeGetCurrent() - start >= TreeSitterPerformanceConstants.longParseTimeout {
+            NotificationCenter.default.post(
+                name: TreeSitterPerformanceConstants.longParseNotification,
+                object: nil
+            )
+            NotificationCenter.default.post(
+                name: TreeSitterPerformanceConstants.longParseFinishedNotification,
+                object: nil
+            )
+        }
     }
 }
 
@@ -158,7 +201,7 @@ private func parseProgressCallback(state: UnsafeMutablePointer<TSParseState>?) -
         return false
     }
     let box: ParseCancelBox = Unmanaged.fromOpaque(payload).takeUnretainedValue()
-    return box.shouldCancel()
+    return box.check()
 }
 
 private func contiguousParseRead(

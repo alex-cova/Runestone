@@ -21,6 +21,12 @@ final class TreeSitterSyntaxHighlighter: LineSyntaxHighlighter, @unchecked Senda
     var canHighlight: Bool {
         languageMode.canHighlight
     }
+    var isHighlighting: Bool {
+        guard let operation = currentOperation else {
+            return false
+        }
+        return !operation.isFinished && !operation.isCancelled
+    }
 
     private let stringView: StringView
     private let languageMode: TreeSitterInternalLanguageMode
@@ -55,10 +61,10 @@ final class TreeSitterSyntaxHighlighter: LineSyntaxHighlighter, @unchecked Senda
                 return
             }
             let captures = self.languageMode.captures(in: input.byteRange)
+            let tokens = self.tokens(for: captures, localTo: input.byteRange)
             if !operation.isCancelled {
                 DispatchQueue.main.async {
                     if !operation.isCancelled {
-                        let tokens = self.tokens(for: captures, localTo: input.byteRange)
                         self.setAttributes(for: tokens, on: input.attributedString)
                         completion(.success(()))
                     } else {
@@ -84,7 +90,17 @@ final class TreeSitterSyntaxHighlighter: LineSyntaxHighlighter, @unchecked Senda
 private extension TreeSitterSyntaxHighlighter {
     private func setAttributes(for tokens: [TreeSitterSyntaxHighlightToken], on attributedString: NSMutableAttributedString) {
         attributedString.beginEditing()
-        for token in tokens {
+        let defaultFont = theme.font
+        for token in coalesce(tokens) {
+            if token.fontTraits.isEmpty && token.font == nil {
+                if let foregroundColor = token.textColor {
+                    attributedString.addAttribute(.foregroundColor, value: foregroundColor, range: token.range)
+                }
+                if let shadow = token.shadow {
+                    attributedString.addAttribute(.shadow, value: shadow, range: token.range)
+                }
+                continue
+            }
             var attributes: [NSAttributedString.Key: Any] = [:]
             if let foregroundColor = token.textColor {
                 attributes[.foregroundColor] = foregroundColor
@@ -106,10 +122,10 @@ private extension TreeSitterSyntaxHighlighter {
                 symbolicTraits.insert(.italic)
             }
             let currentFont = attributedString.attribute(.font, at: token.range.location, effectiveRange: nil) as? UIFont
-            let baseFont = token.font ?? theme.font
+            let baseFont = token.font ?? defaultFont
             let newFont: UIFont
             if !symbolicTraits.isEmpty {
-                newFont = baseFont.withSymbolicTraits(symbolicTraits) ?? baseFont
+                newFont = DerivedFontCache.font(baseFont, traits: symbolicTraits)
             } else {
                 newFont = baseFont
             }
@@ -123,8 +139,27 @@ private extension TreeSitterSyntaxHighlighter {
         attributedString.endEditing()
     }
 
+    private func coalesce(_ tokens: [TreeSitterSyntaxHighlightToken]) -> [TreeSitterSyntaxHighlightToken] {
+        guard var current = tokens.first else {
+            return []
+        }
+        var result: [TreeSitterSyntaxHighlightToken] = []
+        result.reserveCapacity(tokens.count)
+        for token in tokens.dropFirst() {
+            if current.hasSameStyle(as: token), token.range.location <= current.upperBound {
+                current = current.merging(token)
+            } else {
+                result.append(current)
+                current = token
+            }
+        }
+        result.append(current)
+        return result
+    }
+
     private func tokens(for captures: [TreeSitterCapture], localTo localRange: ByteRange) -> [TreeSitterSyntaxHighlightToken] {
         var tokens: [TreeSitterSyntaxHighlightToken] = []
+        tokens.reserveCapacity(captures.count)
         for capture in captures where capture.byteRange.overlaps(localRange) {
             // We highlight each line separately but a capture may extend beyond a line,
             // e.g. an unterminated string, so we need to cap the start and end location
@@ -159,5 +194,30 @@ private extension UIFont {
     func withSymbolicTraits(_ symbolicTraits: UIFontDescriptor.SymbolicTraits) -> UIFont? {
         let newFontDescriptor = fontDescriptor.withSymbolicTraits(symbolicTraits)
         return NSFont(descriptor: newFontDescriptor, size: pointSize)
+    }
+}
+
+private enum DerivedFontCache {
+    private struct Key: Hashable {
+        let fontID: ObjectIdentifier
+        let traits: Int
+    }
+
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var fonts: [Key: UIFont] = [:]
+
+    static func font(_ base: UIFont, traits: UIFontDescriptor.SymbolicTraits) -> UIFont {
+        let key = Key(fontID: ObjectIdentifier(base), traits: Int(traits.rawValue))
+        lock.lock()
+        if let cached = fonts[key] {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+        let derived = base.withSymbolicTraits(traits) ?? base
+        lock.lock()
+        fonts[key] = derived
+        lock.unlock()
+        return derived
     }
 }

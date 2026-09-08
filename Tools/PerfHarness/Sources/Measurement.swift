@@ -47,6 +47,15 @@ enum Measurement {
         RunLoop.main.run(until: Date().addingTimeInterval(seconds))
     }
 
+    /// Nearest-rank percentile. `p` is in (0, 1], e.g. `0.95`.
+    static func percentile(_ values: [Double], _ p: Double) -> Double {
+        let sorted = values.sorted()
+        guard !sorted.isEmpty else { return 0 }
+        let rank = Int((p * Double(sorted.count)).rounded(.up))
+        let index = min(sorted.count, max(1, rank)) - 1
+        return sorted[index]
+    }
+
     static func formatBytes(_ bytes: UInt64) -> String {
         let mb = Double(bytes) / 1_048_576
         if mb > 1024 {

@@ -21,12 +21,14 @@ enum LineFoldEvent {
 ///
 /// The editor calls ``foldEvents(atLine:previousDepth:in:stringView:)`` once per line, in order,
 /// while recomputing the document's fold structure. Implementations should be fast, since this is
-/// called once per line of the document on every recompute.
-///
-/// This is currently an internal extension point — only the bundled ``LineIndentationFoldProvider``
-/// is used. It is written as a protocol (rather than folded directly into ``FoldingController``) so
-/// a tree-sitter-backed provider can be swapped in later, as called out in the folding plan, without
-/// committing to a public third-party-pluggable API shape yet.
+/// called once per line of a recompute window.
 protocol LineFoldProvider: AnyObject {
     func foldEvents(atLine lineIndex: Int, previousDepth: Int, in lineManager: LineManager, stringView: StringView) -> [LineFoldEvent]
+    /// Called after an edit so cached providers can update a slice of the document instead of
+    /// throwing away the whole fold map. Default is a no-op.
+    func invalidateForEdit(changedRows: ClosedRange<Int>?, lineCount: Int, previousLineCount: Int, spliceRow: Int)
+}
+
+extension LineFoldProvider {
+    func invalidateForEdit(changedRows: ClosedRange<Int>?, lineCount: Int, previousLineCount: Int, spliceRow: Int) {}
 }

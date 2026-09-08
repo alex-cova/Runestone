@@ -5,10 +5,13 @@ public enum TreeSitterPerformanceConstants {
     /// Maximum query matches per tree-sitter cursor invocation.
     nonisolated(unsafe) public static var matchLimit = 256
 
-    /// Parser timeout between cancellation checks (seconds).
+    /// Main-thread parse abort deadline (seconds). Background parses ignore this and only stop
+    /// when the parse operation is cancelled.
     nonisolated(unsafe) public static var parserTimeout: TimeInterval = 0.05
 
-    /// Maximum edit length processed synchronously.
+    /// UTF-16 units of inserted or deleted text above which `textDidChange` skips the
+    /// synchronous incremental parse. The edit is applied to the tree (`ts_tree_edit`) and a
+    /// background parse is restarted, same as an in-flight parse being invalidated.
     nonisolated(unsafe) public static var maxSyncEditLength = 1024
 
     /// Maximum document length for synchronous operations.
@@ -25,6 +28,10 @@ public enum TreeSitterPerformanceConstants {
 
     /// Maximum query length for synchronous highlight queries.
     nonisolated(unsafe) public static var maxSyncQueryLength = 4096
+
+    /// UTF-16 window queried and cached for highlight captures so adjacent lines share one
+    /// tree-sitter query instead of each walking the tree from the root.
+    nonisolated(unsafe) public static var highlightQueryWindowUTF16Length = 32_768
 
     /// Duration before a long parse is considered noteworthy (seconds).
     nonisolated(unsafe) public static var longParseTimeout: TimeInterval = 0.5

@@ -50,7 +50,11 @@ extension TreeSitterLanguageLayer {
     /// Honors ``rootIncludedRanges`` so a viewport window does not copy or walk the whole buffer.
     func parseUsingReader() {
         prepareParser(toParse: [])
-        tree = parser.parse(oldTree: tree)
+        if let parsed = parser.parse(oldTree: tree) {
+            tree = parsed
+        } else if parser.lastParseAborted {
+            return
+        }
         childLanguageLayerStore.removeAll()
         guard let injectionsQuery = language.injectionsQuery, let node = tree?.rootNode else {
             return
@@ -95,6 +99,38 @@ extension TreeSitterLanguageLayer {
         return apply(edit, parsing: ranges)
     }
 
+    /// Cheap `ts_tree_edit` on this layer and every child, with no reparse. Used when the edit is
+    /// larger than ``TreeSitterPerformanceConstants/maxSyncEditLength`` so the keystroke does not
+    /// wait on an incremental parse; a background parse consumes the edited tree afterwards.
+    func applyEditWithoutParsing(_ edit: TreeSitterInputEdit) {
+        tree?.apply(edit)
+        applyEditWithoutParsingToChildren(edit)
+    }
+
+    private func applyEditWithoutParsingToChildren(_ edit: TreeSitterInputEdit) {
+        for child in childLanguageLayerStore.allLayers {
+            child.applyEditWithoutParsing(edit)
+        }
+    }
+
+    /// Copy-on-write snapshot of this layer and its injection children, safe to query off `parseLock`.
+    func snapshotForQuery() -> TreeSitterQuerySnapshot? {
+        guard let tree = tree?.copy() else {
+            return nil
+        }
+        let children = childLanguageLayerStore.allLayers.compactMap { $0.snapshotForQuery() }
+        return TreeSitterQuerySnapshot(tree: tree, language: language, children: children)
+    }
+
+    /// Applies `edit` and re-parses using the tree's post-edit root range rather than a freshly
+    /// queried injection range. Used for child layers that sit entirely after the edited region.
+    func applyEditPreservingIncludedRange(_ edit: TreeSitterInputEdit) -> LineChangeSet {
+        let oldTree = tree
+        tree?.apply(edit)
+        let ranges = [tree?.rootNode.textRange].compactMap { $0 }
+        return completeApply(oldTree: oldTree, parsing: ranges, childEdit: edit)
+    }
+
     func layerAndNode(at linePosition: LinePosition) -> LayerAndNodeTuple? {
         let point = TreeSitterTextPoint(linePosition)
         guard let node = tree?.rootNode.descendantForRange(from: point, to: point) else {
@@ -114,14 +150,22 @@ extension TreeSitterLanguageLayer {
     }
 
     private func apply(_ edit: TreeSitterInputEdit, parsing ranges: [TreeSitterTextRange] = []) -> LineChangeSet {
-        // Apply edit to tree.
         let oldTree = tree
         tree?.apply(edit)
+        return completeApply(oldTree: oldTree, parsing: ranges, childEdit: edit)
+    }
+
+    private func completeApply(
+        oldTree: TreeSitterTree?,
+        parsing ranges: [TreeSitterTextRange],
+        childEdit edit: TreeSitterInputEdit
+    ) -> LineChangeSet {
         prepareParser(toParse: ranges)
-        tree = parser.parse(oldTree: tree)
-        // Gather changed lines.
+        if let parsed = parser.parse(oldTree: tree) {
+            tree = parsed
+        }
         let lineChangeSet = LineChangeSet()
-        if let oldTree = oldTree, let newTree = tree {
+        if let oldTree = oldTree, let newTree = tree, !parser.lastParseAborted {
             let changedRanges = oldTree.rangesChanged(comparingTo: newTree)
             for changedRange in changedRanges {
                 let lastRow = max(lineManager.lineCount - 1, 0)
@@ -136,6 +180,10 @@ extension TreeSitterLanguageLayer {
                 }
             }
         }
+        if parser.lastParseAborted {
+            applyEditWithoutParsingToChildren(edit)
+            return lineChangeSet
+        }
         let childLineChangeSet = updateChildLayers(applying: edit)
         lineChangeSet.union(with: childLineChangeSet)
         return lineChangeSet
@@ -143,7 +191,9 @@ extension TreeSitterLanguageLayer {
 
     private func parseUsingReader(ranges: [TreeSitterTextRange]) {
         prepareParser(toParse: ranges)
-        tree = parser.parse(oldTree: tree)
+        if let parsed = parser.parse(oldTree: tree) {
+            tree = parsed
+        }
     }
 
     private func prepareParser(toParse ranges: [TreeSitterTextRange]) {
@@ -163,7 +213,11 @@ extension TreeSitterLanguageLayer {
 
     private func parse(_ ranges: [TreeSitterTextRange], from text: NSString) {
         prepareParser(toParse: ranges)
-        tree = parser.parse(text)
+        if let parsed = parser.parse(text) {
+            tree = parsed
+        } else if parser.lastParseAborted {
+            return
+        }
         childLanguageLayerStore.removeAll()
         guard let injectionsQuery = language.injectionsQuery, let node = tree?.rootNode else {
             return
@@ -183,18 +237,32 @@ extension TreeSitterLanguageLayer {
 // MARK: - Syntax Highlighting
 extension TreeSitterLanguageLayer {
     func captures(in range: ByteRange) -> [TreeSitterCapture] {
+        snapshotForQuery()?.captures(in: range, stringView: stringView) ?? []
+    }
+}
+
+/// Immutable copy of a language layer's trees, queried without holding `parseLock`.
+final class TreeSitterQuerySnapshot {
+    let tree: TreeSitterTree
+    let language: TreeSitterInternalLanguage
+    let children: [TreeSitterQuerySnapshot]
+
+    init(tree: TreeSitterTree, language: TreeSitterInternalLanguage, children: [TreeSitterQuerySnapshot]) {
+        self.tree = tree
+        self.language = language
+        self.children = children
+    }
+
+    func captures(in range: ByteRange, stringView: StringView) -> [TreeSitterCapture] {
         guard !range.isEmpty else {
             return []
         }
-        var captures = allValidCaptures(in: range)
+        var captures = allValidCaptures(in: range, stringView: stringView)
         captures.sort(by: TreeSitterCapture.captureLayerSorting)
         return captures
     }
 
-    private func allValidCaptures(in range: ByteRange) -> [TreeSitterCapture] {
-        guard let tree = tree else {
-            return []
-        }
+    private func allValidCaptures(in range: ByteRange, stringView: StringView) -> [TreeSitterCapture] {
         guard let highlightsQuery = language.highlightsQuery else {
             return []
         }
@@ -202,7 +270,7 @@ extension TreeSitterLanguageLayer {
         queryCursor.setQueryRange(range)
         queryCursor.execute()
         let captures = queryCursor.validCaptures(in: stringView)
-        let capturesInChildren = childLanguageLayerStore.allLayers.reduce(into: []) { $0 += $1.allValidCaptures(in: range) }
+        let capturesInChildren = children.reduce(into: []) { $0 += $1.allValidCaptures(in: range, stringView: stringView) }
         return captures + capturesInChildren
     }
 }
@@ -233,28 +301,65 @@ private extension TreeSitterLanguageLayer {
             childLanguageLayerStore.removeAll()
             return LineChangeSet()
         }
+        let documentRange = node.byteRange
+        let editRange = ByteRange(from: edit.startByte, to: max(edit.oldEndByte, edit.newEndByte))
+        let pad = ByteCount(utf16Length: TreeSitterPerformanceConstants.highlightQueryWindowUTF16Length)
+        let unboundedStart = ByteCount(max(0, editRange.lowerBound.value - pad.value))
+        let unboundedEnd = editRange.upperBound + pad
+        let unboundedEditWindow = ByteRange(from: unboundedStart, to: unboundedEnd)
+        if !documentRange.overlaps(unboundedEditWindow) {
+            return shiftChildrenAfterEdit(edit)
+        }
+        let queryRange = editRange.padded(by: pad, within: documentRange)
+        guard !queryRange.isEmpty else {
+            return shiftChildrenAfterEdit(edit)
+        }
         let injectionsQueryCursor = TreeSitterQueryCursor(query: injectionsQuery, node: node)
+        injectionsQueryCursor.setQueryRange(queryRange)
         injectionsQueryCursor.execute()
         let captures = injectionsQueryCursor.validCaptures(in: stringView)
         let injectedLanguages = injectedLanguages(from: captures)
-        let capturedIDs = injectedLanguages.map(\.id)
+        let capturedIDs = Set(injectedLanguages.map(\.id))
         let currentIDs = childLanguageLayerStore.allIDs
+        let lineChangeSet = LineChangeSet()
         for id in currentIDs {
-            if !capturedIDs.contains(id) {
-                // Remove languages that we no longer have any captures for.
+            guard let layer = childLanguageLayerStore.layer(forKey: id) else {
+                continue
+            }
+            let layerRange = layer.tree?.rootNode.byteRange
+            if let layerRange, layerRange.length <= 0 {
                 childLanguageLayerStore.removeLayer(forKey: id)
-            } else if let rootNode = childLanguageLayerStore.layer(forKey: id)?.tree?.rootNode, rootNode.byteRange.length <= 0 {
-                // Remove layers that no longer have any content.
+                continue
+            }
+            if let layerRange, layerRange.upperBound <= edit.startByte {
+                continue
+            }
+            let overlapsQuery = layerRange?.overlaps(queryRange) ?? true
+            if overlapsQuery && !capturedIDs.contains(id) {
                 childLanguageLayerStore.removeLayer(forKey: id)
+                continue
+            }
+            if !overlapsQuery {
+                let childLineChangeSet = layer.applyEditPreservingIncludedRange(edit)
+                lineChangeSet.union(with: childLineChangeSet)
             }
         }
-        // Update layers for current captures.
-        let lineChangeSet = LineChangeSet()
         for injectedLanguage in injectedLanguages {
             if let childLanguageLayer = childLanguageLayer(withID: injectedLanguage.id, forLanguageNamed: injectedLanguage.languageName) {
                 let childLineChangeSet = childLanguageLayer.apply(edit, parsing: [injectedLanguage.textRange])
                 lineChangeSet.union(with: childLineChangeSet)
             }
+        }
+        return lineChangeSet
+    }
+
+    private func shiftChildrenAfterEdit(_ edit: TreeSitterInputEdit) -> LineChangeSet {
+        let lineChangeSet = LineChangeSet()
+        for layer in childLanguageLayerStore.allLayers {
+            guard let range = layer.tree?.rootNode.byteRange, range.upperBound > edit.startByte else {
+                continue
+            }
+            lineChangeSet.union(with: layer.applyEditPreservingIncludedRange(edit))
         }
         return lineChangeSet
     }

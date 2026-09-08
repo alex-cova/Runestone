@@ -59,12 +59,14 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
         contentsOf url: URL,
         language: TreeSitterLanguage? = nil,
         languageIdentifier: String? = nil,
+        languageProvider: TreeSitterLanguageProvider? = nil,
         parsePolicy: SyntaxParsePolicy = .viewport,
         io: DocumentLoadIO = .memoryMapped
     ) async throws -> WorkbenchDocument {
         let prepared = try await RunestoneStateBuilder.load(
             contentsOf: url,
             language: language,
+            languageProvider: languageProvider,
             parsePolicy: parsePolicy,
             io: io
         )
@@ -87,7 +89,7 @@ public final class WorkbenchDocument: Identifiable, @unchecked Sendable {
 
     public func makeEIPDocument(version: Int = 0) -> Document {
         let snapshot: TextSnapshot
-        if isFileBacked {
+        if isFileBacked || rangeReader != nil {
             let length = rangeReader?.utf16Length ?? pendingState?.stringView.length ?? (text as NSString).length
             snapshot = TextSnapshot(version: version, utf16Length: length, text: nil, rangeReader: rangeReader)
         } else {

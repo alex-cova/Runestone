@@ -20,7 +20,8 @@ let package = Package(
         .library(name: "EditorIntelligence", targets: ["EditorIntelligence"]),
         .library(name: "EditorIntelligenceLSP", targets: ["EditorIntelligenceLSP"]),
         .library(name: "RunestoneGraphQLLanguage", targets: ["RunestoneGraphQLLanguage"]),
-        .library(name: "RunestoneMarkdownLanguage", targets: ["RunestoneMarkdownLanguage"])
+        .library(name: "RunestoneMarkdownLanguage", targets: ["RunestoneMarkdownLanguage"]),
+        .library(name: "RunestoneLanguages", targets: ["RunestoneLanguages"])
     ],
     dependencies: [
         .package(url: "https://github.com/ChimeHQ/LanguageClient", from: "0.8.0"),
@@ -75,7 +76,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "MacExample",
-            dependencies: ["Runestone", "TestTreeSitterLanguages"],
+            dependencies: ["Runestone", "RunestoneLanguages", "RunestoneMarkdownLanguage"],
             path: "Example/MacExample",
             swiftSettings: swift6
         ),
@@ -106,6 +107,33 @@ let package = Package(
             .unsafeFlags(["-w"])
         ]),
         .target(
+            name: "TreeSitterCSS",
+            cSettings: [
+                .headerSearchPath("src"),
+                .unsafeFlags(["-w"])
+            ]
+        ),
+        .target(
+            name: "TreeSitterTypeScript",
+            cSettings: [
+                .headerSearchPath("src"),
+                .unsafeFlags(["-w"])
+            ]
+        ),
+        .target(
+            name: "RunestoneLanguages",
+            dependencies: [
+                "Runestone",
+                "TestTreeSitterLanguages",
+                "TreeSitterCSS",
+                "TreeSitterTypeScript"
+            ],
+            resources: [
+                .copy("Queries")
+            ],
+            swiftSettings: swift6
+        ),
+        .target(
             name: "RunestoneMarkdownLanguage",
             dependencies: [
                 "Runestone",
@@ -123,7 +151,9 @@ let package = Package(
             "EditorIntelligenceLSP",
             "TestTreeSitterLanguages",
             "RunestoneGraphQLLanguage",
-            "RunestoneMarkdownLanguage"
+            "RunestoneMarkdownLanguage",
+            "RunestoneLanguages",
+            .product(name: "LanguageServerProtocol", package: "LanguageServerProtocol")
         ], swiftSettings: swift6)
     ]
 )

@@ -24,7 +24,7 @@ func printUsageAndExit() -> Never {
     Commands:
       open <path> [--highlighted] [--deferred] [--viewport] [--chunked] [--mmap]
       scroll <path> [--frames N] [--highlighted] [--deferred]
-      keystroke <path> --at start|middle|end [--highlighted] [--deferred]
+      keystroke <path> --at start|middle|end [--samples N] [--highlighted] [--deferred]
       goto <path> --percent N [--highlighted] [--deferred]
       search <path> --pattern TEXT [--regex] [--highlighted] [--deferred]
       save <path> [--highlighted] [--deferred]
@@ -86,7 +86,12 @@ do {
             FileHandle.standardError.write("keystroke requires --at start|middle|end\n".data(using: .utf8)!)
             exit(1)
         }
-        try Commands.keystroke(path: path, position: position, options: options)
+        try Commands.keystroke(
+            path: path,
+            position: position,
+            options: options,
+            samples: Int(flagValue("--samples", in: rest) ?? "") ?? 1
+        )
     case "goto":
         guard let raw = flagValue("--percent", in: rest), let percent = Int(raw) else {
             FileHandle.standardError.write("goto requires --percent N\n".data(using: .utf8)!)

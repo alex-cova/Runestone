@@ -81,6 +81,9 @@ final class TextInputView: UIView, UITextInput {
                     multiSelectionController.setSelections(sanitizedRange.map { [$0] } ?? [])
                 }
                 _selectedRange = sanitizedRange
+                if !isApplyingSnippetSelection && !isApplyingMultipleSelectionUpdate {
+                    invalidateSnippetSessionIfSelectionLeftStops(sanitizedRange.map { [$0] } ?? [])
+                }
                 if shouldNotifyInputDelegate {
                     inputDelegate?.selectionDidChange(self)
                 }
@@ -651,6 +654,9 @@ final class TextInputView: UIView, UITextInput {
                     multiSelectionController.setSelections(sanitizedRange.map { [$0] } ?? [])
                 }
                 _selectedRange = sanitizedRange
+                if !isApplyingSnippetSelection && !isApplyingMultipleSelectionUpdate {
+                    invalidateSnippetSessionIfSelectionLeftStops(sanitizedRange.map { [$0] } ?? [])
+                }
                 // Defer host notification — callers often assign selection during
                 // setState / updateNSView / layout, and sync callbacks re-enter AppKit.
                 DispatchQueue.main.async { [weak self] in
@@ -698,6 +704,10 @@ final class TextInputView: UIView, UITextInput {
                 } else {
                     bracketMatchingController.clearEmphasis()
                 }
+                occurrenceHighlightController.selectionDidChange(
+                    selectedRange: _selectedRange,
+                    isMultiCaret: isMultiCursorActive
+                )
                 updateFocusModeIfNeeded()
                 setNeedsLayout()
             }
@@ -743,6 +753,7 @@ final class TextInputView: UIView, UITextInput {
                 customTokenizer.stringView = stringView
                 foldingController.stringView = stringView
                 focusModeController.stringView = stringView
+                occurrenceHighlightController.stringView = stringView
             }
         }
     }
@@ -791,9 +802,12 @@ final class TextInputView: UIView, UITextInput {
                     foldingController.foldProvider = treeSitterFoldProvider
                     treeSitterFoldProvider.invalidate()
                     foldingController.setNeedsRecompute()
+                    methodSeparatorController.languageMode = treeSitterLanguageMode
                 } else {
                     foldingController.foldProvider = LineIndentationFoldProvider()
+                    methodSeparatorController.languageMode = nil
                 }
+                methodSeparatorController.recompute()
             }
         }
     }
@@ -824,6 +838,8 @@ final class TextInputView: UIView, UITextInput {
     private let multiSelectionController = MultiSelectionController()
     let semanticSelectionController = SemanticSelectionController()
     private var isApplyingMultipleSelectionUpdate = false
+    private var snippetSession: SnippetSession?
+    private var isApplyingSnippetSelection = false
     let blockSelectionController = BlockSelectionController()
     private var isApplyingBlockSelectionUpdate = false
     /// Set for the duration of a multi-caret batch operation that goes through
@@ -835,6 +851,44 @@ final class TextInputView: UIView, UITextInput {
     private let foldingController: FoldingController
     private let focusModeController: FocusModeController
     private let treeSitterFoldProvider = TreeSitterLineFoldProvider()
+    let methodSeparatorController = MethodSeparatorController()
+    let occurrenceHighlightController: OccurrenceHighlightController
+    /// Resolved per-language behaviour. Pushed from ``TextView`` whenever the identifier or
+    /// registry changes; drives method separators and occurrence highlighting.
+    var languageConfiguration: LanguageConfiguration? {
+        didSet {
+            methodSeparatorController.configuration = languageConfiguration
+            occurrenceHighlightController.configuration = languageConfiguration
+            methodSeparatorController.recompute()
+            occurrenceHighlightController.selectionDidChange(
+                selectedRange: selectedRanges.first,
+                isMultiCaret: isMultiCursorActive
+            )
+        }
+    }
+    var showMethodSeparators: Bool {
+        get {
+            layoutManager.showMethodSeparators
+        }
+        set {
+            layoutManager.showMethodSeparators = newValue
+            methodSeparatorController.isEnabled = newValue
+        }
+    }
+    var highlightsOccurrencesOfSelection: Bool {
+        get {
+            occurrenceHighlightController.isEnabled
+        }
+        set {
+            occurrenceHighlightController.isEnabled = newValue
+            if newValue {
+                occurrenceHighlightController.selectionDidChange(
+                    selectedRange: selectedRanges.first,
+                    isMultiCaret: isMultiCursorActive
+                )
+            }
+        }
+    }
     private let invisibleCharacterConfiguration = InvisibleCharacterConfiguration()
     var imeMarkedRange: NSRange? {
         get {
@@ -876,6 +930,7 @@ final class TextInputView: UIView, UITextInput {
         self.theme = theme
         lineManager = LineManager(stringView: stringView)
         highlightService = HighlightService(lineManager: lineManager)
+        occurrenceHighlightController = OccurrenceHighlightController(stringView: stringView, theme: theme)
         bracketMatchingController = BracketMatchingController(stringView: stringView)
         lineControllerFactory = LineControllerFactory(stringView: stringView,
                                                       highlightService: highlightService,
@@ -931,6 +986,14 @@ final class TextInputView: UIView, UITextInput {
         }
         bracketMatchingController.emphasisManager = emphasisManager
         diagnosticEmphasisController.emphasisManager = emphasisManager
+        occurrenceHighlightController.emphasisManager = emphasisManager
+        occurrenceHighlightController.tokenizer = tokenizer
+        methodSeparatorController.onRowsChanged = { [weak self] rows in
+            guard let self else { return }
+            self.layoutManager.setMethodSeparatorRows(rows)
+            self.layoutManager.setNeedsLayout()
+            self.setNeedsLayout()
+        }
         layoutManager.foldingController = foldingController
         layoutManager.focusModeController = focusModeController
         lineMovementController.foldingController = foldingController
@@ -1383,6 +1446,7 @@ final class TextInputView: UIView, UITextInput {
     private func handleSyntaxParseFinished(state: TextViewState?, notify: Bool) {
         state?.applyDetectedIndentStrategy()
         invalidateLines()
+        methodSeparatorController.recompute()
         layoutManager.setNeedsLayout()
         setNeedsLayout()
         if notify {
@@ -1494,6 +1558,7 @@ private extension TextInputView {
         pageGuideController.guideView.backgroundColor = theme.pageGuideBackgroundColor
         pageGuideController.guideView.shadingColor = theme.pageGuideBackgroundColor.withAlphaComponent(0.35)
         selectionHighlightColor = theme.selectionColor
+        occurrenceHighlightController.theme = theme
         layoutManager.theme = theme
     }
 }
@@ -1694,6 +1759,9 @@ extension TextInputView {
             setNeedsLayout()
         }
         isApplyingMultipleSelectionUpdate = false
+        if !isApplyingSnippetSelection {
+            invalidateSnippetSessionIfSelectionLeftStops(normalized)
+        }
         updateFocusModeIfNeeded()
         if notifyDelegate {
             DispatchQueue.main.async { [weak self] in
@@ -2256,6 +2324,7 @@ extension TextInputView {
         timedUndoManager.registerUndo(withTarget: self) { textInputView in
             textInputView.replaceText(in: BatchReplaceSet(replacements: inverseReplacements))
         }
+        timedUndoManager.notePayloadBytes(Self.undoPayloadBytes(for: inverseReplacements))
         if !isNestedInUndoOrRedo {
             timedUndoManager.endUndoGrouping()
         }
@@ -2289,6 +2358,7 @@ extension TextInputView {
         timedUndoManager.registerUndo(withTarget: self) { textInputView in
             textInputView.replaceText(in: BatchReplaceSet(replacements: inverseReplacements))
         }
+        timedUndoManager.notePayloadBytes(Self.undoPayloadBytes(for: inverseReplacements))
         if !isNestedInUndoOrRedo {
             timedUndoManager.endUndoGrouping()
         }
@@ -2361,6 +2431,13 @@ extension TextInputView {
             oldEnd: TextLocation(textChange.oldEndLinePosition)
         )
         delegate?.textInputView(self, didChangeContent: change)
+        if var session = snippetSession {
+            if session.applyEdit(range: range, replacementLength: nsNewString.length) {
+                snippetSession = session
+            } else {
+                snippetSession = nil
+            }
+        }
         delegate?.textInputViewDidChange(self)
         if updatedTextEditResult.didAddOrRemoveLines {
             delegate?.textInputViewDidInvalidateContentSize(self)
@@ -2381,10 +2458,23 @@ extension TextInputView {
         if didAddOrRemoveLines {
             gutterWidthService.invalidateLineNumberWidth()
         }
-        if foldingController.foldProvider is TreeSitterLineFoldProvider {
-            treeSitterFoldProvider.invalidate()
+        if foldingController.isEnabled {
+            let previousLineCount = lineManager.lineCount - lineChangeSet.insertedLines.count + lineChangeSet.removedLines.count
+            let spliceRow = lineChangeSet.spliceRow ?? 0
+            let delta = lineChangeSet.insertedLines.count - lineChangeSet.removedLines.count
+            foldingController.foldProvider.invalidateForEdit(
+                changedRows: lineChangeSet.affectedRowRange(lineCount: lineManager.lineCount),
+                lineCount: lineManager.lineCount,
+                previousLineCount: previousLineCount,
+                spliceRow: spliceRow
+            )
+            foldingController.applyLineDelta(at: spliceRow, delta: delta)
+            if let rows = lineChangeSet.affectedRowRange(lineCount: lineManager.lineCount) {
+                foldingController.setNeedsRecompute(rows: rows)
+            } else {
+                foldingController.setNeedsRecompute()
+            }
         }
-        foldingController.setNeedsRecompute()
         layoutManager.setNeedsLayout()
         setNeedsLayout()
     }
@@ -2418,6 +2508,11 @@ extension TextInputView {
             }
             textInputView.inputDelegate?.selectionDidChange(textInputView)
         }
+        timedUndoManager.notePayloadBytes((text as NSString).length * 2)
+    }
+
+    private static func undoPayloadBytes(for replacements: [BatchReplaceSet.Replacement]) -> Int {
+        replacements.reduce(0) { $0 + ($1.text as NSString).length * 2 }
     }
 
     private func prepareTextForInsertion(_ text: String) -> String {
@@ -3637,20 +3732,121 @@ extension TextInputView {
         guard shouldChangeText(in: range, replacementText: reindented) else { return }
         timedUndoManager.endUndoGrouping()
         timedUndoManager.beginUndoGrouping()
+        snippetSession = nil
         replaceText(in: range, with: reindented, undoActionName: L10n.Undo.ActionName.surroundWith)
+        beginSnippetSession(
+            expansion: expansion,
+            origin: range.location,
+            extraIndentPerNewline: (indent as NSString).length
+        )
+        timedUndoManager.endUndoGrouping()
+    }
 
+    func insertSnippet(_ expansion: SnippetExpansion, replacing range: NSRange, extraIndentPerNewline: Int = 0) {
+        let text = expansion.text
+        guard shouldChangeText(in: range, replacementText: text) else {
+            return
+        }
+        snippetSession = nil
+        replaceText(in: range, with: text, undoActionName: L10n.Undo.ActionName.typing)
+        beginSnippetSession(expansion: expansion, origin: range.location, extraIndentPerNewline: extraIndentPerNewline)
+    }
+
+    var hasActiveSnippetSession: Bool {
+        snippetSession?.isActive ?? false
+    }
+
+    @discardableResult
+    func advanceSnippetSession() -> Bool {
+        guard var session = snippetSession else {
+            return false
+        }
+        applySnippetStep(session.advance())
+        snippetSession = session.isActive ? session : nil
+        return true
+    }
+
+    @discardableResult
+    func retreatSnippetSession() -> Bool {
+        guard var session = snippetSession, session.isActive else {
+            return false
+        }
+        applySnippetStep(session.retreat())
+        snippetSession = session
+        return true
+    }
+
+    func cancelSnippetSession() {
+        snippetSession = nil
+    }
+
+    func beginSnippetSession(expansion: SnippetExpansion, origin: Int, extraIndentPerNewline: Int = 0) {
+        if let session = SnippetSession(
+            expansion: expansion,
+            origin: origin,
+            extraIndentPerNewline: extraIndentPerNewline
+        ) {
+            snippetSession = session
+            applySnippetStep(session.currentStep())
+            return
+        }
         let caretOffset: Int
         if let finalCursorOffset = expansion.finalCursorOffset {
-            let prefixUnits = Array(expansion.text.utf16.prefix(finalCursorOffset))
-            let newlineCount = prefixUnits.filter { $0 == 0x0A }.count
-            caretOffset = finalCursorOffset + newlineCount * (indent as NSString).length
+            caretOffset = SnippetSession.mappedOffset(
+                finalCursorOffset,
+                in: expansion.text,
+                extraIndentPerNewline: extraIndentPerNewline
+            )
         } else {
-            caretOffset = (reindented as NSString).length
+            caretOffset = SnippetSession.mappedOffset(
+                (expansion.text as NSString).length,
+                in: expansion.text,
+                extraIndentPerNewline: extraIndentPerNewline
+            )
         }
         notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
-        selection = NSRange(location: min(range.location + caretOffset, string.length), length: 0)
+        isApplyingSnippetSelection = true
+        selection = NSRange(location: min(origin + caretOffset, string.length), length: 0)
         selectionAnchor = selection?.location
-        timedUndoManager.endUndoGrouping()
+        isApplyingSnippetSelection = false
+    }
+
+    private func applySnippetStep(_ step: SnippetSessionStep) {
+        notifyInputDelegateAboutSelectionChangeInLayoutSubviews = true
+        isApplyingSnippetSelection = true
+        switch step {
+        case .select(let ranges):
+            if ranges.count == 1 {
+                selection = ranges[0]
+                selectionAnchor = ranges[0].location
+            } else if !ranges.isEmpty {
+                applySelectedRanges(MultiSelectionController.normalize(ranges), notifyDelegate: true)
+            }
+        case .finished(let caret):
+            snippetSession = nil
+            selection = NSRange(location: min(caret, string.length), length: 0)
+            selectionAnchor = selection?.location
+        }
+        isApplyingSnippetSelection = false
+    }
+
+    private func invalidateSnippetSessionIfSelectionLeftStops(_ ranges: [NSRange]) {
+        guard let session = snippetSession, session.isActive else {
+            return
+        }
+        let stops = session.currentRanges
+        guard !stops.isEmpty else {
+            snippetSession = nil
+            return
+        }
+        let stillInside = ranges.allSatisfy { range in
+            stops.contains { stop in
+                range.location >= stop.location && range.location <= stop.location + stop.length
+            }
+        }
+        if !stillInside {
+            snippetSession = nil
+        }
     }
 
     /// Bracket-depth reindent of the selected lines. A deliberately small non-LSP fallback:

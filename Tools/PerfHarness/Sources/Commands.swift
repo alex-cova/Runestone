@@ -101,6 +101,7 @@ enum Commands {
         let before = Measurement.residentMemoryBytes()
         let sizeBytes: UInt64
         let state: TextViewState
+        let ingestSeconds: Double
         if options.mmap || options.chunked {
             let label = options.mmap ? "mmap" : "chunked"
             let loaded = try Measurement.time("TextViewState.load (\(label))") {
@@ -109,6 +110,7 @@ enum Commands {
             let (loadedState, fileSize) = loaded.value
             state = loadedState
             sizeBytes = fileSize
+            ingestSeconds = loaded.seconds
             ResultLog.row("load", file: path, sizeBytes: sizeBytes, seconds: loaded.seconds, extra: extraLabel(options))
         } else {
             let (text, readSeconds, fileSize) = try readFile(path)
@@ -120,6 +122,7 @@ enum Commands {
             }
             ResultLog.row("state_init", file: path, sizeBytes: sizeBytes, seconds: stateResult.seconds, extra: extraLabel(options))
             state = stateResult.value
+            ingestSeconds = readSeconds + stateResult.seconds
         }
 
         let viewResult = Measurement.time("TextView.setState") {
@@ -132,6 +135,12 @@ enum Commands {
             viewResult.value.layoutSubviews()
         }
         ResultLog.row("first_frame_proxy", file: path, sizeBytes: sizeBytes, seconds: firstLayout.seconds)
+        ResultLog.row(
+            "open_first_layout",
+            file: path,
+            sizeBytes: sizeBytes,
+            seconds: ingestSeconds + viewResult.seconds + firstLayout.seconds
+        )
 
         let after = Measurement.residentMemoryBytes()
         ResultLog.row("rss_delta", file: path, sizeBytes: sizeBytes, seconds: 0, extra: Measurement.formatBytes(after - before))
@@ -187,14 +196,14 @@ enum Commands {
 
     enum Position: String { case start, middle, end }
 
-    static func keystroke(path: String, position: Position, options: Options) throws {
-        FileHandle.standardError.write("=== keystroke \(path) at \(position.rawValue) ===\n".data(using: .utf8)!)
+    static func keystroke(path: String, position: Position, options: Options, samples: Int = 1) throws {
+        FileHandle.standardError.write("=== keystroke \(path) at \(position.rawValue) (\(samples) samples) ===\n".data(using: .utf8)!)
         let (state, sizeBytes) = try loadOrReadState(path: path, options: options)
         let textView = makeTextView(state: state)
         textView.layoutSubviews()
 
         let length = textView.documentLength
-        let location: Int
+        var location: Int
         switch position {
         case .start: location = min(10, length)
         case .middle: location = length / 2
@@ -206,10 +215,31 @@ enum Commands {
             _ = textView.goToLine(textLocation.lineNumber, select: .beginning)
         }
 
-        let editResult = Measurement.time("single-character insert") {
+        let sampleCount = max(samples, 1)
+        let warmupCount = sampleCount == 1 ? 0 : min(5, sampleCount)
+        for _ in 0..<warmupCount {
             textView.replace(NSRange(location: location, length: 0), withText: "x")
+            location += 1
         }
-        ResultLog.row("keystroke_\(position.rawValue)", file: path, sizeBytes: sizeBytes, seconds: editResult.seconds)
+
+        var times: [Double] = []
+        times.reserveCapacity(sampleCount)
+        for _ in 0..<sampleCount {
+            let editResult = Measurement.time {
+                textView.replace(NSRange(location: location, length: 0), withText: "x")
+            }
+            times.append(editResult.seconds)
+            location += 1
+        }
+
+        let p50 = Measurement.percentile(times, 0.50)
+        let p95 = Measurement.percentile(times, 0.95)
+        ResultLog.row("keystroke_\(position.rawValue)", file: path, sizeBytes: sizeBytes, seconds: times.last ?? 0)
+        ResultLog.row("keystroke_\(position.rawValue)_p50", file: path, sizeBytes: sizeBytes, seconds: p50)
+        ResultLog.row("keystroke_\(position.rawValue)_p95", file: path, sizeBytes: sizeBytes, seconds: p95)
+        FileHandle.standardError.write(
+            "  p50: \(String(format: "%.4f", p50))s  p95: \(String(format: "%.4f", p95))s\n".data(using: .utf8)!
+        )
     }
 
     // MARK: - goto

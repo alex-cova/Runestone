@@ -3,6 +3,8 @@ import TreeSitter
 
 final class TreeSitterNode {
     let rawValue: TSNode
+    /// Keeps a copied tree alive for as long as this node (or a capture derived from it) is used.
+    let tree: TreeSitterTree?
     var expressionString: String? {
         if let str = ts_node_string(rawValue) {
             let result = String(cString: str)
@@ -50,19 +52,20 @@ final class TreeSitterNode {
         Int(ts_node_child_count(rawValue))
     }
 
-    init(node: TSNode) {
+    init(node: TSNode, tree: TreeSitterTree? = nil) {
         self.rawValue = node
+        self.tree = tree
     }
 
     func descendantForRange(from startPoint: TreeSitterTextPoint, to endPoint: TreeSitterTextPoint) -> TreeSitterNode {
         let node = ts_node_descendant_for_point_range(rawValue, startPoint.rawValue, endPoint.rawValue)
-        return Self(node: node)
+        return Self(node: node, tree: tree)
     }
 
     func child(at index: Int) -> Self? {
         if index < childCount {
             let node = ts_node_child(rawValue, UInt32(index))
-            return Self(node: node)
+            return Self(node: node, tree: tree)
         } else {
             return nil
         }
@@ -75,7 +78,7 @@ private extension TreeSitterNode {
         if ts_node_is_null(node) {
             return nil
         } else {
-            return TreeSitterNode(node: node)
+            return TreeSitterNode(node: node, tree: tree)
         }
     }
 }

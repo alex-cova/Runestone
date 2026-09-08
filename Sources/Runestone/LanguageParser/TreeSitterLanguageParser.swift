@@ -9,9 +9,14 @@ import EditorIntelligence
 public actor TreeSitterLanguageParser: LanguageParser {
     private let languageMode: TreeSitterLanguageMode
     private let parser: TreeSitterParser
+    private let languageConfigurations: LanguageConfigurationRegistry
 
-    public init(languageMode: TreeSitterLanguageMode) {
+    public init(
+        languageMode: TreeSitterLanguageMode,
+        languageConfigurations: LanguageConfigurationRegistry = .builtIns
+    ) {
         self.languageMode = languageMode
+        self.languageConfigurations = languageConfigurations
         self.parser = TreeSitterParser(encoding: .treeSitterUTF16)
         self.parser.language = languageMode.language.languagePointer
     }
@@ -19,6 +24,12 @@ public actor TreeSitterLanguageParser: LanguageParser {
     public func parse(document: Document) async -> SyntaxTree {
         let text = document.contentSnapshot.text ?? ""
         let tree = parser.parse(text as NSString)
-        return TreeSitterSyntaxTree(tree: tree, documentID: document.id, text: text)
+        let configuration = languageConfigurations.configuration(for: document.languageIdentifier)
+        return TreeSitterSyntaxTree(
+            tree: tree,
+            documentID: document.id,
+            text: text,
+            languageConfiguration: configuration
+        )
     }
 }

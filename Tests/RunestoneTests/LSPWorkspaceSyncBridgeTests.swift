@@ -109,7 +109,49 @@ final class LSPWorkspaceSyncBridgeTests: XCTestCase {
         XCTAssertEqual(changes.first?.text, "2")
         XCTAssertEqual(changes.first?.range.start.character, 8)
         XCTAssertEqual(changes.first?.range.end.character, 9)
+        XCTAssertEqual(changes.first?.rangeLength, 1)
         XCTAssertEqual(changes.first?.version, 2)
+    }
+
+    func testElidedDocumentStillOpens() async {
+        let opened = LockedBox<Document>()
+        let barrier = HandlerBarrier(expected: 1)
+        let handlers = LSPDocumentSyncHandlers(
+            onOpen: { document, _, _ in
+                opened.value = document
+                await barrier.signal()
+            }
+        )
+        let bridge = LSPWorkspaceSyncBridge(handlers: handlers, languageResolver: { _ in "swift" })
+        let workspace = Workspace()
+        await bridge.connect(to: workspace)
+
+        let text = "elided body"
+        let utf16Length = (text as NSString).length
+        let reader = TextRangeReader(utf16Length: utf16Length) { offset, length in
+            (text as NSString).substring(with: NSRange(location: offset, length: min(length, utf16Length - offset)))
+        }
+        let position = TextPosition(line: 0, column: 0, utf16Offset: 0)
+        let range = TextRange(start: position, end: position)
+        let document = Document(
+            id: DocumentID(),
+            url: nil,
+            displayName: "big.swift",
+            contentSnapshot: TextSnapshot(version: 0, utf16Length: utf16Length, text: nil, rangeReader: reader),
+            selection: Selection(range: range),
+            cursor: Cursor(position: position),
+            viewport: Viewport(x: 0, y: 0, width: 100, height: 100),
+            languageIdentifier: "swift"
+        )
+        XCTAssertTrue(document.contentSnapshot.isElided)
+
+        async let handlersComplete = barrier.wait()
+        await workspace.openDocument(document)
+        await handlersComplete
+
+        XCTAssertEqual(opened.value?.displayName, "big.swift")
+        XCTAssertTrue(opened.value?.contentSnapshot.isElided ?? false)
+        XCTAssertEqual(opened.value?.substring(utf16Offset: 0, length: 6), "elided")
     }
 }
 

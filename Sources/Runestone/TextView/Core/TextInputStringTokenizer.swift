@@ -11,9 +11,6 @@ final class TextInputStringTokenizer: UITextInputStringTokenizer {
     var didCallPositionFromPositionToWordBoundary = false
 
     private let lineControllerStorage: LineControllerStorage
-    private var newlineCharacters: [Character] {
-        [Symbol.Character.lineFeed, Symbol.Character.carriageReturn, Symbol.Character.carriageReturnLineFeed]
-    }
 
     init(textInput: UIResponder & UITextInput, stringView: StringView, lineManager: LineManager, lineControllerStorage: LineControllerStorage) {
         self.lineManager = lineManager
@@ -134,39 +131,18 @@ private extension TextInputStringTokenizer {
         if direction.isForward {
             if location == stringView.length {
                 return position
-            } else {
-                var currentIndex = location
-                while currentIndex < stringView.length {
-                    currentIndex = adjustedLocation(forNavigation: currentIndex, direction: direction)
-                    guard let currentCharacter = stringView.character(at: currentIndex) else {
-                        break
-                    }
-                    if newlineCharacters.contains(currentCharacter) {
-                        break
-                    }
-                    currentIndex += 1
-                }
-                return IndexedPosition(index: currentIndex)
             }
-        } else {
-            if location == 0 {
-                return position
-            } else {
-                var currentIndex = location - 1
-                while currentIndex > 0 {
-                    currentIndex = adjustedLocation(forNavigation: currentIndex, direction: direction)
-                    guard let currentCharacter = stringView.character(at: currentIndex) else {
-                        break
-                    }
-                    if newlineCharacters.contains(currentCharacter) {
-                        currentIndex += 1
-                        break
-                    }
-                    currentIndex -= 1
-                }
-                return IndexedPosition(index: currentIndex)
+            let searchFrom = adjustedLocation(forNavigation: location, direction: direction)
+            if let newline = stringView.rangeOfNextNewLine(startingAt: searchFrom) {
+                return IndexedPosition(index: newline.location)
             }
+            return IndexedPosition(index: stringView.length)
         }
+        if location == 0 {
+            return position
+        }
+        let searchFrom = adjustedLocation(forNavigation: location, direction: direction)
+        return IndexedPosition(index: stringView.paragraphStart(before: searchFrom))
     }
 }
 
@@ -209,7 +185,6 @@ private extension TextInputStringTokenizer {
         }
     }
 
-    // swiftlint:disable:next cyclomatic_complexity
     private func position(from position: UITextPosition, toWordBoundaryInDirection direction: UITextDirection) -> UITextPosition? {
         guard let indexedPosition = position as? IndexedPosition else {
             return nil
@@ -220,45 +195,50 @@ private extension TextInputStringTokenizer {
         if direction.isForward {
             if location == stringView.length {
                 return position
-            } else if let referenceCharacter = stringView.character(at: location) {
-                let isReferenceCharacterAlphanumeric = alphanumerics.contains(referenceCharacter)
-                var currentIndex = location + 1
-                while currentIndex < stringView.length {
-                    guard let currentCharacter = stringView.character(at: currentIndex) else {
-                        break
-                    }
-                    let isCurrentCharacterAlphanumeric = alphanumerics.contains(currentCharacter)
-                    if isReferenceCharacterAlphanumeric != isCurrentCharacterAlphanumeric {
-                        break
-                    }
-                    currentIndex += 1
-                }
-                return IndexedPosition(index: currentIndex)
-            } else {
+            }
+            guard let referenceCharacter = stringView.character(at: location) else {
                 return nil
             }
-        } else {
-            if location == 0 {
-                return position
-            } else if let referenceCharacter = stringView.character(at: location - 1) {
-                let isReferenceCharacterAlphanumeric = alphanumerics.contains(referenceCharacter)
-                var currentIndex = location - 1
-                while currentIndex > 0 {
-                    guard let currentCharacter = stringView.character(at: currentIndex) else {
-                        break
-                    }
-                    let isCurrentCharacterAlphanumeric = alphanumerics.contains(currentCharacter)
-                    if isReferenceCharacterAlphanumeric != isCurrentCharacterAlphanumeric {
-                        currentIndex += 1
-                        break
-                    }
-                    currentIndex -= 1
-                }
-                return IndexedPosition(index: currentIndex)
-            } else {
-                return nil
+            let searchSet: CharacterSet = alphanumerics.contains(referenceCharacter)
+                ? alphanumerics.inverted
+                : alphanumerics
+            let start = location + 1
+            let length = stringView.length - start
+            guard length > 0 else {
+                return IndexedPosition(index: stringView.length)
             }
+            let found = stringView.rangeOfCharacter(
+                from: searchSet,
+                options: [],
+                range: NSRange(location: start, length: length)
+            )
+            if found.location == NSNotFound {
+                return IndexedPosition(index: stringView.length)
+            }
+            return IndexedPosition(index: found.location)
         }
+        if location == 0 {
+            return position
+        }
+        guard let referenceCharacter = stringView.character(at: location - 1) else {
+            return nil
+        }
+        let searchSet: CharacterSet = alphanumerics.contains(referenceCharacter)
+            ? alphanumerics.inverted
+            : alphanumerics
+        let searchLength = location - 1
+        guard searchLength > 0 else {
+            return IndexedPosition(index: 0)
+        }
+        let found = stringView.rangeOfCharacter(
+            from: searchSet,
+            options: .backwards,
+            range: NSRange(location: 0, length: searchLength)
+        )
+        if found.location == NSNotFound {
+            return IndexedPosition(index: 0)
+        }
+        return IndexedPosition(index: found.location + found.length)
     }
 }
 

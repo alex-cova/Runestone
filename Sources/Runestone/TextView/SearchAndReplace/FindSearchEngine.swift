@@ -7,13 +7,23 @@ public struct FindSearchOutcome: Sendable, Equatable {
     public let currentRange: NSRange?
     public let highlightRanges: [NSRange]
     public let errorMessage: String?
+    /// `false` while a long scan is still running and this snapshot is a progress update.
+    public let isComplete: Bool
 
-    public init(matchCount: Int, currentIndex: Int?, currentRange: NSRange?, highlightRanges: [NSRange], errorMessage: String?) {
+    public init(
+        matchCount: Int,
+        currentIndex: Int?,
+        currentRange: NSRange?,
+        highlightRanges: [NSRange],
+        errorMessage: String?,
+        isComplete: Bool = true
+    ) {
         self.matchCount = matchCount
         self.currentIndex = currentIndex
         self.currentRange = currentRange
         self.highlightRanges = highlightRanges
         self.errorMessage = errorMessage
+        self.isComplete = isComplete
     }
 
     public static let empty = FindSearchOutcome(
@@ -21,7 +31,8 @@ public struct FindSearchOutcome: Sendable, Equatable {
         currentIndex: nil,
         currentRange: nil,
         highlightRanges: [],
-        errorMessage: nil
+        errorMessage: nil,
+        isComplete: true
     )
 }
 
@@ -128,16 +139,24 @@ public enum FindSearchEngine {
         options: FindSearchOptions,
         in text: String,
         anchorLocation: Int,
-        maxHighlights: Int = maxHighlightedMatches
+        maxHighlights: Int = maxHighlightedMatches,
+        onProgress: (@Sendable (FindSearchOutcome) -> Void)? = nil
     ) -> FindSearchOutcome {
-        search(options: options, in: StringFindTextSource(text), anchorLocation: anchorLocation, maxHighlights: maxHighlights)
+        search(
+            options: options,
+            in: StringFindTextSource(text),
+            anchorLocation: anchorLocation,
+            maxHighlights: maxHighlights,
+            onProgress: onProgress
+        )
     }
 
     public static func search(
         options: FindSearchOptions,
         in source: any FindTextSource,
         anchorLocation: Int,
-        maxHighlights: Int = maxHighlightedMatches
+        maxHighlights: Int = maxHighlightedMatches,
+        onProgress: (@Sendable (FindSearchOutcome) -> Void)? = nil
     ) -> FindSearchOutcome {
         guard !options.query.isEmpty else { return .empty }
         do {
@@ -146,14 +165,16 @@ public enum FindSearchEngine {
                     options: options,
                     in: source,
                     anchorLocation: anchorLocation,
-                    maxHighlights: maxHighlights
+                    maxHighlights: maxHighlights,
+                    onProgress: onProgress
                 )
             }
             return literalSearch(
                 options: options,
                 in: source,
                 anchorLocation: anchorLocation,
-                maxHighlights: maxHighlights
+                maxHighlights: maxHighlights,
+                onProgress: onProgress
             )
         } catch {
             return FindSearchOutcome(
@@ -291,56 +312,36 @@ public enum FindSearchEngine {
         options: FindSearchOptions,
         in source: any FindTextSource,
         anchorLocation: Int,
-        maxHighlights: Int
+        maxHighlights: Int,
+        onProgress: (@Sendable (FindSearchOutcome) -> Void)?
     ) -> FindSearchOutcome {
-        var matchCount = 0
-        var currentIndex: Int?
-        var currentRange: NSRange?
+        let progress = SearchProgress(
+            maxHighlights: maxHighlights,
+            anchorLocation: anchorLocation,
+            onProgress: onProgress
+        )
         let result = enumerateLiteralMatches(options: options, in: source) { found in
-            let index = matchCount
-            matchCount += 1
-            if currentIndex == nil, found.location >= anchorLocation {
-                currentIndex = index
-                currentRange = found
-            }
+            progress.add(found)
             return true
         }
 
         if result == .cancelled {
             return .empty
         }
-        if matchCount == 0 {
+        if progress.matchCount == 0 {
             return .empty
         }
-        if currentIndex == nil {
-            currentIndex = 0
-            currentRange = firstLiteralMatch(options: options, in: source)
-        }
+        progress.wrapCurrentIfNeeded()
 
         let highlights = collectLiteralHighlights(
             options: options,
             in: source,
-            around: currentIndex ?? 0,
-            matchCount: matchCount,
+            around: progress.currentIndex ?? 0,
+            matchCount: progress.matchCount,
             maxHighlights: maxHighlights
         )
 
-        return FindSearchOutcome(
-            matchCount: matchCount,
-            currentIndex: currentIndex,
-            currentRange: currentRange,
-            highlightRanges: highlights,
-            errorMessage: nil
-        )
-    }
-
-    private static func firstLiteralMatch(options: FindSearchOptions, in source: any FindTextSource) -> NSRange? {
-        var found: NSRange?
-        _ = enumerateLiteralMatches(options: options, in: source) { range in
-            found = range
-            return false
-        }
-        return found
+        return progress.completeOutcome(highlights: highlights)
     }
 
     private static func collectLiteralHighlights(
@@ -637,21 +638,24 @@ public enum FindSearchEngine {
         options: FindSearchOptions,
         in source: any FindTextSource,
         anchorLocation: Int,
-        maxHighlights: Int
+        maxHighlights: Int,
+        onProgress: (@Sendable (FindSearchOutcome) -> Void)?
     ) throws -> FindSearchOutcome {
         if let ns = source.contiguousNSString {
             return try contiguousRegexSearch(
                 options: options,
                 in: ns as String,
                 anchorLocation: anchorLocation,
-                maxHighlights: maxHighlights
+                maxHighlights: maxHighlights,
+                onProgress: onProgress
             )
         }
         return try windowedRegexSearch(
             options: options,
             in: source,
             anchorLocation: anchorLocation,
-            maxHighlights: maxHighlights
+            maxHighlights: maxHighlights,
+            onProgress: onProgress
         )
     }
 
@@ -659,15 +663,18 @@ public enum FindSearchEngine {
         options: FindSearchOptions,
         in text: String,
         anchorLocation: Int,
-        maxHighlights: Int
+        maxHighlights: Int,
+        onProgress: (@Sendable (FindSearchOutcome) -> Void)?
     ) throws -> FindSearchOutcome {
         let regex = try FindRegexCache.regex(pattern: regexPattern(for: options), options: regexOptions(for: options))
         let ns = text as NSString
         let full = NSRange(location: 0, length: ns.length)
 
-        var matchCount = 0
-        var currentIndex: Int?
-        var currentRange: NSRange?
+        let progress = SearchProgress(
+            maxHighlights: maxHighlights,
+            anchorLocation: anchorLocation,
+            onProgress: onProgress
+        )
         var wasCancelled = false
 
         regex.enumerateMatches(in: text, options: [], range: full) { result, _, stop in
@@ -677,40 +684,29 @@ public enum FindSearchEngine {
                 return
             }
             guard let range = result?.range, range.location != NSNotFound else { return }
-            let index = matchCount
-            matchCount += 1
-            if currentIndex == nil, range.location >= anchorLocation {
-                currentIndex = index
-                currentRange = range
-            }
+            progress.add(range)
         }
 
         if wasCancelled {
             return .empty
         }
-        if matchCount == 0 {
+        if progress.matchCount == 0 {
             return .empty
         }
-        if currentIndex == nil {
-            currentIndex = 0
-            currentRange = regex.firstMatch(in: text, options: [], range: full)?.range
+        if progress.currentIndex == nil {
+            progress.currentIndex = 0
+            progress.currentRange = regex.firstMatch(in: text, options: [], range: full)?.range
         }
 
         let highlights = try collectContiguousRegexHighlights(
             regex: regex,
             in: text,
-            around: currentIndex ?? 0,
-            matchCount: matchCount,
+            around: progress.currentIndex ?? 0,
+            matchCount: progress.matchCount,
             maxHighlights: maxHighlights
         )
 
-        return FindSearchOutcome(
-            matchCount: matchCount,
-            currentIndex: currentIndex,
-            currentRange: currentRange,
-            highlightRanges: highlights,
-            errorMessage: nil
-        )
+        return progress.completeOutcome(highlights: highlights)
     }
 
     private static func collectContiguousRegexHighlights(
@@ -831,49 +827,34 @@ public enum FindSearchEngine {
         options: FindSearchOptions,
         in source: any FindTextSource,
         anchorLocation: Int,
-        maxHighlights: Int
+        maxHighlights: Int,
+        onProgress: (@Sendable (FindSearchOutcome) -> Void)?
     ) throws -> FindSearchOutcome {
         let regex = try FindRegexCache.regex(pattern: regexPattern(for: options), options: regexOptions(for: options))
-        var matchCount = 0
-        var currentIndex: Int?
-        var currentRange: NSRange?
-        var firstRange: NSRange?
+        let progress = SearchProgress(
+            maxHighlights: maxHighlights,
+            anchorLocation: anchorLocation,
+            onProgress: onProgress
+        )
         let result = enumerateWindowedRegexMatches(regex: regex, in: source) { found, _, _ in
-            if firstRange == nil {
-                firstRange = found
-            }
-            let index = matchCount
-            matchCount += 1
-            if currentIndex == nil, found.location >= anchorLocation {
-                currentIndex = index
-                currentRange = found
-            }
+            progress.add(found)
             return true
         }
         if result == .cancelled {
             return .empty
         }
-        if matchCount == 0 {
+        if progress.matchCount == 0 {
             return .empty
         }
-        if currentIndex == nil {
-            currentIndex = 0
-            currentRange = firstRange
-        }
+        progress.wrapCurrentIfNeeded()
         let highlights = collectWindowedRegexHighlights(
             regex: regex,
             in: source,
-            around: currentIndex ?? 0,
-            matchCount: matchCount,
+            around: progress.currentIndex ?? 0,
+            matchCount: progress.matchCount,
             maxHighlights: maxHighlights
         )
-        return FindSearchOutcome(
-            matchCount: matchCount,
-            currentIndex: currentIndex,
-            currentRange: currentRange,
-            highlightRanges: highlights,
-            errorMessage: nil
-        )
+        return progress.completeOutcome(highlights: highlights)
     }
 
     private static func collectWindowedRegexHighlights(
@@ -1241,6 +1222,94 @@ public enum FindSearchEngine {
             regexOptions.insert(.caseInsensitive)
         }
         return regexOptions
+    }
+}
+
+/// Accumulates matches during a scan and emits incomplete ``FindSearchOutcome`` snapshots so the
+/// find panel can fill in as the search runs. Progress fires on the first match and then at most
+/// every ``progressInterval``.
+private final class SearchProgress {
+    static let progressInterval: CFAbsoluteTime = 0.05
+
+    let maxHighlights: Int
+    let anchorLocation: Int
+    let onProgress: (@Sendable (FindSearchOutcome) -> Void)?
+    var matchCount = 0
+    var currentIndex: Int?
+    var currentRange: NSRange?
+    var firstRange: NSRange?
+    private var progressHighlights: [NSRange] = []
+    private var lastProgressTime = CFAbsoluteTimeGetCurrent()
+
+    init(
+        maxHighlights: Int,
+        anchorLocation: Int,
+        onProgress: (@Sendable (FindSearchOutcome) -> Void)?
+    ) {
+        self.maxHighlights = maxHighlights
+        self.anchorLocation = anchorLocation
+        self.onProgress = onProgress
+    }
+
+    func add(_ found: NSRange) {
+        if firstRange == nil {
+            firstRange = found
+        }
+        let index = matchCount
+        matchCount += 1
+        if currentIndex == nil, found.location >= anchorLocation {
+            currentIndex = index
+            currentRange = found
+        }
+        if progressHighlights.count < maxHighlights {
+            progressHighlights.append(found)
+        }
+        emitProgressIfNeeded(force: matchCount == 1)
+    }
+
+    func wrapCurrentIfNeeded() {
+        if currentIndex == nil {
+            currentIndex = 0
+            currentRange = firstRange
+        }
+    }
+
+    func completeOutcome(highlights: [NSRange]) -> FindSearchOutcome {
+        FindSearchOutcome(
+            matchCount: matchCount,
+            currentIndex: currentIndex,
+            currentRange: currentRange,
+            highlightRanges: highlights,
+            errorMessage: nil,
+            isComplete: true
+        )
+    }
+
+    private func emitProgressIfNeeded(force: Bool) {
+        guard let onProgress, matchCount > 0 else {
+            return
+        }
+        let now = CFAbsoluteTimeGetCurrent()
+        if !force, now - lastProgressTime < Self.progressInterval {
+            return
+        }
+        lastProgressTime = now
+        var highlights = progressHighlights
+        if let currentRange, !highlights.contains(where: { $0 == currentRange }) {
+            if highlights.count >= maxHighlights, !highlights.isEmpty {
+                highlights[highlights.count - 1] = currentRange
+            } else {
+                highlights.append(currentRange)
+            }
+        }
+        onProgress(FindSearchOutcome(
+            matchCount: matchCount,
+            currentIndex: currentIndex ?? 0,
+            currentRange: currentRange ?? firstRange,
+            highlightRanges: highlights,
+            errorMessage: nil,
+            isComplete: false
+        ))
     }
 }
 

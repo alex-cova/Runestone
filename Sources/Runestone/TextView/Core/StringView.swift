@@ -12,25 +12,37 @@ final class StringViewBytesResult {
 }
 
 /// Document text facade. Small / untitled buffers stay a contiguous `NSMutableString`.
-/// ``TextViewState/load`` uses a file-backed ``PieceTree`` (mmap original + append-only add buffer).
+/// Large untitled buffers and ``TextViewState/load`` use a ``PieceTree`` (mmap original +
+/// append-only add buffer for files; add-buffer-only for untitled).
 final class StringView {
+    static let pieceTreeUntitledThreshold = 256 * 1024
+
     private enum Storage {
         case contiguous(NSMutableString)
         case pieceTree(PieceTree)
     }
 
     private var storage: Storage
+    private let lock = NSRecursiveLock()
+
+    private func withLock<T>(_ body: () throws -> T) rethrows -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return try body()
+    }
 
     /// Bumped on storage mutation so a save can detect concurrent edits.
     private(set) var contentGeneration: UInt64 = 0
 
     /// UTF-16 length. Prefer this over ``string``.length so file-backed documents do not materialize.
     var length: Int {
-        switch storage {
-        case .contiguous(let string):
-            return string.length
-        case .pieceTree(let tree):
-            return tree.utf16Length
+        withLock {
+            switch storage {
+            case .contiguous(let string):
+                return string.length
+            case .pieceTree(let tree):
+                return tree.utf16Length
+            }
         }
     }
 
@@ -38,31 +50,47 @@ final class StringView {
         ByteCount(utf16Length: length)
     }
 
+    /// True only when the piece tree still holds a file mapping. Untitled piece trees are not file-backed.
     var isFileBacked: Bool {
-        if case .pieceTree = storage {
-            return true
+        withLock {
+            if case .pieceTree(let tree) = storage {
+                return tree.isFileMapped
+            }
+            return false
         }
-        return false
+    }
+
+    var usesPieceTree: Bool {
+        withLock {
+            if case .pieceTree = storage {
+                return true
+            }
+            return false
+        }
     }
 
     /// Full-document `NSString`. Bridging a file-backed buffer allocates UTF-16 of the entire file.
     var string: NSString {
         get {
-            switch storage {
-            case .contiguous(let string):
-                return string
-            case .pieceTree(let tree):
-                return tree.materializeNSString()
+            withLock {
+                switch storage {
+                case .contiguous(let string):
+                    return string
+                case .pieceTree(let tree):
+                    return tree.materializeNSString()
+                }
             }
         }
         set {
-            storage = .contiguous(NSMutableString(string: newValue))
-            contentGeneration &+= 1
+            withLock {
+                storage = Self.makeStorage(for: newValue)
+                contentGeneration &+= 1
+            }
         }
     }
 
     init(string: NSMutableString = NSMutableString()) {
-        self.storage = .contiguous(string)
+        self.storage = Self.makeStorage(for: string)
     }
 
     convenience init(string: String) {
@@ -73,68 +101,110 @@ final class StringView {
         self.storage = .pieceTree(pieceTree)
     }
 
+    private static func makeStorage(for string: NSString) -> Storage {
+        if string.length >= pieceTreeUntitledThreshold {
+            return .pieceTree(PieceTree(string: string as String))
+        }
+        if let mutable = string as? NSMutableString {
+            return .contiguous(mutable)
+        }
+        return .contiguous(NSMutableString(string: string))
+    }
+
     func substring(in range: NSRange) -> String? {
-        switch storage {
-        case .contiguous(let string):
-            guard range.location >= 0, range.upperBound <= string.length else {
-                return nil
+        withLock {
+            switch storage {
+            case .contiguous(let string):
+                guard range.location >= 0, range.upperBound <= string.length else {
+                    return nil
+                }
+                if range.length == 0 {
+                    return ""
+                }
+                return string.substring(with: range)
+            case .pieceTree(let tree):
+                return tree.substring(in: range)
             }
-            if range.length == 0 {
-                return ""
-            }
-            return string.substring(with: range)
-        case .pieceTree(let tree):
-            return tree.substring(in: range)
         }
     }
 
     func character(at location: Int) -> Character? {
-        switch storage {
-        case .contiguous(let string):
-            if location >= 0 && location < string.length, let scalar = Unicode.Scalar(string.character(at: location)) {
-                return Character(scalar)
+        withLock {
+            switch storage {
+            case .contiguous(let string):
+                if location >= 0 && location < string.length, let scalar = Unicode.Scalar(string.character(at: location)) {
+                    return Character(scalar)
+                }
+                return nil
+            case .pieceTree(let tree):
+                return tree.character(at: location)
             }
-            return nil
-        case .pieceTree(let tree):
-            return tree.character(at: location)
         }
     }
 
     func replaceText(in range: NSRange, with string: String) {
         RunestoneSignposts.interval("StringView.replaceText") {
-            switch storage {
-            case .contiguous(let mutable):
-                mutable.replaceCharacters(in: range, with: string)
-            case .pieceTree(let tree):
-                tree.replaceText(in: range, with: string)
+            withLock {
+                switch storage {
+                case .contiguous(let mutable):
+                    mutable.replaceCharacters(in: range, with: string)
+                case .pieceTree(let tree):
+                    tree.replaceText(in: range, with: string)
+                }
+                contentGeneration &+= 1
             }
-            contentGeneration &+= 1
         }
     }
 
     func bytes(in range: ByteRange) -> StringViewBytesResult? {
-        switch storage {
-        case .contiguous:
-            guard range.lowerBound.value >= 0 && range.upperBound <= byteCount else {
+        withLock {
+            switch storage {
+            case .contiguous:
+                guard range.lowerBound.value >= 0 && range.upperBound <= byteCount else {
+                    return nil
+                }
+                let stringRange = NSRange(range)
+                var usedLength = 0
+                if let buffer = string.getBytes(in: stringRange, encoding: String.preferredUTF16Encoding, usedLength: &usedLength) {
+                    return StringViewBytesResult(bytes: buffer, length: ByteCount(usedLength))
+                }
                 return nil
+            case .pieceTree(let tree):
+                return tree.bytes(in: range)
             }
-            let stringRange = NSRange(range)
-            var usedLength = 0
-            if let buffer = string.getBytes(in: stringRange, encoding: String.preferredUTF16Encoding, usedLength: &usedLength) {
-                return StringViewBytesResult(bytes: buffer, length: ByteCount(usedLength))
-            }
-            return nil
-        case .pieceTree(let tree):
-            return tree.bytes(in: range)
         }
     }
 
     func rangeOfNextNewLine(startingAt location: Int) -> NSRange? {
-        switch storage {
-        case .contiguous(let string):
-            return NewLineFinder.rangeOfNextNewLine(in: string, startingAt: location)
-        case .pieceTree(let tree):
-            return tree.rangeOfNextNewLine(startingAt: location)
+        withLock {
+            switch storage {
+            case .contiguous(let string):
+                return NewLineFinder.rangeOfNextNewLine(in: string, startingAt: location)
+            case .pieceTree(let tree):
+                return tree.rangeOfNextNewLine(startingAt: location)
+            }
+        }
+    }
+
+    func paragraphStart(before location: Int) -> Int {
+        withLock {
+            switch storage {
+            case .contiguous(let string):
+                return NewLineFinder.startOfParagraph(before: location, in: string)
+            case .pieceTree(let tree):
+                return tree.paragraphStart(before: location)
+            }
+        }
+    }
+
+    func rangeOfCharacter(from set: CharacterSet, options: NSString.CompareOptions = [], range: NSRange) -> NSRange {
+        withLock {
+            switch storage {
+            case .contiguous(let string):
+                return string.rangeOfCharacter(from: set, options: options, range: range)
+            case .pieceTree(let tree):
+                return tree.rangeOfCharacter(from: set, options: options, range: range)
+            }
         }
     }
 
@@ -224,14 +294,16 @@ final class StringView {
     }
 
     func unichar(at location: Int) -> unichar? {
-        switch storage {
-        case .contiguous(let string):
-            guard location >= 0, location < string.length else {
-                return nil
+        withLock {
+            switch storage {
+            case .contiguous(let string):
+                guard location >= 0, location < string.length else {
+                    return nil
+                }
+                return string.character(at: location)
+            case .pieceTree(let tree):
+                return tree.unichar(at: location)
             }
-            return string.character(at: location)
-        case .pieceTree(let tree):
-            return tree.unichar(at: location)
         }
     }
 }

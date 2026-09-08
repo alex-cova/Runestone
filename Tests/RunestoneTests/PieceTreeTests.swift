@@ -124,6 +124,27 @@ final class PieceTreeTests: XCTestCase {
         XCTAssertEqual(view.rangeOfComposedCharacterSequence(at: expected - 1).length, expected)
     }
 
+    func testUntitledPieceTreeIsNotFileBacked() {
+        let text = String(repeating: "ab\n", count: 100)
+        let tree = PieceTree(string: text)
+        XCTAssertFalse(tree.isFileMapped)
+        XCTAssertEqual(tree.utf16Length, (text as NSString).length)
+        tree.replaceText(in: NSRange(location: 0, length: 0), with: "X")
+        XCTAssertEqual(tree.substring(in: NSRange(location: 0, length: 3)), "Xab")
+        let newline = tree.rangeOfNextNewLine(startingAt: 0)
+        XCTAssertEqual(newline, NSRange(location: 3, length: 1))
+        XCTAssertEqual(tree.paragraphStart(before: 4), 4)
+        let found = tree.rangeOfCharacter(from: .newlines, options: [], range: NSRange(location: 0, length: tree.utf16Length))
+        XCTAssertEqual(found, NSRange(location: 3, length: 1))
+    }
+
+    func testTextViewStateUsesUntitledPieceTreeAboveThreshold() {
+        let text = String(repeating: "a", count: StringView.pieceTreeUntitledThreshold)
+        let state = TextViewState(text: text)
+        XCTAssertTrue(state.stringView.usesPieceTree)
+        XCTAssertFalse(state.stringView.isFileBacked)
+    }
+
     func testCompactCollapsesToSingleOriginalPiece() throws {
         let url = try writeTemp("abcdefghij")
         let view = try awaitLoad(url)

@@ -31,22 +31,14 @@ public final class TreeSitterHighlightProvider: HighlightProviding {
             completion(.success([]))
             return
         }
-        var results: [SyntaxHighlightRange] = []
-        var location = range.location
-        let end = range.location + range.length
-        while location < end {
-            guard let node = textView.syntaxNode(at: location) else {
-                location += 1
-                continue
+        let captures = textView.syntaxHighlightCaptures(in: range)
+        let results = captures.compactMap { capture -> SyntaxHighlightRange? in
+            let captureRange = NSRange(capture.byteRange)
+            let capped = captureRange.intersection(range) ?? captureRange
+            guard capped.length > 0 else {
+                return nil
             }
-            let start = textView.location(at: node.startLocation) ?? location
-            let nodeEnd = textView.location(at: node.endLocation) ?? (location + 1)
-            let nodeRange = NSRange(location: start, length: max(0, nodeEnd - start))
-            let capped = nodeRange.intersection(range) ?? nodeRange
-            if capped.length > 0 {
-                results.append(SyntaxHighlightRange(range: capped, highlightName: node.type))
-            }
-            location = max(location + 1, nodeEnd)
+            return SyntaxHighlightRange(range: capped, highlightName: capture.name)
         }
         completion(.success(results))
     }

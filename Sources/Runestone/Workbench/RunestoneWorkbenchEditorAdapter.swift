@@ -151,13 +151,13 @@ public final class RunestoneWorkbenchEditorAdapter: EditorAdapter, @unchecked Se
     }
 
     private func refreshLiveDocumentContent(from textView: TextView, for document: WorkbenchDocument) {
-        if textView.isFileBacked {
-            document.text = ""
-            document.isFileBacked = true
-            if let snapshot = textView.pieceTreeContentSnapshot() {
-                document.rangeReader = TextRangeReader(utf16Length: snapshot.utf16Length) { offset, length in
-                    snapshot.substring(utf16Offset: offset, length: length)
-                }
+        if let snapshot = textView.pieceTreeContentSnapshot() {
+            document.rangeReader = TextRangeReader(utf16Length: snapshot.utf16Length) { offset, length in
+                snapshot.substring(utf16Offset: offset, length: length)
+            }
+            if textView.isFileBacked {
+                document.text = ""
+                document.isFileBacked = true
             }
         } else {
             document.text = textView.text

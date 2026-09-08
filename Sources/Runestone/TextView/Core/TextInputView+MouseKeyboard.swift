@@ -214,6 +214,13 @@ extension TextInputView {
         }
 
         switch event.keyCode {
+        case 0x30 where isEditable && hasActiveSnippetSession:
+            if flags.contains(.shift) {
+                _ = retreatSnippetSession()
+            } else {
+                _ = advanceSnippetSession()
+            }
+            return
         case 0x7B:
             moveSelectionForArrowKey(direction: .left, flags: flags)
             return
@@ -254,6 +261,10 @@ extension TextInputView {
             }
             if isMultiCursorActive {
                 collapseMultiSelectionToPrimary()
+                return
+            }
+            if hasActiveSnippetSession {
+                cancelSnippetSession()
                 return
             }
         default:
@@ -329,7 +340,21 @@ extension TextInputView {
         case #selector(insertNewline(_:)) where isEditable, #selector(insertNewlineIgnoringFieldEditor(_:)) where isEditable:
             insertText("\n")
         case #selector(insertTab(_:)) where isEditable:
+            if advanceSnippetSession() {
+                break
+            }
             insertText("\t")
+        case #selector(insertBacktab(_:)) where isEditable:
+            if retreatSnippetSession() {
+                break
+            }
+            super.doCommand(by: selector)
+        case #selector(cancelOperation(_:)):
+            if hasActiveSnippetSession {
+                cancelSnippetSession()
+                break
+            }
+            super.doCommand(by: selector)
         default:
             super.doCommand(by: selector)
         }

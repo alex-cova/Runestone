@@ -1,6 +1,7 @@
 import Foundation
 @testable import Runestone
 import XCTest
+import TestTreeSitterLanguages
 
 final class FoldingControllerTests: XCTestCase {
     func testIndentationProviderComputesNestedFold() {
@@ -210,6 +211,107 @@ final class FoldingControllerTests: XCTestCase {
         XCTAssertNotNil(newLocation)
         XCTAssertEqual(lineManager.linePosition(at: newLocation!)?.row, closingBraceLine.index)
     }
+
+    func testIncrementalRecomputeScansAWindowNotTheWholeDocument() {
+        var text = ""
+        for index in 0..<60 {
+            text += "func f\(index)() {\n    let x = \(index)\n}\n"
+        }
+        let (foldingController, lineManager, stringView) = makeFoldingController(text: text)
+        foldingController.isEnabled = true
+        foldingController.recomputeIfNeeded()
+        XCTAssertEqual(foldingController.lastScannedLineCount, lineManager.lineCount)
+        XCTAssertGreaterThan(foldingController.folds.count, 40)
+
+        let helper = TextEditHelper(stringView: stringView, lineManager: lineManager, lineEndings: .lf)
+        let firstBody = lineManager.line(atRow: 1)
+        let result = helper.replaceText(in: NSRange(location: firstBody.location, length: firstBody.data.length), with: "    let x = 99")
+        let rows = try! XCTUnwrap(result.lineChangeSet.affectedRowRange(lineCount: lineManager.lineCount))
+        foldingController.setNeedsRecompute(rows: rows)
+        foldingController.recomputeIfNeeded()
+        XCTAssertLessThan(foldingController.lastScannedLineCount, 20, "a one-line edit must not rescan the whole document")
+        XCTAssertGreaterThan(foldingController.folds.count, 40)
+    }
+
+    func testIncrementalRecomputePreservesADistantCollapsedFold() {
+        var text = ""
+        for index in 0..<40 {
+            text += "func f\(index)() {\n    let x = \(index)\n}\n"
+        }
+        let (foldingController, lineManager, stringView) = makeFoldingController(text: text)
+        foldingController.isEnabled = true
+        foldingController.recomputeIfNeeded()
+        let lastFold = try! XCTUnwrap(foldingController.folds.max(by: { $0.lineRange.lowerBound < $1.lineRange.lowerBound }))
+        foldingController.toggleCollapse(lastFold)
+        let collapsedHeaderID = lineManager.line(atRow: lastFold.lineRange.lowerBound).id
+        XCTAssertNotNil(foldingController.collapsedFold(withHeaderLineID: collapsedHeaderID))
+
+        let helper = TextEditHelper(stringView: stringView, lineManager: lineManager, lineEndings: .lf)
+        let firstBody = lineManager.line(atRow: 1)
+        let result = helper.replaceText(in: NSRange(location: firstBody.location, length: firstBody.data.length), with: "    let x = 99")
+        let rows = try! XCTUnwrap(result.lineChangeSet.affectedRowRange(lineCount: lineManager.lineCount))
+        foldingController.setNeedsRecompute(rows: rows)
+        foldingController.recomputeIfNeeded()
+        XCTAssertNotNil(foldingController.collapsedFold(withHeaderLineID: collapsedHeaderID))
+        XCTAssertTrue(foldingController.isLineHidden(lineManager.line(atRow: lastFold.lineRange.lowerBound + 1).id))
+    }
+
+    func testNewlineInsideAFoldShiftsLaterFolds() {
+        let text = """
+        func first() {
+            let x = 1
+        }
+        func second() {
+            let y = 2
+        }
+        """
+        let (foldingController, lineManager, stringView) = makeFoldingController(text: text)
+        foldingController.isEnabled = true
+        foldingController.recomputeIfNeeded()
+        XCTAssertEqual(foldingController.folds.count, 2)
+        let secondStart = foldingController.folds[1].lineRange.lowerBound
+        let helper = TextEditHelper(stringView: stringView, lineManager: lineManager, lineEndings: .lf)
+        let firstBody = lineManager.line(atRow: 1)
+        let result = helper.replaceText(in: NSRange(location: firstBody.location + firstBody.data.length, length: 0), with: "\n    let z = 3")
+        foldingController.applyLineDelta(at: result.lineChangeSet.spliceRow ?? 1, delta: result.lineChangeSet.insertedLines.count)
+        let rows = try! XCTUnwrap(result.lineChangeSet.affectedRowRange(lineCount: lineManager.lineCount))
+        foldingController.setNeedsRecompute(rows: rows)
+        foldingController.recomputeIfNeeded()
+        XCTAssertEqual(foldingController.folds.count, 2)
+        XCTAssertEqual(foldingController.folds[1].lineRange.lowerBound, secondStart + 1)
+    }
+
+    func testTreeSitterProviderEditDoesNotDropDistantFolds() {
+        let text = """
+        function foo() {
+          let x = 1
+        }
+        function bar() {
+          let y = 2
+        }
+        """
+        let (foldingController, lineManager, stringView, languageMode) = makeTreeSitterFoldingController(text: text)
+        XCTAssertNotNil(languageMode.rootSyntaxNode)
+        foldingController.isEnabled = true
+        foldingController.recomputeIfNeeded()
+        XCTAssertGreaterThanOrEqual(foldingController.folds.count, 2)
+
+        let helper = TextEditHelper(stringView: stringView, lineManager: lineManager, lineEndings: .lf)
+        let fooBody = lineManager.line(atRow: 1)
+        let result = helper.replaceText(in: NSRange(location: fooBody.location, length: fooBody.data.length), with: "  let x = 99")
+        _ = languageMode.textDidChange(result.textChange)
+        foldingController.foldProvider.invalidateForEdit(
+            changedRows: result.lineChangeSet.affectedRowRange(lineCount: lineManager.lineCount),
+            lineCount: lineManager.lineCount,
+            previousLineCount: lineManager.lineCount,
+            spliceRow: result.lineChangeSet.spliceRow ?? 0
+        )
+        let rows = try! XCTUnwrap(result.lineChangeSet.affectedRowRange(lineCount: lineManager.lineCount))
+        foldingController.setNeedsRecompute(rows: rows)
+        foldingController.recomputeIfNeeded()
+        XCTAssertGreaterThanOrEqual(foldingController.folds.count, 2)
+        XCTAssertLessThan(foldingController.lastScannedLineCount, lineManager.lineCount)
+    }
 }
 
 private extension FoldingControllerTests {
@@ -238,5 +340,21 @@ private extension FoldingControllerTests {
                                                    lineControllerStorage: lineControllerStorage,
                                                    contentSizeService: contentSizeService)
         return (foldingController, lineManager, stringView)
+    }
+
+    private func makeTreeSitterFoldingController(text: String) -> (FoldingController, LineManager, StringView, TreeSitterInternalLanguageMode) {
+        let (foldingController, lineManager, stringView) = makeFoldingController(text: text)
+        let language = TreeSitterLanguage(tree_sitter_javascript())
+        let languageMode = TreeSitterInternalLanguageMode(
+            language: language.internalLanguage,
+            languageProvider: nil,
+            stringView: stringView,
+            lineManager: lineManager
+        )
+        languageMode.parse(text as NSString)
+        let provider = TreeSitterLineFoldProvider()
+        provider.languageMode = languageMode
+        foldingController.foldProvider = provider
+        return (foldingController, lineManager, stringView, languageMode)
     }
 }

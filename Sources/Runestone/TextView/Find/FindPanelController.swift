@@ -145,7 +145,7 @@ private extension FindPanelController {
             panelView.matchLabelText = session.query.isEmpty ? "" : "0/0"
             return
         }
-        panelView.matchLabelText = "\(currentIndex + 1)/\(session.matchCount)"
+        panelView.matchLabelText = "\(currentIndex + 1)/\(session.matchCount)\(session.isComplete ? "" : "+")"
     }
 
     private func updateFindEmphases() {

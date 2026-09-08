@@ -64,6 +64,10 @@ public extension EditorActionID {
     static let outdentLines = EditorActionID("outdentLines")
     static let reformatCode = EditorActionID("reformatCode")
 
+    // View
+    static let toggleMethodSeparators = EditorActionID("toggleMethodSeparators")
+    static let toggleOccurrenceHighlighting = EditorActionID("toggleOccurrenceHighlighting")
+
     // Find
     static let toggleFindPanel = EditorActionID("toggleFindPanel")
     static let toggleReplacePanel = EditorActionID("toggleReplacePanel")
@@ -103,6 +107,8 @@ public extension EditorActionID {
         .indentLines: "Indent Line(s)",
         .outdentLines: "Unindent Line(s)",
         .reformatCode: "Reformat Code",
+        .toggleMethodSeparators: "Method Separators",
+        .toggleOccurrenceHighlighting: "Highlight Occurrences of Selection",
         .toggleFindPanel: "Find…",
         .toggleReplacePanel: "Replace…",
         .searchEverywhere: "Search Everywhere",

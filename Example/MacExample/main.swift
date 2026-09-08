@@ -1,6 +1,7 @@
 import AppKit
 import Runestone
-import TestTreeSitterLanguages
+import RunestoneLanguages
+import RunestoneMarkdownLanguage
 
 /// Multi-tab, split-pane demo for the Runestone workbench module.
 @main
@@ -15,6 +16,21 @@ struct MacExampleApp {
     }
 }
 
+private let exampleLanguageCache = TreeSitterLanguageCache<String>()
+private let exampleLanguageProvider = BundledLanguageProvider()
+
+private func exampleLanguage(forIdentifier identifier: String?) -> TreeSitterLanguage? {
+    guard let identifier else {
+        return nil
+    }
+    return exampleLanguageCache.language(for: identifier) {
+        if identifier == "markdown" {
+            return .markdown
+        }
+        return TreeSitterLanguage.bundled(forIdentifier: identifier)
+    }
+}
+
 @MainActor
 final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
@@ -26,7 +42,7 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
     private var paneHosts: [UUID: PaneHost] = [:]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let jsLanguage = makeJavaScriptLanguage()
+        let jsLanguage = exampleLanguage(forIdentifier: "javascript")
         let docA = WorkbenchDocument(
             displayName: "sample.js",
             text: "function greet(name) {\n  return `Hello, ${name}`\n}\n",
@@ -224,11 +240,13 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
 
     private func openDocument(from url: URL) async {
         do {
-            let language = url.pathExtension == "js" || url.pathExtension == "mjs" ? makeJavaScriptLanguage() : nil
+            let identifier = LanguageIdentifier.identifier(for: url)
+            let language = exampleLanguage(forIdentifier: identifier)
             let document = try await WorkbenchDocument.load(
                 contentsOf: url,
                 language: language,
-                languageIdentifier: language == nil ? nil : "javascript"
+                languageIdentifier: identifier,
+                languageProvider: exampleLanguageProvider
             )
             workbench.openDocument(document)
             rebuildLayoutHosts()
@@ -369,6 +387,8 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
         reloadOnlyIfNeeded: Bool = false
     ) {
         guard let document = pane.selectedDocument else { return }
+        // Drives per-language config (method separators, occurrence highlighting, breadcrumbs).
+        host.textView.languageIdentifier = document.languageIdentifier
         // Share the workbench's cursor history across panes so ⌘[ / ⌘] cross documents.
         adapter.bindNavigationHistory(to: host.textView, document: document)
         if reloadOnlyIfNeeded, host.loadedDocumentID == document.id {
@@ -393,6 +413,7 @@ final class MacExampleAppDelegate: NSObject, NSApplicationDelegate {
             text: document.text,
             theme: DefaultTheme(),
             language: document.language,
+            languageProvider: exampleLanguageProvider,
             generation: generation,
             isCurrent: { [host] gen in host.applyGate.matches(gen) },
             apply: { [weak self, weak host] state in
@@ -443,6 +464,10 @@ final class PaneHost: NSView {
         textView.autolayout()
         textView.theme = DefaultTheme()
         textView.showMinimap = true
+        // IntelliJ-style per-language extras (resolved from `languageIdentifier`): a hairline above
+        // each method/function declaration, and highlighting of other occurrences of the selection.
+        textView.showMethodSeparators = true
+        textView.highlightsOccurrencesOfSelection = true
         // IntelliJ-style keymap: ⇧⇧ Search Everywhere, ⌘⇧A Find Action, ⌥↑/↓ extend selection,
         // ⌃⇧J join, ⌥⌘T surround, ⌘[ / ⌘] navigation history, ⌘⇧8 column mode…
         textView.keymap = .intelliJ
@@ -581,26 +606,4 @@ private extension NSView {
     func autolayout() {
         translatesAutoresizingMaskIntoConstraints = false
     }
-}
-
-private func makeJavaScriptLanguage() -> TreeSitterLanguage {
-    // A compact highlights query so the editor — and the minimap — show syntax colors.
-    let highlights = """
-    (comment) @comment
-    (string) @string
-    (template_string) @string
-    (number) @number
-    [
-      "const" "let" "var" "function" "return" "if" "else" "for" "while"
-      "class" "new" "import" "export" "from" "await" "async"
-    ] @keyword
-    (function_declaration name: (identifier) @function)
-    (call_expression function: (identifier) @function)
-    (member_expression property: (property_identifier) @property)
-    (identifier) @variable
-    """
-    return TreeSitterLanguage(
-        tree_sitter_javascript(),
-        highlightsQuery: TreeSitterLanguage.Query(string: highlights)
-    )
 }

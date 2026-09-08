@@ -131,6 +131,13 @@ public final class RunestoneEditorAdapter: EditorAdapter, @unchecked Sendable {
                 text: nil,
                 rangeReader: makeRangeReader(from: textView)
             )
+        } else if let reader = makeRangeReader(from: textView) {
+            snapshot = TextSnapshot(
+                version: nextVersion(),
+                utf16Length: textView.documentLength,
+                text: nil,
+                rangeReader: reader
+            )
         } else {
             snapshot = TextSnapshot(version: nextVersion(), text: textView.text)
         }
@@ -157,7 +164,7 @@ public final class RunestoneEditorAdapter: EditorAdapter, @unchecked Sendable {
             selection: selection,
             cursor: cursor,
             viewport: viewport,
-            languageIdentifier: nil
+            languageIdentifier: textView.languageIdentifier
         )
     }
 

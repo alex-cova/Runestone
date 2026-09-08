@@ -7,12 +7,21 @@ public actor LSPDocumentSyncService {
         public let range: LSPRange
         public let text: String
         public let version: Int
+        /// UTF-16 length of the replaced range (LSP `rangeLength`, optional for older servers).
+        public let rangeLength: Int
 
-        public init(documentID: DocumentID, range: LSPRange, text: String, version: Int = 0) {
+        public init(
+            documentID: DocumentID,
+            range: LSPRange,
+            text: String,
+            version: Int = 0,
+            rangeLength: Int = 0
+        ) {
             self.documentID = documentID
             self.range = range
             self.text = text
             self.version = version
+            self.rangeLength = rangeLength
         }
     }
 
@@ -45,8 +54,20 @@ public actor LSPDocumentSyncService {
         await notifyOpened(document, languageID: languageID, version: version)
     }
 
-    public func enqueueChange(documentID: DocumentID, range: LSPRange, text: String, version: Int = 0) {
-        pending.append(DocumentChange(documentID: documentID, range: range, text: text, version: version))
+    public func enqueueChange(
+        documentID: DocumentID,
+        range: LSPRange,
+        text: String,
+        version: Int = 0,
+        rangeLength: Int = 0
+    ) {
+        pending.append(DocumentChange(
+            documentID: documentID,
+            range: range,
+            text: text,
+            version: version,
+            rangeLength: rangeLength
+        ))
         scheduleFlush()
     }
 

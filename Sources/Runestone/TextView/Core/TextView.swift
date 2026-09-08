@@ -2,6 +2,7 @@ import Foundation
 // swiftlint:disable file_length type_body_length
 @preconcurrency import AppKit
 import CoreText
+import EditorIntelligence
 
 /// A type similiar to UITextView with features commonly found in code editors.
 ///
@@ -973,6 +974,11 @@ import CoreText
         highlightProviderCoordinator = coordinator
     }
 
+    /// Tree-sitter highlight captures intersecting `range`, or `[]` when there is no tree.
+    func syntaxHighlightCaptures(in range: NSRange) -> [TreeSitterCapture] {
+        textInputView.minimapCaptures(inByteRange: ByteRange(utf16Range: range))
+    }
+
     private let textInputView: TextInputView
     private let writeLock = DocumentWriteLock()
     private let minimapView = MinimapView(frame: .zero)
@@ -1064,6 +1070,7 @@ import CoreText
         backgroundColor = .textBackgroundColor
         textInputView.delegate = self
         textInputView.gutterParentView = self
+        textInputView.languageConfiguration = resolvedLanguageConfiguration
         addSubview(textInputView)
         minimapView.lineDataSource = textInputView
         minimapView.scrollView = self
@@ -1413,16 +1420,28 @@ import CoreText
             return navigateForward()
         case .reformatCode:
             return textInputView.performFallbackAction(action, isEditable: isEditable)
+        case .toggleMethodSeparators:
+            showMethodSeparators.toggle()
+            return true
+        case .toggleOccurrenceHighlighting:
+            highlightsOccurrencesOfSelection.toggle()
+            return true
         default:
             return false
         }
     }
 
     /// A plain language identifier (`"swift"`, `"python"`, …) for features that vary by
-    /// language, currently ``applicableSurroundTemplates()``. Not derived automatically — set
-    /// it alongside ``setLanguageMode(_:completion:)`` if you use those features. See
-    /// ``LanguageIdentifier``.
-    public var languageIdentifier: String?
+    /// language: ``applicableSurroundTemplates()`` and ``languageConfiguration``. Not derived
+    /// automatically — set it alongside ``setLanguageMode(_:completion:)`` if you use those
+    /// features. See ``LanguageIdentifier``.
+    public var languageIdentifier: String? {
+        didSet {
+            if languageIdentifier != oldValue {
+                textInputView.languageConfiguration = resolvedLanguageConfiguration
+            }
+        }
+    }
 
     /// Templates offered by ``EditorActionID/surroundWith``. Defaults to
     /// ``SurroundTemplate/builtIns``.
@@ -1433,10 +1452,83 @@ import CoreText
         surroundTemplates.filter { $0.applies(to: languageIdentifier) }
     }
 
+    /// Per-language behaviour for method separators, breadcrumbs, and occurrence highlighting,
+    /// keyed on ``languageIdentifier``. Defaults to ``LanguageConfigurationRegistry/builtIns``.
+    public var languageConfigurations: LanguageConfigurationRegistry = .builtIns {
+        didSet {
+            textInputView.languageConfiguration = resolvedLanguageConfiguration
+        }
+    }
+
+    /// Set to force a specific configuration regardless of ``languageIdentifier``. `nil` (default)
+    /// resolves from ``languageConfigurations``.
+    public var languageConfigurationOverride: LanguageConfiguration? {
+        didSet {
+            textInputView.languageConfiguration = resolvedLanguageConfiguration
+        }
+    }
+
+    /// The configuration currently in effect: ``languageConfigurationOverride`` if set, otherwise
+    /// ``languageConfigurations`` resolved for ``languageIdentifier`` (falling back to
+    /// ``LanguageConfiguration/generic``).
+    public var languageConfiguration: LanguageConfiguration {
+        resolvedLanguageConfiguration
+    }
+
+    private var resolvedLanguageConfiguration: LanguageConfiguration {
+        languageConfigurationOverride ?? languageConfigurations.configuration(for: languageIdentifier)
+    }
+
+    /// Draw a hairline separator above each method/function (and type) declaration, IntelliJ-style.
+    /// Uses ``languageConfiguration`` to decide what a declaration is. Off by default.
+    public var showMethodSeparators: Bool {
+        get {
+            textInputView.showMethodSeparators
+        }
+        set {
+            textInputView.showMethodSeparators = newValue
+        }
+    }
+
+    /// Highlight every other occurrence of the current selection (or the word under the caret when
+    /// the selection is empty). Off by default.
+    public var highlightsOccurrencesOfSelection: Bool {
+        get {
+            textInputView.highlightsOccurrencesOfSelection
+        }
+        set {
+            textInputView.highlightsOccurrencesOfSelection = newValue
+        }
+    }
+
     /// Wraps the current selection using `template`, expanding its snippet body with the
     /// selection substituted for `$TM_SELECTED_TEXT` and re-indenting to the current line.
     public func surroundSelection(with template: SurroundTemplate) {
         textInputView.surroundSelection(with: template)
+    }
+
+    /// Inserts an expanded snippet and starts a tab-stop session when the expansion has numbered stops.
+    public func insertSnippet(_ expansion: SnippetExpansion, replacing range: NSRange, extraIndentPerNewline: Int = 0) {
+        textInputView.insertSnippet(expansion, replacing: range, extraIndentPerNewline: extraIndentPerNewline)
+    }
+
+    /// True while Tab / Shift-Tab cycle snippet placeholders.
+    public var hasActiveSnippetSession: Bool {
+        textInputView.hasActiveSnippetSession
+    }
+
+    @discardableResult
+    public func advanceSnippetSession() -> Bool {
+        textInputView.advanceSnippetSession()
+    }
+
+    @discardableResult
+    public func retreatSnippetSession() -> Bool {
+        textInputView.retreatSnippetSession()
+    }
+
+    public func cancelSnippetSession() {
+        textInputView.cancelSnippetSession()
     }
 
     /// Re-indents the lines touched by the current selection using the active language mode's

@@ -10,18 +10,48 @@ final class TreeSitterCapture {
     let nameComponentCount: Int
 
     convenience init(node: TreeSitterNode, index: UInt32, name: String, predicates: [TreeSitterPredicate]) {
-        self.init(node: node, index: index, name: name, byteRange: node.byteRange, predicates: predicates)
+        self.init(
+            node: node,
+            index: index,
+            name: name,
+            byteRange: node.byteRange,
+            mappedPredicates: TreeSitterPredicateMapper.map(predicates),
+            nameComponentCount: name.split(separator: ".").count
+        )
     }
 
-    private init(node: TreeSitterNode, index: UInt32, name: String, byteRange: ByteRange, predicates: [TreeSitterPredicate]) {
-        let predicateMapResult = TreeSitterPredicateMapper.map(predicates)
+    convenience init(
+        node: TreeSitterNode,
+        index: UInt32,
+        name: String,
+        mappedPredicates: TreeSitterPredicateMapper.MapResult,
+        nameComponentCount: Int
+    ) {
+        self.init(
+            node: node,
+            index: index,
+            name: name,
+            byteRange: node.byteRange,
+            mappedPredicates: mappedPredicates,
+            nameComponentCount: nameComponentCount
+        )
+    }
+
+    private init(
+        node: TreeSitterNode,
+        index: UInt32,
+        name: String,
+        byteRange: ByteRange,
+        mappedPredicates: TreeSitterPredicateMapper.MapResult,
+        nameComponentCount: Int
+    ) {
         self.node = node
         self.index = index
         self.name = name
         self.byteRange = byteRange
-        self.properties = predicateMapResult.properties
-        self.textPredicates = predicateMapResult.textPredicates
-        self.nameComponentCount = name.split(separator: ".").count
+        self.properties = mappedPredicates.properties
+        self.textPredicates = mappedPredicates.textPredicates
+        self.nameComponentCount = nameComponentCount
     }
 }
 

@@ -39,6 +39,16 @@ final class DefaultThemeTests: XCTestCase {
         XCTAssertTrue(theme.fontTraits(for: "keyword").contains(.bold))
     }
 
+    func testInternedSyntaxColorsAreReusedAcrossLookups() {
+        let theme = DefaultTheme()
+        let first = theme.textColor(for: "keyword")
+        let second = theme.textColor(for: "keyword")
+        let fromAlias = theme.textColor(for: "keyword.operator")
+        XCTAssertNotNil(first)
+        XCTAssertTrue(first === second, "DefaultTheme should intern dynamic token colors instead of allocating per lookup")
+        XCTAssertTrue(first === fromAlias, "More specific highlight names that resolve to keyword should share the interned color")
+    }
+
     func testChromeColorsResolveWithoutTheAssetCatalog() {
         let theme = DefaultTheme()
         // These construct successfully even though nothing here touches `Theme.xcassets` — a
@@ -48,4 +58,50 @@ final class DefaultThemeTests: XCTestCase {
         XCTAssertNotNil(theme.selectedLineBackgroundColor)
         XCTAssertNotNil(theme.invisibleCharactersColor)
     }
+
+    func testMethodSeparatorAndOccurrenceColorsResolveInBothAppearances() {
+        let theme = DefaultTheme()
+        for appearanceName in [NSAppearance.Name.aqua, .darkAqua] {
+            guard let appearance = NSAppearance(named: appearanceName) else {
+                continue
+            }
+            appearance.performAsCurrentDrawingAppearance {
+                XCTAssertNotNil(theme.methodSeparatorColor.cgColor.components)
+                let occurrence = theme.occurrenceHighlightColor.cgColor
+                XCTAssertNotNil(occurrence.components)
+                // The occurrence highlight is translucent so glyphs stay readable beneath it.
+                XCTAssertLessThan(occurrence.alpha, 1)
+            }
+        }
+        XCTAssertGreaterThan(theme.methodSeparatorWidth, 0)
+    }
+
+    func testCustomThemeGetsProtocolDefaultsForNewColors() {
+        // A theme that predates these properties still compiles and gets sensible defaults.
+        final class LegacyTheme: MinimalThemeStub {}
+        let theme = LegacyTheme()
+        XCTAssertEqual(theme.methodSeparatorColor, theme.gutterHairlineColor)
+        XCTAssertGreaterThan(theme.methodSeparatorWidth, 0)
+        XCTAssertLessThan(theme.occurrenceHighlightColor.cgColor.alpha, 1)
+    }
+}
+
+/// Minimal `Theme` conformer that implements only the historically-required members, to prove the
+/// protocol extension supplies `methodSeparatorColor` / `methodSeparatorWidth` /
+/// `occurrenceHighlightColor` defaults.
+class MinimalThemeStub: Runestone.Theme {
+    let font = UIFont.systemFont(ofSize: 12)
+    let textColor = UIColor.labelColor
+    let gutterBackgroundColor = UIColor.textBackgroundColor
+    let gutterHairlineColor = UIColor.separatorColor
+    let lineNumberColor = UIColor.secondaryLabelColor
+    let lineNumberFont = UIFont.systemFont(ofSize: 12)
+    let selectedLineBackgroundColor = UIColor.clear
+    let selectedLinesLineNumberColor = UIColor.labelColor
+    let selectedLinesGutterBackgroundColor = UIColor.textBackgroundColor
+    let invisibleCharactersColor = UIColor.secondaryLabelColor
+    let pageGuideHairlineColor = UIColor.separatorColor
+    let pageGuideBackgroundColor = UIColor.textBackgroundColor
+    let markedTextBackgroundColor = UIColor.clear
+    func textColor(for highlightName: String) -> UIColor? { nil }
 }

@@ -19,101 +19,139 @@ public final class DefaultTheme: Runestone.Theme {
     public let pageGuideBackgroundColor = UIColor(themeColorNamed: "page_guide_background")
     public let markedTextBackgroundColor = UIColor(themeColorNamed: "marked_text")
     public let selectionColor = UIColor(themeColorNamed: "selection")
+    public let methodSeparatorColor = UIColor(themeColorNamed: "method_separator")
+    public let occurrenceHighlightColor = UIColor(themeColorNamed: "occurrence_highlight")
+
+    // One dynamic NSColor per palette slot. `textColor(for:)` used to allocate a new
+    // appearance-adaptive color for every token, which dominated highlight apply time.
+    private static let commentColor = UIColor(themeColorNamed: "comment")
+    private static let stringColor = UIColor(themeColorNamed: "string")
+    private static let keywordColor = UIColor(themeColorNamed: "keyword")
+    private static let typeColor = UIColor(themeColorNamed: "type")
+    private static let numberColor = UIColor(themeColorNamed: "number")
+    private static let functionColor = UIColor(themeColorNamed: "function")
+    private static let constructorColor = UIColor(themeColorNamed: "constructor")
+    private static let propertyColor = UIColor(themeColorNamed: "property")
+    private static let punctuationColor = UIColor(themeColorNamed: "punctuation")
+    private static let variableBuiltinColor = UIColor(themeColorNamed: "variable_builtin")
+    private static let searchMatchFoundColor = UIColor(themeColorNamed: "search_match_found")
+    private static let searchMatchHighlightedColor = UIColor(themeColorNamed: "search_match_highlighted")
+
+    private var textColorCache: [String: UIColor?] = [:]
+    private var fontTraitsCache: [String: FontTraits] = [:]
+    private let cacheLock = NSLock()
 
     public init() {}
 
-    // swiftlint:disable cyclomatic_complexity
     public func textColor(for highlightName: String) -> UIColor? {
-        guard let highlightName = HighlightName(highlightName) else {
+        cacheLock.lock()
+        if let cached = textColorCache[highlightName] {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+        guard let resolved = HighlightName(highlightName) else {
+            cacheLock.lock()
+            textColorCache[highlightName] = nil
+            cacheLock.unlock()
             return nil
         }
-        switch highlightName {
-        case .boolean:
-            return UIColor(themeColorNamed: "constant_builtin")
-        case .comment:
-            return UIColor(themeColorNamed: "comment")
-        case .constantBuiltin:
-            return UIColor(themeColorNamed: "constant_builtin")
-        case .constantCharacter:
-            return UIColor(themeColorNamed: "constant_character")
-        case .constructor:
-            return UIColor(themeColorNamed: "constructor")
-        case .float:
-            return UIColor(themeColorNamed: "number")
-        case .function:
-            return UIColor(themeColorNamed: "function")
-        case .keyword:
-            return UIColor(themeColorNamed: "keyword")
-        case .markupHeading:
-            return UIColor(themeColorNamed: "keyword")
-        case .markupBold, .markupItalic:
-            return nil
-        case .markupQuote:
-            return UIColor(themeColorNamed: "comment")
-        case .markupRaw:
-            return UIColor(themeColorNamed: "string")
-        case .markupLinkUrl:
-            return UIColor(themeColorNamed: "string")
-        case .markupLinkLabel:
-            return UIColor(themeColorNamed: "property")
-        case .number:
-            return UIColor(themeColorNamed: "number")
-        case .operator:
-            return UIColor(themeColorNamed: "operator")
-        case .parameter:
-            return UIColor(themeColorNamed: "property")
-        case .property:
-            return UIColor(themeColorNamed: "property")
-        case .punctuation:
-            return UIColor(themeColorNamed: "punctuation")
-        case .punctuationBracket:
-            return UIColor(themeColorNamed: "punctuation")
-        case .punctuationDelimiter:
-            return UIColor(themeColorNamed: "punctuation")
-        case .punctuationSpecial:
-            return UIColor(themeColorNamed: "punctuation")
-        case .string:
-            return UIColor(themeColorNamed: "string")
-        case .stringEscape:
-            return UIColor(themeColorNamed: "string")
-        case .type:
-            return UIColor(themeColorNamed: "type")
-        case .typeBuiltin:
-            return UIColor(themeColorNamed: "type")
-        case .variable:
-            return nil
-        case .variableBuiltin:
-            return UIColor(themeColorNamed: "variable_builtin")
-        }
+        let color = Self.internedColor(for: resolved)
+        cacheLock.lock()
+        textColorCache[highlightName] = color
+        cacheLock.unlock()
+        return color
     }
-    // swiftlint:enable cyclomatic_complexity
 
     public func fontTraits(for highlightName: String) -> FontTraits {
-        guard let highlightName = HighlightName(highlightName) else {
+        cacheLock.lock()
+        if let cached = fontTraitsCache[highlightName] {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+        guard let resolved = HighlightName(highlightName) else {
+            cacheLock.lock()
+            fontTraitsCache[highlightName] = []
+            cacheLock.unlock()
             return []
         }
-        switch highlightName {
+        let traits: FontTraits
+        switch resolved {
         case .keyword, .markupHeading, .markupBold:
-            return .bold
+            traits = .bold
         case .markupItalic:
-            return .italic
+            traits = .italic
         default:
-            return []
+            traits = []
         }
+        cacheLock.lock()
+        fontTraitsCache[highlightName] = traits
+        cacheLock.unlock()
+        return traits
     }
 
     public func highlightedRange(forFoundTextRange foundTextRange: NSRange, ofStyle style: UITextSearchFoundTextStyle) -> HighlightedRange? {
         switch style {
         case .found:
-            let color = UIColor(themeColorNamed: "search_match_found")
-            return HighlightedRange(range: foundTextRange, color: color, cornerRadius: 2)
+            return HighlightedRange(range: foundTextRange, color: Self.searchMatchFoundColor, cornerRadius: 2)
         case .highlighted:
-            let color = UIColor(themeColorNamed: "search_match_highlighted")
-            return HighlightedRange(range: foundTextRange, color: color, cornerRadius: 2)
+            return HighlightedRange(range: foundTextRange, color: Self.searchMatchHighlightedColor, cornerRadius: 2)
         case .standard, .normal:
             return nil
         @unknown default:
             return nil
+        }
+    }
+
+    private static func internedColor(for highlightName: HighlightName) -> UIColor? {
+        switch highlightName {
+        case .boolean:
+            return propertyColor
+        case .comment:
+            return commentColor
+        case .constantBuiltin:
+            return propertyColor
+        case .constantCharacter:
+            return propertyColor
+        case .constructor:
+            return constructorColor
+        case .float:
+            return numberColor
+        case .function:
+            return functionColor
+        case .keyword:
+            return keywordColor
+        case .markupHeading:
+            return keywordColor
+        case .markupBold, .markupItalic:
+            return nil
+        case .markupQuote:
+            return commentColor
+        case .markupRaw:
+            return stringColor
+        case .markupLinkUrl:
+            return stringColor
+        case .markupLinkLabel:
+            return propertyColor
+        case .number:
+            return numberColor
+        case .operator:
+            return punctuationColor
+        case .parameter:
+            return propertyColor
+        case .property:
+            return propertyColor
+        case .punctuation, .punctuationBracket, .punctuationDelimiter, .punctuationSpecial:
+            return punctuationColor
+        case .string, .stringEscape:
+            return stringColor
+        case .type, .typeBuiltin:
+            return typeColor
+        case .variable:
+            return nil
+        case .variableBuiltin:
+            return variableBuiltinColor
         }
     }
 }
@@ -140,6 +178,11 @@ private extension UIColor {
                 return UIColor(srgbRed: 59 / 255, green: 130 / 255, blue: 246 / 255, alpha: 1)
             case "marked_text", "search_match_found", "search_match_highlighted":
                 return .selectedContentBackgroundColor.withAlphaComponent(0.35)
+            case "occurrence_highlight":
+                // Translucent #3b82f6 — reads on both light and dark editor backgrounds.
+                return UIColor(srgbRed: 59 / 255, green: 130 / 255, blue: 246 / 255, alpha: 0.28)
+            case "method_separator":
+                return .secondaryLabelColor
             case "foreground":
                 return .textColor
             case "line_number", "line_number_current_line", "invisible_characters",

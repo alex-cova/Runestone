@@ -31,6 +31,8 @@ public final class FindSession {
     public private(set) var currentRange: NSRange?
     public private(set) var highlightRanges: [NSRange] = []
     public private(set) var errorMessage: String?
+    /// `false` while a long scan is still running and the counts above are a progress snapshot.
+    public private(set) var isComplete = true
 
     /// Snapshot of the options a search outcome was computed for, used to discard stale results
     /// from a search that's still in flight when the query changes underneath it.
@@ -48,9 +50,15 @@ public final class FindSession {
         if let errorMessage { return errorMessage }
         guard matchCount > 0 else { return "No matches" }
         if let currentIndex {
-            return "\(currentIndex + 1) of \(matchCount)"
+            if isComplete {
+                return "\(currentIndex + 1) of \(matchCount)"
+            }
+            return "\(currentIndex + 1) of \(matchCount)+"
         }
-        return "\(matchCount) matches"
+        if isComplete {
+            return "\(matchCount) matches"
+        }
+        return "\(matchCount)+ matches"
     }
 
     public func showFind() {
@@ -74,6 +82,7 @@ public final class FindSession {
         currentRange = nil
         highlightRanges = []
         errorMessage = nil
+        isComplete = true
     }
 
     public func searchOptions() -> FindSearchOptions {
@@ -94,6 +103,7 @@ public final class FindSession {
             currentRange = nil
             highlightRanges = []
             self.errorMessage = errorMessage
+            isComplete = true
             return
         }
         errorMessage = nil
@@ -101,6 +111,7 @@ public final class FindSession {
         currentIndex = outcome.currentIndex
         currentRange = outcome.currentRange
         highlightRanges = outcome.highlightRanges
+        isComplete = outcome.isComplete
     }
 
     public func selectNext(in text: String) {

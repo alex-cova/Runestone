@@ -54,6 +54,8 @@ final class LayoutManager {
                 invisibleCharacterConfiguration.textColor = theme.invisibleCharactersColor
                 gutterSelectionBackgroundView.backgroundColor = theme.selectedLinesGutterBackgroundColor
                 lineSelectionBackgroundView.backgroundColor = theme.selectedLineBackgroundColor
+                methodSeparatorView.separatorColor = theme.methodSeparatorColor
+                methodSeparatorView.separatorWidth = theme.methodSeparatorWidth
                 applyFoldRibbonTheme()
                 for lineController in lineControllerStorage {
                     lineController.theme = theme
@@ -168,6 +170,15 @@ final class LayoutManager {
     private let gutterSelectionBackgroundView = UIView()
     private let lineSelectionBackgroundView = UIView()
     private let foldRibbonView = FoldRibbonView()
+    let methodSeparatorView = MethodSeparatorView()
+    var showMethodSeparators = false {
+        didSet {
+            if showMethodSeparators != oldValue {
+                updateShownViews()
+                setNeedsLayout()
+            }
+        }
+    }
 
     // MARK: - Sizing
     private var leadingLineSpacing: CGFloat {
@@ -236,6 +247,7 @@ final class LayoutManager {
         self.gutterSelectionBackgroundView.isUserInteractionEnabled = false
         self.lineSelectionBackgroundView.isUserInteractionEnabled = false
         self.foldRibbonView.lineManager = lineManager
+        self.methodSeparatorView.lineManager = lineManager
         // Property default assignment skips didSet — paint chrome colors now so the
         // gutter never appears unstyled (or DefaultTheme near-black) on first layout.
         gutterBackgroundView.backgroundColor = theme.gutterBackgroundColor
@@ -243,6 +255,8 @@ final class LayoutManager {
         gutterBackgroundView.hairlineWidth = theme.gutterHairlineWidth
         gutterSelectionBackgroundView.backgroundColor = theme.selectedLinesGutterBackgroundColor
         lineSelectionBackgroundView.backgroundColor = theme.selectedLineBackgroundColor
+        methodSeparatorView.separatorColor = theme.methodSeparatorColor
+        methodSeparatorView.separatorWidth = theme.methodSeparatorWidth
         applyFoldRibbonTheme()
         self.updateShownViews()
         let memoryWarningNotificationName = UIApplication.didReceiveMemoryWarningNotification
@@ -476,6 +490,11 @@ extension LayoutManager {
         needsLayoutLineSelection = true
     }
 
+    /// Publish the row set the method-separator overlay should draw.
+    func setMethodSeparatorRows(_ rows: Set<Int>) {
+        methodSeparatorView.separatorRows = rows
+    }
+
     func layoutLineSelectionIfNeeded() {
         if needsLayoutLineSelection {
             needsLayoutLineSelection = false
@@ -682,6 +701,11 @@ extension LayoutManager {
         }
         let contentSize = contentSizeService.contentSize
         linesContainerView.frame = CGRect(x: 0, y: 0, width: contentSize.width, height: contentSize.height)
+        if showMethodSeparators {
+            let separatorWidth = max(contentSize.width, scrollViewWidth)
+            methodSeparatorView.textContainerInsetTop = textContainerInset.top
+            methodSeparatorView.frame = CGRect(x: 0, y: 0, width: separatorWidth, height: contentSize.height)
+        }
         // Update the visible lines and line fragments. Clean up everything that is not in the viewport anymore.
         visibleLineIDs = appearedLineIDs
         let disappearedLineIDs = oldVisibleLineIDs.subtracting(appearedLineIDs)
@@ -854,6 +878,7 @@ extension LayoutManager {
     private func setupViewHierarchy() {
         // Remove views from view hierarchy
         lineSelectionBackgroundView.removeFromSuperview()
+        methodSeparatorView.removeFromSuperview()
         metalCanvasView?.removeFromSuperview()
         linesContainerView.removeFromSuperview()
         gutterContainerView.removeFromSuperview()
@@ -867,6 +892,8 @@ extension LayoutManager {
         // the now-empty `linesContainerView` and paints the glyphs itself, still behind the
         // selection overlay and carets (re-fronted in `SelectionOverlayController.updateLayout`).
         textInputView?.addSubview(lineSelectionBackgroundView)
+        // Behind the glyph canvas (and its selection overlay), in front of the line-selection band.
+        textInputView?.addSubview(methodSeparatorView)
         if isMetalRenderingActive {
             textInputView?.addSubview(linesContainerView)
             if let metalCanvasView {
@@ -890,6 +917,7 @@ extension LayoutManager {
         gutterBackgroundView.isHidden = !showLineNumbers
         lineNumbersContainerView.isHidden = !showLineNumbers
         foldRibbonView.isHidden = !showFoldingRibbon
+        methodSeparatorView.isHidden = !showMethodSeparators
         gutterSelectionBackgroundView.isHidden = !lineSelectionDisplayType.shouldShowLineSelection || !showLineNumbers || !isEditing
         lineSelectionBackgroundView.isHidden = !lineSelectionDisplayType.shouldShowLineSelection || !isEditing || selectedLength > 0
     }

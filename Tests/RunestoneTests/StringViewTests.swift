@@ -105,6 +105,31 @@ final class StringViewTests: XCTestCase {
         let bytes = stringView.bytes(in: byteRange)!
         XCTAssertEqual(string(from: bytes), "👨‍👩‍👧‍👦")
     }
+
+    func testSmallUntitledBuffersStayContiguous() {
+        let stringView = StringView(string: "Hello world")
+        XCTAssertFalse(stringView.usesPieceTree)
+        XCTAssertFalse(stringView.isFileBacked)
+    }
+
+    func testLargeUntitledBuffersUseAPieceTreeWithoutFileMapping() {
+        let text = String(repeating: "a", count: StringView.pieceTreeUntitledThreshold)
+        let stringView = StringView(string: text)
+        XCTAssertTrue(stringView.usesPieceTree)
+        XCTAssertFalse(stringView.isFileBacked)
+        XCTAssertGreaterThan(stringView.pieceCount, 1)
+        stringView.replaceText(in: NSRange(location: 0, length: 0), with: "X")
+        XCTAssertEqual(stringView.substring(in: NSRange(location: 0, length: 2)), "Xa")
+        XCTAssertEqual(stringView.length, text.utf16.count + 1)
+    }
+
+    func testAssigningALargeStringPromotesToPieceTree() {
+        let stringView = StringView(string: "small")
+        XCTAssertFalse(stringView.usesPieceTree)
+        stringView.string = String(repeating: "b", count: StringView.pieceTreeUntitledThreshold) as NSString
+        XCTAssertTrue(stringView.usesPieceTree)
+        XCTAssertFalse(stringView.isFileBacked)
+    }
 }
 
 private extension StringViewTests {
