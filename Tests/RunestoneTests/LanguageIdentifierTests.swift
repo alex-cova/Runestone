@@ -26,7 +26,9 @@ final class LanguageIdentifierTests: XCTestCase {
             ("cpp", "cpp"), ("cc", "cpp"), ("cxx", "cpp"), ("hpp", "cpp"), ("hh", "cpp"), ("hxx", "cpp"), ("mm", "cpp"),
             ("sh", "shell"), ("bash", "shell"), ("zsh", "shell"), ("command", "shell"),
             ("sql", "sql"),
-            ("graphql", "graphql"), ("gql", "graphql")
+            ("graphql", "graphql"), ("gql", "graphql"),
+            ("http", "http"), ("rest", "http"),
+            ("mmd", "mermaid"), ("mermaid", "mermaid")
         ]
         for (ext, expected) in cases {
             XCTAssertEqual(LanguageIdentifier.identifier(forFileExtension: ext), expected, "extension: \(ext)")

@@ -43,6 +43,8 @@ final class LanguagePackTests: XCTestCase {
         XCTAssertNotNil(TreeSitterLanguage.bundled(forIdentifier: "html"))
         XCTAssertNotNil(TreeSitterLanguage.bundled(forIdentifier: "css"))
         XCTAssertNotNil(TreeSitterLanguage.bundled(forIdentifier: "swift"))
+        XCTAssertNotNil(TreeSitterLanguage.bundled(forIdentifier: "http"))
+        XCTAssertNotNil(TreeSitterLanguage.bundled(forIdentifier: "mermaid"))
         XCTAssertNil(TreeSitterLanguage.bundled(forIdentifier: "markdown"))
     }
 

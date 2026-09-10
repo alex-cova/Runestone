@@ -17,6 +17,8 @@ keeps the license of its upstream project; all are MIT.
 | Kotlin | [fwcd/tree-sitter-kotlin](https://github.com/fwcd/tree-sitter-kotlin) | MIT |
 | GraphQL | [bkegley/tree-sitter-graphql](https://github.com/bkegley/tree-sitter-graphql) | MIT |
 | Markdown | [MDeiml/tree-sitter-markdown](https://github.com/MDeiml/tree-sitter-markdown) | MIT |
+| HTTP | [rest-nvim/tree-sitter-http](https://github.com/rest-nvim/tree-sitter-http) | MIT |
+| Mermaid | [monaqa/tree-sitter-mermaid](https://github.com/monaqa/tree-sitter-mermaid) | MIT |
 
 The TOML/SQL/Swift/Java/Go/Bash and Kotlin `*Runestone` wrapper targets were migrated
 from Hextech's former `Vendor/RunestoneLanguages` package; the Kotlin wrapper is

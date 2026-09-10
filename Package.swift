@@ -188,6 +188,20 @@ let package = Package(
             dependencies: ["Runestone", "TreeSitterBash", "TreeSitterBashQueries"],
             swiftSettings: swift6
         ),
+        .target(name: "TreeSitterHTTP", cSettings: [.headerSearchPath("src")]),
+        .target(name: "TreeSitterHTTPQueries", resources: [.copy("highlights.scm")]),
+        .target(
+            name: "TreeSitterHTTPRunestone",
+            dependencies: ["Runestone", "TreeSitterHTTP", "TreeSitterHTTPQueries"],
+            swiftSettings: swift6
+        ),
+        .target(name: "TreeSitterMermaid", cSettings: [.headerSearchPath("src")]),
+        .target(name: "TreeSitterMermaidQueries", resources: [.copy("highlights.scm")]),
+        .target(
+            name: "TreeSitterMermaidRunestone",
+            dependencies: ["Runestone", "TreeSitterMermaid", "TreeSitterMermaidQueries"],
+            swiftSettings: swift6
+        ),
         .target(
             name: "RunestoneLanguages",
             dependencies: [
@@ -202,7 +216,9 @@ let package = Package(
                 "TreeSitterJavaRunestone",
                 "TreeSitterKotlinRunestone",
                 "TreeSitterGoRunestone",
-                "TreeSitterBashRunestone"
+                "TreeSitterBashRunestone",
+                "TreeSitterHTTPRunestone",
+                "TreeSitterMermaidRunestone"
             ],
             resources: [
                 .copy("Queries")

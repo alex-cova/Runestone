@@ -10,3 +10,5 @@
 @_exported import TreeSitterSQLRunestone
 @_exported import TreeSitterSwiftRunestone
 @_exported import TreeSitterTOMLRunestone
+@_exported import TreeSitterHTTPRunestone
+@_exported import TreeSitterMermaidRunestone

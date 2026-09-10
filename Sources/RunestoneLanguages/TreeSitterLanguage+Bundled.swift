@@ -96,6 +96,10 @@ public extension TreeSitterLanguage {
             return .css
         case "swift":
             return .swift
+        case "http":
+            return .http
+        case "mermaid":
+            return .mermaid
         default:
             return nil
         }

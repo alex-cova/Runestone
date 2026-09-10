@@ -80,6 +80,10 @@ public enum LanguageIdentifier {
             return "sql"
         case "graphql", "gql":
             return "graphql"
+        case "http", "rest":
+            return "http"
+        case "mmd", "mermaid":
+            return "mermaid"
         default:
             return nil
         }
