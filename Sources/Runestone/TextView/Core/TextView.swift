@@ -1149,13 +1149,14 @@ import EditorIntelligence
             bringSubviewToFront(scrollPocketView)
         }
         if showMinimap {
+            minimapView.isHidden = false
             minimapView.frame = CGRect(x: bounds.maxX - minimapWidth, y: 0, width: minimapWidth, height: bounds.height)
             bringSubviewToFront(minimapView)
             minimapView.setNeedsDisplayForContentChange()
-        } else if minimapView.frame != .zero {
+        } else {
             // Collapse the overlay so the viewport-indicator's CALayer border can't sit at the
             // trailing edge. `isHidden` alone does not always clip a layer-backed child's border.
-            minimapView.frame = .zero
+            minimapView.collapseOverlay()
         }
         let panelHeight = findPanelController.isVisible ? findPanelController.panelHeight : 0
         findPanelController.panelView.frame = CGRect(x: 0,

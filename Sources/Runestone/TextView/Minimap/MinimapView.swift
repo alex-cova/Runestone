@@ -418,7 +418,11 @@ final class MinimapView: UIView {
         themeGeneration &+= 1
         cache.removeAll()
         lastRenderKey = nil
-        needsDisplay = true
+        if isHidden || bounds.width <= 0 || bounds.height <= 0 {
+            hideChrome()
+        } else {
+            needsDisplay = true
+        }
     }
 
     // MARK: - Viewport indicator

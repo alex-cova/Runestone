@@ -94,6 +94,8 @@ public extension TreeSitterLanguage {
             return .html
         case "css", "scss":
             return .css
+        case "swift":
+            return .swift
         default:
             return nil
         }

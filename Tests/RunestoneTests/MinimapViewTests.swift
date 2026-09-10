@@ -103,6 +103,45 @@ final class MinimapViewTests: XCTestCase {
         assertMinimapChromeCollapsed(shown)
     }
 
+    @MainActor
+    func testDisabledMinimapStaysCollapsedAfterThemeAndAppearanceChanges() {
+        let textView = makeTextView(text: markdownDocument, language: .markdown, enableMinimap: false)
+        let minimap = textView.minimapViewForTesting
+        assertMinimapChromeCollapsed(minimap)
+
+        textView.theme = DefaultTheme()
+        textView.layoutIfNeeded()
+        assertMinimapChromeCollapsed(minimap)
+
+        textView.appearance = NSAppearance(named: .darkAqua)
+        textView.viewDidChangeEffectiveAppearance()
+        minimap.viewDidChangeEffectiveAppearance()
+        textView.layoutIfNeeded()
+        assertMinimapChromeCollapsed(minimap)
+    }
+
+    @MainActor
+    func testDisabledMinimapCollapsesImmediatelyWithoutWaitingForLayout() {
+        let textView = makeTextView(text: markdownDocument, language: .markdown, enableMinimap: true)
+        let minimap = textView.minimapViewForTesting
+        textView.contentOffset = CGPoint(x: 0, y: 200)
+        textView.showMinimap = false
+        assertMinimapChromeCollapsed(minimap)
+    }
+
+    @MainActor
+    func testLayoutSubviewsRepairsStaleMinimapFrameWhenDisabled() {
+        let textView = makeTextView(text: "hello\nworld", enableMinimap: true)
+        let minimap = textView.minimapViewForTesting
+        textView.showMinimap = false
+        // Simulate a stale trailing-edge frame left behind without a full collapse.
+        minimap.isHidden = false
+        minimap.frame = CGRect(x: 400, y: 0, width: 100, height: 600)
+        minimap.subviews.forEach { $0.isHidden = false }
+        textView.layoutIfNeeded()
+        assertMinimapChromeCollapsed(minimap)
+    }
+
     private func assertMinimapChromeCollapsed(_ minimap: MinimapView, file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertTrue(minimap.isHidden, "minimap should be hidden when disabled", file: file, line: line)
         XCTAssertEqual(minimap.frame, .zero, "disabled minimap must not keep a trailing-edge frame", file: file, line: line)

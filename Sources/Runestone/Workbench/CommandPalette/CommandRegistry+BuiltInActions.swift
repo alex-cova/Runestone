@@ -14,7 +14,8 @@ public extension CommandRegistry {
         .toggleMethodSeparators, .toggleOccurrenceHighlighting,
         .toggleFindPanel, .toggleReplacePanel,
         .searchEverywhere, .findAction, .quickOpenFile, .recentFiles, .goToLine,
-        .goToDefinition, .goToImplementation, .findUsages, .navigateBack, .navigateForward
+        .goToDefinition, .goToImplementation, .findUsages, .navigateBack, .navigateForward,
+        .triggerCompletion
     ]
 
     /// Registers one command per ``findActionIDs`` entry, each performing the action through

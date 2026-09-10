@@ -5,14 +5,18 @@ nonisolated(unsafe) private var previousUnrecognizedHighlightNames: [String] = [
 #endif
 
 enum HighlightName: String {
+    case attribute
     case boolean
     case comment
     case constantBuiltin = "constant.builtin"
     case constantCharacter = "constant.character"
+    case constantMacro = "constant.macro"
     case constructor
+    case embedded
     case float
     case function
     case keyword
+    case label
     case markupHeading = "markup.heading"
     case markupBold = "markup.bold"
     case markupItalic = "markup.italic"
@@ -34,6 +38,8 @@ enum HighlightName: String {
     case typeBuiltin = "type.builtin"
     case variable
     case variableBuiltin = "variable.builtin"
+    case variableMember = "variable.member"
+    case variableParameter = "variable.parameter"
 
     init?(_ rawHighlightName: String) {
         var comps = rawHighlightName.split(separator: ".")

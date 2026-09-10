@@ -6,7 +6,7 @@ protocol LineFragmentRendererDelegate: AnyObject {
     func string(in lineFragmentRenderer: LineFragmentRenderer) -> String?
 }
 
-final class LineFragmentRenderer {
+final class LineFragmentRenderer: @unchecked Sendable {
     weak var delegate: LineFragmentRendererDelegate?
     var lineFragment: LineFragment
     let invisibleCharacterConfiguration: InvisibleCharacterConfiguration

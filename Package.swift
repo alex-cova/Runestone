@@ -140,7 +140,7 @@ let package = Package(
         .target(name: "TreeSitterSwift", cSettings: [.headerSearchPath("src")]),
         .target(
             name: "TreeSitterSwiftQueries",
-            resources: [.copy("highlights.scm"), .copy("locals.scm")]
+            resources: [.copy("highlights.scm"), .copy("highlights-swiftui.scm"), .copy("locals.scm")]
         ),
         .target(
             name: "TreeSitterSwiftRunestone",

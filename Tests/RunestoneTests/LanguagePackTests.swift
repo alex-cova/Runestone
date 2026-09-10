@@ -15,7 +15,8 @@ final class LanguagePackTests: XCTestCase {
             ("yaml", .yaml),
             ("html", .html),
             ("css", .css),
-            ("typescript", .typeScript)
+            ("typescript", .typeScript),
+            ("swift", .swift)
         ]
         for (name, language) in languages {
             XCTAssertNotNil(language.highlightsQuery, name)
@@ -41,7 +42,7 @@ final class LanguagePackTests: XCTestCase {
         XCTAssertNotNil(TreeSitterLanguage.bundled(forIdentifier: "yaml"))
         XCTAssertNotNil(TreeSitterLanguage.bundled(forIdentifier: "html"))
         XCTAssertNotNil(TreeSitterLanguage.bundled(forIdentifier: "css"))
-        XCTAssertNil(TreeSitterLanguage.bundled(forIdentifier: "swift"))
+        XCTAssertNotNil(TreeSitterLanguage.bundled(forIdentifier: "swift"))
         XCTAssertNil(TreeSitterLanguage.bundled(forIdentifier: "markdown"))
     }
 
@@ -130,7 +131,32 @@ final class LanguagePackTests: XCTestCase {
         let provider = BundledLanguageProvider()
         XCTAssertNotNil(provider.treeSitterLanguage(named: "javascript"))
         XCTAssertNotNil(provider.treeSitterLanguage(named: "css"))
-        XCTAssertNil(provider.treeSitterLanguage(named: "swift"))
+        XCTAssertNotNil(provider.treeSitterLanguage(named: "swift"))
+    }
+
+    func testSwiftHighlightCapturesSwiftUI() {
+        let text = """
+        import SwiftUI
+
+        struct ContentView: View {
+            @State private var count = 0
+
+            var body: some View {
+                VStack {
+                    Text("Count: \\(count)")
+                    Button("Increment") { count += 1 }
+                }
+                .padding()
+            }
+        }
+        """
+        let captures = captureNames(language: .swift, text: text)
+        XCTAssertTrue(captures.contains("attribute"), "Expected attribute, got \(captures)")
+        XCTAssertTrue(captures.contains("keyword.import"), "Expected keyword.import, got \(captures)")
+        XCTAssertTrue(captures.contains("type") || captures.contains("type.builtin"),
+                      "Expected type capture, got \(captures)")
+        XCTAssertTrue(captures.contains("function.call"), "Expected function.call, got \(captures)")
+        XCTAssertTrue(captures.contains("keyword"), "Expected keyword, got \(captures)")
     }
 
     private func captureNames(language: TreeSitterLanguage, text: String) -> Set<String> {

@@ -23,6 +23,13 @@ final class DefaultThemeTests: XCTestCase {
         }
     }
 
+    func testSwiftCaptureNamesResolveToColors() {
+        let theme = DefaultTheme()
+        XCTAssertNotNil(theme.textColor(for: "attribute"))
+        XCTAssertNotNil(theme.textColor(for: "variable.member"))
+        XCTAssertNotNil(theme.textColor(for: "variable.parameter"))
+    }
+
     func testRelatedTokensIntentionallyShareAColor() {
         let theme = DefaultTheme()
         XCTAssertEqual(theme.textColor(for: "property")?.cgColor.components, theme.textColor(for: "constant.builtin")?.cgColor.components)

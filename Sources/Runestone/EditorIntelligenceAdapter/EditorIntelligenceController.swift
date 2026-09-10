@@ -161,6 +161,9 @@ public final class EditorIntelligenceController {
             return navigate(kind: .implementation)
         case .findUsages:
             return navigate(kind: .references)
+        case .triggerCompletion:
+            triggerCompletion()
+            return true
         default:
             return false
         }

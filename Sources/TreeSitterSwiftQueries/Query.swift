@@ -5,6 +5,10 @@ public enum Query {
         return url(named: "highlights")
     }
 
+    public static var highlightsSwiftUIFileURL: URL {
+        return url(named: "highlights-swiftui")
+    }
+
     public static var localsFileURL: URL {
         return url(named: "locals")
     }

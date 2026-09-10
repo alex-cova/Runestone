@@ -47,6 +47,28 @@ final class KeymapTests: XCTestCase {
         XCTAssertEqual(Keymap.intelliJ.action(for: KeyStroke(KeyChord("g", .control))), .selectNextOccurrence)
     }
 
+    func testControlSpaceResolvesToTriggerCompletion() {
+        XCTAssertEqual(
+            Keymap.default_.action(for: KeyStroke(KeyChord(code: 0x31, .control))),
+            .triggerCompletion
+        )
+        XCTAssertEqual(
+            Keymap.intelliJ.action(for: KeyStroke(KeyChord(code: 0x31, .control))),
+            .triggerCompletion
+        )
+        // Space is matched by key code, including when AppKit reports a character or none.
+        var dispatcher = KeymapDispatcher()
+        XCTAssertEqual(
+            dispatcher.resolve(event: event(" ", .control, keyCode: 0x31), keymap: .default_),
+            .action(.triggerCompletion)
+        )
+        XCTAssertEqual(
+            dispatcher.resolve(event: event("", .control, keyCode: 0x31), keymap: .default_),
+            .action(.triggerCompletion)
+        )
+        XCTAssertEqual(KeyChord(event: event(" ", .control, keyCode: 0x31)).displayString, "\u{2303}Space")
+    }
+
     func testStrokeForActionIsInverseOfBinding() {
         let stroke = Keymap.intelliJ.stroke(for: .expandSelection)
         XCTAssertEqual(stroke, KeyStroke(KeyChord(code: 0x7E, .option)))

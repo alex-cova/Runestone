@@ -83,6 +83,8 @@ public extension EditorActionID {
     static let findUsages = EditorActionID("findUsages")
     static let navigateBack = EditorActionID("navigateBack")
     static let navigateForward = EditorActionID("navigateForward")
+    /// Show completions at the caret. Bound to Control-Space in the shipped keymaps.
+    static let triggerCompletion = EditorActionID("triggerCompletion")
 
     internal static let builtInTitles: [EditorActionID: String] = [
         .selectLines: "Select Line(s)",
@@ -120,6 +122,7 @@ public extension EditorActionID {
         .goToImplementation: "Go to Implementation(s)",
         .findUsages: "Find Usages",
         .navigateBack: "Back",
-        .navigateForward: "Forward"
+        .navigateForward: "Forward",
+        .triggerCompletion: "Complete"
     ]
 }

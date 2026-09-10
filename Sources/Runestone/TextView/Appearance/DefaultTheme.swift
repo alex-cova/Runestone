@@ -3,7 +3,7 @@ import Foundation
 
 /// Default theme used by Runestone when no other theme has been set.
 public final class DefaultTheme: Runestone.Theme {
-    private static let defaultFont = NSFont(name: "Menlo", size: 14) ?? NSFont.userFixedPitchFont(ofSize: 14) ?? NSFont.systemFont(ofSize: 14)
+    nonisolated(unsafe) private static let defaultFont = NSFont(name: "Menlo", size: 14) ?? NSFont.userFixedPitchFont(ofSize: 14) ?? NSFont.systemFont(ofSize: 14)
 
     public let font: UIFont = DefaultTheme.defaultFont
     public let textColor = UIColor(themeColorNamed: "foreground")
@@ -34,6 +34,7 @@ public final class DefaultTheme: Runestone.Theme {
     private static let propertyColor = UIColor(themeColorNamed: "property")
     private static let punctuationColor = UIColor(themeColorNamed: "punctuation")
     private static let variableBuiltinColor = UIColor(themeColorNamed: "variable_builtin")
+    private static let attributeColor = UIColor(themeColorNamed: "attribute")
     private static let searchMatchFoundColor = UIColor(themeColorNamed: "search_match_found")
     private static let searchMatchHighlightedColor = UIColor(themeColorNamed: "search_match_highlighted")
 
@@ -106,6 +107,8 @@ public final class DefaultTheme: Runestone.Theme {
 
     private static func internedColor(for highlightName: HighlightName) -> UIColor? {
         switch highlightName {
+        case .attribute:
+            return attributeColor
         case .boolean:
             return propertyColor
         case .comment:
@@ -114,14 +117,20 @@ public final class DefaultTheme: Runestone.Theme {
             return propertyColor
         case .constantCharacter:
             return propertyColor
+        case .constantMacro:
+            return functionColor
         case .constructor:
             return constructorColor
+        case .embedded:
+            return nil
         case .float:
             return numberColor
         case .function:
             return functionColor
         case .keyword:
             return keywordColor
+        case .label:
+            return punctuationColor
         case .markupHeading:
             return keywordColor
         case .markupBold, .markupItalic:
@@ -152,6 +161,10 @@ public final class DefaultTheme: Runestone.Theme {
             return nil
         case .variableBuiltin:
             return variableBuiltinColor
+        case .variableMember:
+            return propertyColor
+        case .variableParameter:
+            return propertyColor
         }
     }
 }
@@ -228,6 +241,10 @@ private extension UIColor {
                 return isDark
                     ? UIColor(srgbRed: 0.816, green: 0.659, blue: 1.000, alpha: 1)
                     : UIColor(srgbRed: 0.224, green: 0.000, blue: 0.627, alpha: 1)
+            case "attribute":
+                return isDark
+                    ? UIColor(srgbRed: 0.988, green: 0.827, blue: 0.302, alpha: 1)
+                    : UIColor(srgbRed: 0.769, green: 0.502, blue: 0.000, alpha: 1)
             default:
                 return .labelColor
             }

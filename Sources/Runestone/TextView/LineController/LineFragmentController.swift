@@ -11,14 +11,19 @@ final class LineFragmentController {
         didSet {
             if lineFragment !== oldValue {
                 renderer.lineFragment = lineFragment
-                lineFragmentView?.setNeedsDisplay()
+                invalidateAttachedViewIfPresent()
             }
         }
     }
     weak var lineFragmentView: LineFragmentView? {
         didSet {
-            if lineFragmentView !== oldValue || lineFragmentView?.renderer !== renderer {
-                lineFragmentView?.renderer = renderer
+            let viewChanged = lineFragmentView !== oldValue
+            let view = lineFragmentView
+            let renderer = self.renderer
+            MainActor.assumeIsolated {
+                if viewChanged || view?.renderer !== renderer {
+                    view?.renderer = renderer
+                }
             }
         }
     }
@@ -29,7 +34,7 @@ final class LineFragmentController {
         set {
             if newValue != renderer.markedRange {
                 renderer.markedRange = newValue
-                lineFragmentView?.setNeedsDisplay()
+                invalidateAttachedViewIfPresent()
             }
         }
     }
@@ -40,7 +45,7 @@ final class LineFragmentController {
         set {
             if newValue != renderer.markedTextBackgroundColor {
                 renderer.markedTextBackgroundColor = newValue
-                lineFragmentView?.setNeedsDisplay()
+                invalidateAttachedViewIfPresent()
             }
         }
     }
@@ -51,7 +56,7 @@ final class LineFragmentController {
         set {
             if newValue != renderer.markedTextBackgroundCornerRadius {
                 renderer.markedTextBackgroundCornerRadius = newValue
-                lineFragmentView?.setNeedsDisplay()
+                invalidateAttachedViewIfPresent()
             }
         }
     }
@@ -62,7 +67,7 @@ final class LineFragmentController {
         set {
             if newValue != renderer.highlightedRangeFragments {
                 renderer.highlightedRangeFragments = newValue
-                lineFragmentView?.setNeedsDisplay()
+                invalidateAttachedViewIfPresent()
             }
         }
     }
@@ -73,7 +78,7 @@ final class LineFragmentController {
         set {
             if newValue != renderer.unfocusedAlpha {
                 renderer.unfocusedAlpha = newValue
-                lineFragmentView?.setNeedsDisplay()
+                invalidateAttachedViewIfPresent()
             }
         }
     }
@@ -84,7 +89,7 @@ final class LineFragmentController {
         set {
             if newValue != renderer.focusedRanges {
                 renderer.focusedRanges = newValue
-                lineFragmentView?.setNeedsDisplay()
+                invalidateAttachedViewIfPresent()
             }
         }
     }
@@ -95,7 +100,7 @@ final class LineFragmentController {
         set {
             if newValue != renderer.foldPlaceholderText {
                 renderer.foldPlaceholderText = newValue
-                lineFragmentView?.setNeedsDisplay()
+                invalidateAttachedViewIfPresent()
             }
         }
     }
@@ -106,7 +111,7 @@ final class LineFragmentController {
         set {
             if newValue != renderer.foldPlaceholderColor {
                 renderer.foldPlaceholderColor = newValue
-                lineFragmentView?.setNeedsDisplay()
+                invalidateAttachedViewIfPresent()
             }
         }
     }
@@ -117,12 +122,19 @@ final class LineFragmentController {
         set {
             if newValue != renderer.foldPlaceholderBackgroundColor {
                 renderer.foldPlaceholderBackgroundColor = newValue
-                lineFragmentView?.setNeedsDisplay()
+                invalidateAttachedViewIfPresent()
             }
         }
     }
 
     private let renderer: LineFragmentRenderer
+
+    private func invalidateAttachedViewIfPresent() {
+        let view = lineFragmentView
+        MainActor.assumeIsolated {
+            view?.setNeedsDisplay()
+        }
+    }
 
     init(lineFragment: LineFragment, invisibleCharacterConfiguration: InvisibleCharacterConfiguration) {
         self.lineFragment = lineFragment
