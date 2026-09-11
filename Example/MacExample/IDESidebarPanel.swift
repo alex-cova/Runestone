@@ -61,6 +61,7 @@ struct IDESidebarPanel: View {
         }
         .frame(width: IDEAppearance.Spacing.sidebarWidth)
         .background(IDEAppearance.ColorToken.sidebar)
+        .focusable(false)
     }
 
     private func iconName(for filename: String) -> String {

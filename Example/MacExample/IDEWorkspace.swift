@@ -424,6 +424,12 @@ final class IDEWorkspace: ObservableObject {
     private func activatePane(_ paneID: UUID) {
         workbench.activatePane(paneID)
         guard let host = paneHosts[paneID] else { return }
+        let sameEditor = adapter.textView === host.textView
+        let sameDocument = host.loadedDocumentID == workbench.activePane.selectedDocumentID
+        if sameEditor && sameDocument {
+            updateActivePaneChrome()
+            return
+        }
         adapter.textView = host.textView
         host.textView.editorDelegate = adapter
         showDocument(in: workbench.activePane, host: host)

@@ -223,4 +223,23 @@ final class WorkbenchTests: XCTestCase {
         let leftPane = restored.panes.first { $0.id != restored.activePaneID }
         XCTAssertEqual(leftPane?.selectedDocument?.displayName, "left")
     }
+
+    func testConcurrentPaneSyncDoesNotRaceVersions() async {
+        let bridge = RunestoneWorkbenchWorkspaceBridge()
+        let bench = EditorWorkbench()
+        bench.openDocument(WorkbenchDocument(displayName: "a.swift", text: "a"))
+        bench.openDocument(WorkbenchDocument(displayName: "b.swift", text: "b"))
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<40 {
+                group.addTask {
+                    await bridge.syncPane(bench.activePane)
+                }
+                group.addTask {
+                    await bridge.syncWorkbench(bench)
+                }
+            }
+        }
+        let open = await bridge.workspace.allOpenDocuments()
+        XCTAssertEqual(Set(open.map(\.displayName)), ["a.swift", "b.swift"])
+    }
 }

@@ -22,6 +22,7 @@ struct IDEEditorTabsBar: View {
                 .fill(IDEAppearance.ColorToken.border)
                 .frame(height: 1)
         }
+        .focusable(false)
     }
 
 }

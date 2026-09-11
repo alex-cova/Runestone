@@ -19,6 +19,7 @@ struct IDEActivityRailView: View {
         .padding(.top, IDEAppearance.Spacing.sm)
         .frame(width: IDEAppearance.Spacing.railWidth)
         .background(IDEAppearance.ColorToken.activityRail)
+        .focusable(false)
     }
 }
 

@@ -51,7 +51,11 @@ final class IDEEditorPaneHost: NSView {
             textView.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
 
+        // Do not delay mouse-down: the default click recognizer would swallow the event
+        // so TextInputView never becomes first responder. Deliver the click to the editor
+        // and only use this recognizer to activate the pane.
         let click = NSClickGestureRecognizer(target: self, action: #selector(paneClicked))
+        click.delaysPrimaryMouseButtonEvents = false
         addGestureRecognizer(click)
     }
 
@@ -62,7 +66,6 @@ final class IDEEditorPaneHost: NSView {
 
     @objc private func paneClicked() {
         onPaneActivated?()
-        _ = textView.focusTextInput()
     }
 
     func setActive(_ active: Bool) {

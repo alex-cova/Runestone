@@ -2,26 +2,26 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// AppKit root shell: SwiftUI chrome via hosting controllers, Runestone editor as a native subview.
+/// AppKit root shell: SwiftUI chrome via hosting views, Runestone editor as a native subview.
 @MainActor
 final class IDEMainViewController: NSViewController {
     private let workspace: IDEWorkspace
     private var cancellables = Set<AnyCancellable>()
     private var didBootstrap = false
 
-    private let railHosting: NSHostingController<AnyView>
-    private let sidebarHosting: NSHostingController<AnyView>
-    private let tabsHosting: NSHostingController<AnyView>
-    private let statusHosting: NSHostingController<AnyView>
+    private let railView: UnfocusableHostingView<AnyView>
+    private let sidebarView: UnfocusableHostingView<AnyView>
+    private let tabsView: UnfocusableHostingView<AnyView>
+    private let statusView: UnfocusableHostingView<AnyView>
     private let dividerView = NSView()
     private var sidebarWidthConstraint: NSLayoutConstraint?
 
     init(workspace: IDEWorkspace) {
         self.workspace = workspace
-        railHosting = NSHostingController(rootView: AnyView(IDEActivityRailView().environmentObject(workspace)))
-        sidebarHosting = NSHostingController(rootView: AnyView(IDESidebarPanel().environmentObject(workspace)))
-        tabsHosting = NSHostingController(rootView: AnyView(IDEEditorTabsBar().environmentObject(workspace)))
-        statusHosting = NSHostingController(rootView: AnyView(IDEStatusBarPanel().environmentObject(workspace)))
+        railView = UnfocusableHostingView(rootView: AnyView(IDEActivityRailView().environmentObject(workspace)))
+        sidebarView = UnfocusableHostingView(rootView: AnyView(IDESidebarPanel().environmentObject(workspace)))
+        tabsView = UnfocusableHostingView(rootView: AnyView(IDEEditorTabsBar().environmentObject(workspace)))
+        statusView = UnfocusableHostingView(rootView: AnyView(IDEStatusBarPanel().environmentObject(workspace)))
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -31,7 +31,7 @@ final class IDEMainViewController: NSViewController {
     }
 
     override func loadView() {
-        let root = NSView()
+        let root = IDERootView()
         root.wantsLayer = true
         root.layer?.backgroundColor = NSColor(red: 0x1e / 255, green: 0x1e / 255, blue: 0x1e / 255, alpha: 1).cgColor
 
@@ -42,13 +42,13 @@ final class IDEMainViewController: NSViewController {
         editorColumn.translatesAutoresizingMaskIntoConstraints = false
 
         for view in [
-            railHosting.view,
-            sidebarHosting.view,
+            railView,
+            sidebarView,
             dividerView,
             editorColumn,
-            tabsHosting.view,
+            tabsView,
             workspace.layoutHost,
-            statusHosting.view
+            statusView
         ] {
             view.translatesAutoresizingMaskIntoConstraints = false
         }
@@ -56,42 +56,42 @@ final class IDEMainViewController: NSViewController {
         dividerView.wantsLayer = true
         dividerView.layer?.backgroundColor = NSColor(red: 0x3c / 255, green: 0x3c / 255, blue: 0x3c / 255, alpha: 1).cgColor
 
-        editorColumn.addSubview(tabsHosting.view)
+        editorColumn.addSubview(tabsView)
         editorColumn.addSubview(workspace.layoutHost)
 
         root.addSubview(mainRow)
-        root.addSubview(statusHosting.view)
-        mainRow.addSubview(railHosting.view)
-        mainRow.addSubview(sidebarHosting.view)
+        root.addSubview(statusView)
+        mainRow.addSubview(railView)
+        mainRow.addSubview(sidebarView)
         mainRow.addSubview(dividerView)
         mainRow.addSubview(editorColumn)
 
-        let sidebarWidth = sidebarHosting.view.widthAnchor.constraint(equalToConstant: IDEAppearance.Spacing.sidebarWidth)
+        let sidebarWidth = sidebarView.widthAnchor.constraint(equalToConstant: IDEAppearance.Spacing.sidebarWidth)
         sidebarWidthConstraint = sidebarWidth
 
         NSLayoutConstraint.activate([
-            statusHosting.view.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            statusHosting.view.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            statusHosting.view.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            statusHosting.view.heightAnchor.constraint(equalToConstant: IDEAppearance.Spacing.statusBarHeight),
+            statusView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            statusView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            statusView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            statusView.heightAnchor.constraint(equalToConstant: IDEAppearance.Spacing.statusBarHeight),
 
             mainRow.topAnchor.constraint(equalTo: root.topAnchor),
             mainRow.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             mainRow.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            mainRow.bottomAnchor.constraint(equalTo: statusHosting.view.topAnchor),
+            mainRow.bottomAnchor.constraint(equalTo: statusView.topAnchor),
 
-            railHosting.view.topAnchor.constraint(equalTo: mainRow.topAnchor),
-            railHosting.view.leadingAnchor.constraint(equalTo: mainRow.leadingAnchor),
-            railHosting.view.bottomAnchor.constraint(equalTo: mainRow.bottomAnchor),
-            railHosting.view.widthAnchor.constraint(equalToConstant: IDEAppearance.Spacing.railWidth),
+            railView.topAnchor.constraint(equalTo: mainRow.topAnchor),
+            railView.leadingAnchor.constraint(equalTo: mainRow.leadingAnchor),
+            railView.bottomAnchor.constraint(equalTo: mainRow.bottomAnchor),
+            railView.widthAnchor.constraint(equalToConstant: IDEAppearance.Spacing.railWidth),
 
-            sidebarHosting.view.topAnchor.constraint(equalTo: mainRow.topAnchor),
-            sidebarHosting.view.leadingAnchor.constraint(equalTo: railHosting.view.trailingAnchor),
-            sidebarHosting.view.bottomAnchor.constraint(equalTo: mainRow.bottomAnchor),
+            sidebarView.topAnchor.constraint(equalTo: mainRow.topAnchor),
+            sidebarView.leadingAnchor.constraint(equalTo: railView.trailingAnchor),
+            sidebarView.bottomAnchor.constraint(equalTo: mainRow.bottomAnchor),
             sidebarWidth,
 
             dividerView.topAnchor.constraint(equalTo: mainRow.topAnchor),
-            dividerView.leadingAnchor.constraint(equalTo: sidebarHosting.view.trailingAnchor),
+            dividerView.leadingAnchor.constraint(equalTo: sidebarView.trailingAnchor),
             dividerView.bottomAnchor.constraint(equalTo: mainRow.bottomAnchor),
             dividerView.widthAnchor.constraint(equalToConstant: 1),
 
@@ -100,12 +100,12 @@ final class IDEMainViewController: NSViewController {
             editorColumn.trailingAnchor.constraint(equalTo: mainRow.trailingAnchor),
             editorColumn.bottomAnchor.constraint(equalTo: mainRow.bottomAnchor),
 
-            tabsHosting.view.topAnchor.constraint(equalTo: editorColumn.topAnchor),
-            tabsHosting.view.leadingAnchor.constraint(equalTo: editorColumn.leadingAnchor),
-            tabsHosting.view.trailingAnchor.constraint(equalTo: editorColumn.trailingAnchor),
-            tabsHosting.view.heightAnchor.constraint(equalToConstant: IDEAppearance.Spacing.tabHeight),
+            tabsView.topAnchor.constraint(equalTo: editorColumn.topAnchor),
+            tabsView.leadingAnchor.constraint(equalTo: editorColumn.leadingAnchor),
+            tabsView.trailingAnchor.constraint(equalTo: editorColumn.trailingAnchor),
+            tabsView.heightAnchor.constraint(equalToConstant: IDEAppearance.Spacing.tabHeight),
 
-            workspace.layoutHost.topAnchor.constraint(equalTo: tabsHosting.view.bottomAnchor),
+            workspace.layoutHost.topAnchor.constraint(equalTo: tabsView.bottomAnchor),
             workspace.layoutHost.leadingAnchor.constraint(equalTo: editorColumn.leadingAnchor),
             workspace.layoutHost.trailingAnchor.constraint(equalTo: editorColumn.trailingAnchor),
             workspace.layoutHost.bottomAnchor.constraint(equalTo: editorColumn.bottomAnchor)
@@ -122,6 +122,7 @@ final class IDEMainViewController: NSViewController {
             workspace.bootstrap()
         }
         view.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
         workspace.focusActiveEditor()
     }
 
@@ -150,20 +151,37 @@ final class IDEMainViewController: NSViewController {
             .sink { [weak self] opacity in
                 guard let self else { return }
                 let alpha = CGFloat(opacity)
-                self.railHosting.view.alphaValue = alpha
-                self.sidebarHosting.view.alphaValue = alpha
+                self.railView.alphaValue = alpha
+                self.sidebarView.alphaValue = alpha
                 self.dividerView.alphaValue = alpha
-                self.tabsHosting.view.alphaValue = alpha
-                self.statusHosting.view.alphaValue = alpha
+                self.tabsView.alphaValue = alpha
+                self.statusView.alphaValue = alpha
             }
             .store(in: &cancellables)
     }
 
     private func applySidebarVisibility(_ isVisible: Bool) {
         sidebarWidthConstraint?.constant = isVisible ? IDEAppearance.Spacing.sidebarWidth : 0
-        sidebarHosting.view.isHidden = !isVisible
+        sidebarView.isHidden = !isVisible
         dividerView.isHidden = !isVisible
     }
+}
+
+/// First click on an inactive window should both activate it and reach the editor.
+private final class IDERootView: NSView {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+/// `NSHostingView` reports `acceptsFirstResponder == true` whenever the SwiftUI graph
+/// contains a `Button` (rail, tabs, sidebar). A `@Published` caret/status update then
+/// makes AppKit move first responder onto the chrome, so the window looks unfocused
+/// and the editor cannot be typed into.
+private final class UnfocusableHostingView<Content: View>: NSHostingView<Content> {
+    override var acceptsFirstResponder: Bool { false }
+
+    override func becomeFirstResponder() -> Bool { false }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 struct IDEMainViewControllerRepresentable: NSViewControllerRepresentable {

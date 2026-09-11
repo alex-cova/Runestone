@@ -1026,6 +1026,13 @@ final class TextInputView: UIView, UITextInput {
         true
     }
 
+    /// `NSTextView` accepts the first click on an inactive window so the editor focuses
+    /// without requiring a second click. Default `NSView` behavior would only activate
+    /// the window and drop the event.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
     override func becomeFirstResponder() -> Bool {
         if canBecomeFirstResponder {
             delegate?.textInputViewWillBeginEditing(self)
